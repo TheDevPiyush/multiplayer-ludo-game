@@ -1,3 +1,4 @@
+import { registerUserAfterOAuth } from '@/apis/auth-api'
 import { supabase } from '@/util/supabase-client'
 import * as WebBrowser from 'expo-web-browser'
 import { makeRedirectUri } from 'expo-auth-session'
@@ -74,7 +75,17 @@ export function useAuth() {
                 return;
             }
 
-            showDialog('Login successful', 'You are now signed in.');
+            const { data: sessionData } = await supabase.auth.getSession();
+            const accessToken = sessionData.session?.access_token;
+            let message = 'You are now signed in.';
+            if (accessToken) {
+                const reg = await registerUserAfterOAuth(accessToken);
+                if (!reg.ok) {
+                    message = `${message}\n\nCould not sync your profile with the game server: ${reg.error}`;
+                }
+            }
+
+            showDialog('Login successful', message);
         } finally {
             setLoading(prev => ({ ...prev, googleLoading: false, githubLoading: false }))
         }
@@ -100,8 +111,23 @@ export function useAuth() {
         if (result.type === 'success') {
             const url = new URL(result.url);
             const code = url.searchParams.get('code');
-            if (code) await supabase.auth.exchangeCodeForSession(code);
-            showDialog('Login successful', 'You are now signed in.');
+            if (code) {
+                const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+                if (exchangeError) {
+                    showDialog('GitHub sign-in failed', exchangeError.message);
+                } else {
+                    const { data: sessionData } = await supabase.auth.getSession();
+                    const accessToken = sessionData.session?.access_token;
+                    let message = 'You are now signed in.';
+                    if (accessToken) {
+                        const reg = await registerUserAfterOAuth(accessToken);
+                        if (!reg.ok) {
+                            message = `${message}\n\nCould not sync your profile with the game server: ${reg.error}`;
+                        }
+                    }
+                    showDialog('Login successful', message);
+                }
+            }
         }
         setLoading(prev => ({ ...prev, googleLoading: false, githubLoading: false }))
     }

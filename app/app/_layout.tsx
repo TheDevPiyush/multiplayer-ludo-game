@@ -8,7 +8,7 @@ import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
 import { navigationTheme } from '@/components/NavigationTheme';
 import { supabase } from '@/util/supabase-client';
-import { PaperProvider } from 'react-native-paper';
+import { MD3DarkTheme, PaperProvider } from 'react-native-paper';
 
 export {
   ErrorBoundary,
@@ -75,8 +75,21 @@ function RootLayoutNav() {
   const colorScheme = useColorScheme();
   const bg = Colors[colorScheme === 'dark' ? 'dark' : 'light'].background;
 
+  const theme = {
+    ...MD3DarkTheme,
+    colors: {
+      ...MD3DarkTheme.colors,
+      secondaryContainer: 'rgb(88, 28, 199)',
+      onSecondaryContainer: 'rgba(255, 255, 255, 1)',
+      surface: 'rgba(14, 14, 28, 1)',
+      onSurface: 'rgb(216, 202, 250)',
+      onSurfaceVariant: 'rgba(102, 102, 122, 1)',
+    },
+  };
+
+
   return (
-    <PaperProvider>
+    <PaperProvider theme={theme}>
       <ThemeProvider value={navigationTheme(colorScheme)}>
         <Stack
           initialRouteName={"(auth)"}

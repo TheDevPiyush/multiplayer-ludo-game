@@ -1,49 +1,64 @@
-import React from 'react';
+import { Tabs } from 'expo-router';
+import { BottomNavigation } from 'react-native-paper';
+import { CommonActions } from '@react-navigation/native';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Link, Tabs } from 'expo-router';
-import { Pressable } from 'react-native';
-
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
-import { useClientOnlyValue } from '@/components/useClientOnlyValue';
-
-function TabBarIcon(props: {
-  name: React.ComponentProps<typeof FontAwesome>['name'];
-  color: string;
-}) {
-  return <FontAwesome size={28} style={{ marginBottom: -3 }} {...props} />;
-}
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
-  const scheme = colorScheme ?? 'light';
+  const colorScheme = useColorScheme() ?? 'dark';
+  const palette = Colors[colorScheme];
 
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[scheme].tint,
-        tabBarInactiveTintColor: Colors[scheme].tabIconDefault,
-        headerShown: useClientOnlyValue(false, true),
-        sceneStyle: { backgroundColor: Colors[scheme].background },
-        headerStyle: { backgroundColor: Colors[scheme].background },
-        tabBarStyle: {
-          backgroundColor: Colors[scheme].card,
-          borderTopColor: '#1E1E32',
-        },
-      }}>
+        sceneStyle: { backgroundColor: palette.background },
+        headerShown: false
+      }}
+      tabBar={({ navigation, state, descriptors, insets }) => (
+        <BottomNavigation.Bar
+          navigationState={state}
+          safeAreaInsets={insets}
+          style={{ backgroundColor: palette.card}}
+          activeColor={palette.tabIconSelected}
+          inactiveColor={palette.tabIconDefault}
+          onTabPress={({ route, preventDefault }) => {
+            const event = navigation.emit({
+              type: 'tabPress',
+              target: route.key,
+              canPreventDefault: true,
+            });
+            if (event.defaultPrevented) preventDefault();
+            else navigation.dispatch({
+              ...CommonActions.navigate(route.name, route.params),
+              target: state.key,
+            });
+          }}
+          renderIcon={({ route, focused, color }) =>
+            descriptors[route.key].options.tabBarIcon?.({ focused, color, size: 24 }) ?? null
+          }
+          getLabelText={({ route }) =>
+            descriptors[route.key].options.title ?? route.name
+          }
+        />
+      )}
+    >
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Tab One',
-          tabBarIcon: ({ color }) => <TabBarIcon name="code" color={color} />,
+          title: 'Home',
+          tabBarIcon: ({ color, size }) => (
+            <FontAwesome name="home" size={size} color={color} />
+          ),
         }}
       />
       <Tabs.Screen
         name="two"
         options={{
-          title: 'Tab Two',
-          tabBarIcon: ({ color }) => <TabBarIcon name="code" color={color} />,
+          title: 'Profile',
+          tabBarIcon: ({ color, size }) => (
+            <FontAwesome name="user" size={size} color={color} />
+          ),
         }}
       />
     </Tabs>

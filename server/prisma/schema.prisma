@@ -1,0 +1,127 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum GameStatus {
+  WAITING
+  PLAYING
+  FINISHED
+  CANCELLED
+}
+
+enum PlayerColor {
+  RED
+  BLUE
+  GREEN
+  YELLOW
+}
+
+enum PlayerStatus {
+  CONNECTED
+  DISCONNECTED
+  LEFT
+}
+
+enum MoveAction {
+  MOVE
+  CAPTURE
+  ENTER_HOME
+  SAFE
+  WIN
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+model User {
+  id         String   @id @default(uuid())
+  username   String   @unique
+  isAdmin    Boolean  @default(false)
+  avatarUrl  String?
+  provider   String?
+  providerId String?
+  totalWins  Int      @default(0)
+  totalGames Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  gamePlayers  GamePlayer[]
+  createdRooms GameRoom[]   @relation("RoomCreator")
+  gameMoves    GameMove[]
+
+  @@index([providerId])
+}
+
+model GameRoom {
+  id           String     @id @default(uuid())
+  gameCode     String     @unique
+  status       GameStatus @default(WAITING)
+  maxPlayers   Int        @default(4)
+  isPrivate    Boolean    @default(false)
+  voiceEnabled Boolean    @default(true)
+
+  currentTurnColor  PlayerColor?
+  currentTurnUserId String?
+  currentDice       Int?
+  winnerId          String?
+
+  createdById String
+  createdBy   User   @relation("RoomCreator", fields: [createdById], references: [id])
+
+  createdAt DateTime  @default(now())
+  startedAt DateTime?
+  endedAt   DateTime?
+
+  players GamePlayer[]
+  moves   GameMove[]
+
+  @@index([gameCode])
+  @@index([status])
+}
+
+model GamePlayer {
+  id             String       @id @default(uuid())
+  gameRoomId     String
+  userId         String
+  seatNumber     Int
+  color          PlayerColor
+  status         PlayerStatus @default(CONNECTED)
+  isReady        Boolean      @default(false)
+  rank           Int?
+  tokenPositions Int[]        @default([0, 0, 0, 0])
+  joinedAt       DateTime     @default(now())
+  leftAt         DateTime?
+
+  gameRoom GameRoom @relation(fields: [gameRoomId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([gameRoomId, seatNumber])
+  @@unique([gameRoomId, color])
+  @@unique([gameRoomId, userId])
+  @@index([gameRoomId])
+  @@index([userId])
+}
+
+model GameMove {
+  id           String     @id @default(uuid())
+  gameRoomId   String
+  userId       String
+  tokenIndex   Int
+  diceValue    Int
+  fromPosition Int
+  toPosition   Int
+  actionType   MoveAction
+  createdAt    DateTime   @default(now())
+
+  gameRoom GameRoom @relation(fields: [gameRoomId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([gameRoomId])
+  @@index([userId])
+}
