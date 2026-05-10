@@ -9,6 +9,7 @@ import {
     cancelRoom,
     startGame,
     getRoom,
+    skipTurn,
 } from './game.controller';
 
 import {
@@ -66,18 +67,25 @@ gameRouter.get(
 
 // ---------------- GAME ROUTES ----------------
 
-// roll dice
+// roll dice (mount is /game → POST /game/roll-dice)
 gameRouter.post(
-    '/game/roll-dice',
+    '/roll-dice',
     verifySupabaseToken,
     rollDice
 );
 
-// move token
+// move token → POST /game/move-token
 gameRouter.post(
-    '/game/move-token',
+    '/move-token',
     verifySupabaseToken,
     moveToken
+);
+
+// skip turn → POST /game/skil-turn
+gameRouter.post(
+    '/move-token',
+    verifySupabaseToken,
+    skipTurn
 );
 
 export default gameRouter;

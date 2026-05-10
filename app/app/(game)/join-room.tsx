@@ -1,16 +1,16 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
+import * as Clipboard from 'expo-clipboard';
+import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { StyleProp, ViewStyle } from 'react-native';
 import {
     Animated,
     Easing,
+    Keyboard,
     Platform,
-    Pressable,
-    ScrollView,
     StyleSheet,
+    TextInput,
     TouchableOpacity,
-    useWindowDimensions,
     View as RNView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -25,31 +25,10 @@ import { ActivityIndicator } from 'react-native-paper';
 
 const palette = Colors['dark'];
 const CODE_LENGTH = 6;
-/** Max keys in one keypad row — QWERTY top row is 10-wide; slot size follows this */
-const KEYPAD_MAX_KEYS_PER_ROW = 10;
-const KEY_GAP = 8;
-/** Keep in sync with `styles.numpad.paddingHorizontal` */
-const NUMPAD_PAD_H = 20;
-const KEYPAD_MAX_W = 450;
 
-type KeypadRowSpec =
-    | { align: 'grid'; keys: string[] }
-    | { align: 'center'; keys: string[] };
-
-/** All digits on one row (same width as top QWERTY row — 10 columns) */
-const DIGIT_KEYPAD_ROWS: KeypadRowSpec[] = [
-    {
-        align: 'grid',
-        keys: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'],
-    },
-];
-
-/** QWERTY; ⌫ shares the bottom row with Z–M — rows centered under max width */
-const LETTER_KEYPAD_ROWS: KeypadRowSpec[] = [
-    { align: 'center', keys: ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'] },
-    { align: 'center', keys: ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'] },
-    { align: 'center', keys: ['Z', 'X', 'C', 'V', 'B', 'N', 'M', '⌫'] },
-];
+function normalizeRoomCode(raw: string): string {
+    return raw.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, CODE_LENGTH);
+}
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
@@ -82,126 +61,17 @@ function CodeSlot({ char, active }: { char: string; active: boolean }) {
     );
 }
 
-function NumKey({
-    value,
-    onPress,
-    slotWidth,
-    wrapperStyle,
-}: {
-    value: string;
-    onPress: (v: string) => void;
-    slotWidth: number;
-    wrapperStyle?: StyleProp<ViewStyle>;
-}) {
-    if (!value) return <RNView style={{ width: slotWidth }} accessibilityElementsHidden />;
-
-    const isDelete = value === '⌫';
-    const d = slotWidth;
-    const circle = { width: d, height: d, borderRadius: d / 2 };
-
-    return (
-        <RNView
-            style={[
-                { width: slotWidth, alignItems: 'center', justifyContent: 'center' },
-                wrapperStyle,
-            ]}>
-            <Pressable
-                onPressIn={() => onPress(value)}
-                style={({ pressed }) => [
-                    styles.key,
-                    circle,
-                    isDelete && styles.keyDelete,
-                    pressed && styles.keyPressed,
-                ]}
-                android_ripple={
-                    Platform.OS === 'android'
-                        ? { color: 'rgba(255,255,255,0.12)', foreground: true, borderless: true }
-                        : undefined
-                }
-            >
-                {isDelete ? (
-                    <FontAwesome name="chevron-left" size={16} color="rgba(255,255,255,0.95)" />
-                ) : (
-                    <Text weight="semiBold" style={styles.keyText}>{value}</Text>
-                )}
-            </Pressable>
-        </RNView>
-    );
-}
-
-function KeypadRow({
-    spec,
-    slotWidth,
-    rowWidth,
-    gap,
-    onPress,
-    rowStyle,
-    keyWrapperForValue,
-}: {
-    spec: KeypadRowSpec;
-    slotWidth: number;
-    rowWidth: number;
-    gap: number;
-    onPress: (v: string) => void;
-    rowStyle?: StyleProp<ViewStyle>;
-    keyWrapperForValue?: (v: string) => StyleProp<ViewStyle> | undefined;
-}) {
-    if (spec.align === 'grid') {
-        return (
-            <RNView style={[styles.keyRow, { width: rowWidth, gap }, rowStyle]}>
-                {spec.keys.map((k, i) => (
-                    <NumKey
-                        key={i}
-                        value={k}
-                        slotWidth={slotWidth}
-                        onPress={onPress}
-                        wrapperStyle={keyWrapperForValue?.(k)}
-                    />
-                ))}
-            </RNView>
-        );
-    }
-
-    return (
-        <RNView style={[styles.keyRowCluster, { width: rowWidth }, rowStyle]}>
-            <RNView style={styles.keyRowClusterSide} collapsable={false} />
-            <RNView style={[styles.keyRowClusterKeys, { gap }]}>
-                {spec.keys.map((k, i) => (
-                    <NumKey
-                        key={i}
-                        value={k}
-                        slotWidth={slotWidth}
-                        onPress={onPress}
-                        wrapperStyle={keyWrapperForValue?.(k)}
-                    />
-                ))}
-            </RNView>
-            <RNView style={styles.keyRowClusterSide} collapsable={false} />
-        </RNView>
-    );
-}
-
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function JoinRoomScreen() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
-    const { width: windowWidth } = useWindowDimensions();
-
-    const keypadOuterW = Math.min(
-        Math.max(windowWidth - NUMPAD_PAD_H * 2, 260),
-        KEYPAD_MAX_W,
-    );
-    const keySlotW = Math.floor(
-        (keypadOuterW - KEY_GAP * (KEYPAD_MAX_KEYS_PER_ROW - 1)) /
-        KEYPAD_MAX_KEYS_PER_ROW,
-    );
-    const gridRowWidth =
-        KEYPAD_MAX_KEYS_PER_ROW * keySlotW +
-        KEY_GAP * (KEYPAD_MAX_KEYS_PER_ROW - 1);
+    const codeInputRef = useRef<TextInput>(null);
 
     const [code, setCode] = useState('');
+    const [inputFocused, setInputFocused] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [keyboardHeight, setKeyboardHeight] = useState(0);
     const [dialog, setDialog] = useState({
         visible: false, title: '', message: '' as string | undefined,
         actions: undefined as undefined | { label: string; onPress: () => void }[],
@@ -229,8 +99,6 @@ export default function JoinRoomScreen() {
     const slideHeader = useRef(new Animated.Value(-16)).current;
     const fadeCode = useRef(new Animated.Value(0)).current;
     const slideCode = useRef(new Animated.Value(20)).current;
-    const fadeKeys = useRef(new Animated.Value(0)).current;
-    const slideKeys = useRef(new Animated.Value(30)).current;
 
     useEffect(() => {
         Animated.stagger(100, [
@@ -242,29 +110,55 @@ export default function JoinRoomScreen() {
                 Animated.timing(fadeCode, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
                 Animated.timing(slideCode, { toValue: 0, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
             ]),
-            Animated.parallel([
-                Animated.timing(fadeKeys, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-                Animated.timing(slideKeys, { toValue: 0, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-            ]),
         ]).start();
     }, []);
 
-    const handleKey = useCallback((key: string) => {
-        if (key === '⌫') {
-            setCode((prev) => prev.slice(0, -1));
-            return;
-        }
-        setCode((prev) =>
-            prev.length >= CODE_LENGTH ? prev : prev + key,
-        );
+    useEffect(() => {
+        const show = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+        const hide = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+        const onShow = Keyboard.addListener(show, (e) => {
+            setKeyboardHeight(e.endCoordinates.height);
+        });
+        const onHide = Keyboard.addListener(hide, () => {
+            setKeyboardHeight(0);
+        });
+
+        return () => {
+            onShow.remove();
+            onHide.remove();
+        };
     }, []);
 
-    // Auto-submit when code is full
-    useEffect(() => {
-        if (code.length === CODE_LENGTH) handleJoin();
-    }, [code]);
+    useFocusEffect(
+        useCallback(() => {
+            const delay = Platform.OS === 'android' ? 220 : 80;
+            const id = setTimeout(() => codeInputRef.current?.focus(), delay);
+            return () => {
+                clearTimeout(id);
+                codeInputRef.current?.blur();
+            };
+        }, []),
+    );
 
-    const handleJoin = async () => {
+    const onCodeChange = useCallback((text: string) => {
+        setCode(normalizeRoomCode(text));
+    }, []);
+
+    const pasteFromClipboard = useCallback(async () => {
+        try {
+            const raw = await Clipboard.getStringAsync();
+            const next = normalizeRoomCode(raw ?? '');
+            if (!next.length) {
+                return;
+            }
+            setCode(next);
+            codeInputRef.current?.focus();
+        } catch {
+            showError('Could not paste', 'Unable to read the clipboard.');
+        }
+    }, []);
+
+    async function handleJoin() {
         if (code.length < CODE_LENGTH) {
             shake();
             showError('Incomplete Code', `Room code must be ${CODE_LENGTH} characters.`);
@@ -303,133 +197,136 @@ export default function JoinRoomScreen() {
         } finally {
             setLoading(false);
         }
-    };
+    }
+
+    // Auto-submit when code is full
+    useEffect(() => {
+        if (code.length === CODE_LENGTH) void handleJoin();
+    }, [code]);
 
     const isReady = code.length === CODE_LENGTH;
 
+    const footerPadBottom =
+        keyboardHeight > 0
+            ? keyboardHeight + 12
+            : insets.bottom + 24;
+
     return (
         <RNView style={[styles.screen, { backgroundColor: palette.background }]}>
+            <RNView style={styles.screenInner}>
 
-            {/* Ambient blobs */}
-            <RNView style={[styles.blob, { top: -60, right: -60, backgroundColor: '#3B7DD8' }]} />
-            <RNView style={[styles.blob, { bottom: -60, left: -60, backgroundColor: '#E8A520' }]} />
+                <RNView style={[styles.blob, { top: -60, right: -60, backgroundColor: '#3B7DD8' }]} />
+                <RNView style={[styles.blob, { bottom: -60, left: -60, backgroundColor: '#E8A520' }]} />
 
-            {/* ── Header ── */}
-            <Animated.View style={[
-                styles.header,
-                { paddingTop: insets.top + 12, opacity: fadeHeader, transform: [{ translateY: slideHeader }] },
-            ]}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
-                    <FontAwesome name="chevron-left" size={14} color={palette.mutedText} />
-                </TouchableOpacity>
-                <Text weight="bold" style={styles.headerTitle}>Join Room</Text>
-                <RNView style={{ width: 36 }} />
-            </Animated.View>
-
-            {/* ── Code display ── */}
-            <Animated.View style={[
-                styles.codeSection,
-                { opacity: fadeCode, transform: [{ translateY: slideCode }] },
-            ]}>
-                <Text weight="medium" style={styles.codeHint}>
-                    Enter the room code
-                </Text>
-
-                <Animated.View style={[styles.codeRow, { transform: [{ translateX: shakeAnim }] }]}>
-                    {Array.from({ length: CODE_LENGTH }).map((_, i) => (
-                        <CodeSlot
-                            key={i}
-                            char={code[i] ?? ''}
-                            active={i === code.length && !loading}
-                        />
-                    ))}
+                <Animated.View style={[
+                    styles.header,
+                    { paddingTop: insets.top + 12, opacity: fadeHeader, transform: [{ translateY: slideHeader }] },
+                ]}>
+                    <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
+                        <FontAwesome name="chevron-left" size={14} color={palette.mutedText} />
+                    </TouchableOpacity>
+                    <Text weight="bold" style={styles.headerTitle}>Join Room</Text>
+                    <RNView style={{ width: 36 }} />
                 </Animated.View>
 
-                {/* Clear button */}
-                {code.length > 0 && (
-                    <TouchableOpacity onPress={() => setCode('')} style={styles.clearBtn} activeOpacity={0.7}>
-                        <Text weight="medium" style={styles.clearBtnText}>Clear</Text>
-                    </TouchableOpacity>
-                )}
-            </Animated.View>
+                <Animated.View style={[
+                    styles.codeSection,
+                    { opacity: fadeCode, transform: [{ translateY: slideCode }] },
+                ]}>
+                    <Text weight="medium" style={styles.codeHint}>
+                        Enter or Paste the Simply Ludo - Code
+                    </Text>
 
-            {/* ── Keypad: numbers, then letters (⌫ on letter last row) ── */}
-            <Animated.View style={[
-                styles.numpad,
-                { paddingBottom: insets.bottom + 24, opacity: fadeKeys, transform: [{ translateY: slideKeys }] },
-            ]}>
-                <ScrollView
-                    showsVerticalScrollIndicator={false}
-                    keyboardShouldPersistTaps="handled"
-                    contentContainerStyle={styles.keypadScrollContent}
-                    bounces={false}
-                >
-                    <RNView style={[styles.keypadGrid, { width: gridRowWidth }]}>
-                        <RNView style={styles.keySection}>
-                            {DIGIT_KEYPAD_ROWS.map((spec, ri) => (
-                                <KeypadRow
-                                    key={`d-${ri}`}
-                                    spec={spec}
-                                    slotWidth={keySlotW}
-                                    rowWidth={gridRowWidth}
-                                    gap={KEY_GAP}
-                                    onPress={handleKey}
-                                />
-                            ))}
-                        </RNView>
-
-                        <RNView style={[styles.keySection, styles.keySectionLetters]}>
-                            {LETTER_KEYPAD_ROWS.map((spec, ri) => (
-                                <KeypadRow
-                                    key={`l-${ri}`}
-                                    spec={spec}
-                                    slotWidth={keySlotW}
-                                    rowWidth={gridRowWidth}
-                                    gap={KEY_GAP}
-                                    onPress={handleKey}
-                                    rowStyle={
-                                        ri === LETTER_KEYPAD_ROWS.length - 1
-                                            ? styles.keyRowLettersLast
-                                            : undefined
+                    <RNView style={styles.codeEntryWrap}>
+                        <Animated.View
+                            pointerEvents="none"
+                            style={[styles.codeRow, { transform: [{ translateX: shakeAnim }] }]}>
+                            {Array.from({ length: CODE_LENGTH }).map((_, i) => (
+                                <CodeSlot
+                                    key={i}
+                                    char={code[i] ?? ''}
+                                    active={
+                                        inputFocused &&
+                                        !loading &&
+                                        i === code.length
                                     }
-                                    keyWrapperForValue={(k) =>
-                                        k === '⌫' ? styles.keyDeleteOuterMargin : undefined}
                                 />
                             ))}
-                        </RNView>
+                        </Animated.View>
+                        <TextInput
+                            ref={codeInputRef}
+                            autoFocus
+                            value={code}
+                            onChangeText={onCodeChange}
+                            maxLength={CODE_LENGTH}
+                            editable={!loading}
+                            autoCapitalize="characters"
+                            autoCorrect={false}
+                            keyboardType={
+                                Platform.OS === 'ios' ? 'ascii-capable' : 'default'
+                            }
+                            textContentType="none"
+                            autoComplete="off"
+                            importantForAutofill="no"
+                            spellCheck={false}
+                            caretHidden
+                            blurOnSubmit={false}
+                            onFocus={() => setInputFocused(true)}
+                            onBlur={() => setInputFocused(false)}
+                            style={styles.hiddenCodeInput}
+                            accessibilityLabel="Room code"
+                        />
                     </RNView>
-                </ScrollView>
 
-                <AppButton
-                    label={loading ? 'Joining...' : 'Join Room'}
-                    onPress={handleJoin}
-                    disabled={loading || !isReady}
-                    leftIcon={
-                        loading
-                            ?
-                            <ActivityIndicator />
-                            :
-                            <FontAwesome
-                                name={loading ? 'spinner' : 'sign-in'}
-                                size={15}
-                                color="#fff"
-                            />
-                    }
-                    style={[
-                        { backgroundColor: palette.success, borderColor: palette.success },
-                        loading && { opacity: 0.6 },
-                    ]}
-                    labelStyle={{ color: '#fff' }}
+                    <RNView style={styles.codeActions}>
+                        <TouchableOpacity
+                            onPress={pasteFromClipboard}
+                            style={styles.pasteBtn}
+                            activeOpacity={0.7}>
+                            <FontAwesome name="clipboard" size={14} color={palette.text} />
+                            <Text weight="semiBold" style={styles.pasteBtnText}>Paste</Text>
+                        </TouchableOpacity>
+
+                        {code.length > 0 && (
+                            <TouchableOpacity onPress={() => setCode('')} style={styles.clearBtn} activeOpacity={0.7}>
+                                <Text weight="medium" style={styles.clearBtnText}>Clear</Text>
+                            </TouchableOpacity>
+                        )}
+                    </RNView>
+                </Animated.View>
+
+                <RNView style={styles.spacerFlex} />
+
+                <RNView style={[styles.footer, { paddingBottom: footerPadBottom }]}>
+                    <AppButton
+                        label={loading ? 'Joining...' : 'Join Room'}
+                        onPress={handleJoin}
+                        disabled={loading || !isReady}
+                        leftIcon={
+                            loading
+                                ? (
+                                    <ActivityIndicator />
+                                )
+                                : (
+                                    <FontAwesome name="sign-in" size={15} color="#fff" />
+                                )
+                        }
+                        style={[
+                            { backgroundColor: palette.success, borderColor: palette.success },
+                            loading && { opacity: 0.6 },
+                        ]}
+                        labelStyle={{ color: '#fff' }}
+                    />
+                </RNView>
+
+                <AppDialog
+                    visible={dialog.visible}
+                    title={dialog.title}
+                    message={dialog.message}
+                    onDismiss={hideDialog}
+                    actions={dialog.actions}
                 />
-            </Animated.View>
-
-            <AppDialog
-                visible={dialog.visible}
-                title={dialog.title}
-                message={dialog.message}
-                onDismiss={hideDialog}
-                actions={dialog.actions}
-            />
+            </RNView>
         </RNView>
     );
 }
@@ -438,6 +335,7 @@ export default function JoinRoomScreen() {
 
 const styles = StyleSheet.create({
     screen: { flex: 1 },
+    screenInner: { flex: 1 },
     blob: { position: 'absolute', width: 200, height: 200, borderRadius: 100, opacity: 0.05 },
 
     // Header
@@ -464,18 +362,55 @@ const styles = StyleSheet.create({
     // Code section
     codeSection: {
         alignItems: 'center',
-        paddingTop: 40,
-        paddingBottom: 24,
-        gap: 24,
+        paddingTop: 36,
+        paddingBottom: 16,
+        gap: 16,
+        paddingHorizontal: 16,
     },
     codeHint: {
         fontSize: 13,
         color: palette.mutedText,
         letterSpacing: 0.3,
     },
+    codeEntryWrap: {
+        position: 'relative',
+        alignSelf: 'center',
+        minHeight: 52,
+        justifyContent: 'center',
+    },
     codeRow: {
         flexDirection: 'row',
         gap: 12,
+    },
+    hiddenCodeInput: {
+        ...StyleSheet.absoluteFillObject,
+        opacity: 0.02,
+        color: 'transparent',
+        fontSize: 18,
+    },
+    codeActions: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 12,
+        paddingTop: 8,
+    },
+    pasteBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingVertical: 10,
+        paddingHorizontal: 18,
+        backgroundColor: palette.elevated,
+        borderRadius: 14,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: palette.border,
+    },
+    pasteBtnText: {
+        fontSize: 14,
+        color: palette.text,
+        letterSpacing: 0.2,
     },
     codeSlot: {
         width: 50, height: 50,
@@ -503,7 +438,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#3B7DD8',
     },
     clearBtn: {
-        paddingVertical: 6,
+        paddingVertical: 10,
         paddingHorizontal: 16,
     },
     clearBtnText: {
@@ -511,85 +446,13 @@ const styles = StyleSheet.create({
         color: palette.mutedText,
     },
 
-    // Keypad
-    numpad: {
+    spacerFlex: {
         flex: 1,
+        minHeight: 24,
+    },
+    footer: {
         paddingHorizontal: 20,
-        justifyContent: 'flex-end',
         gap: 10,
-        minHeight: 0,
-    },
-    keypadScrollContent: {
-        gap: 8,
-        paddingBottom: 4,
-        flexGrow: 1,
-        justifyContent: 'flex-end',
-        alignItems: 'center',
-    },
-    keypadGrid: {
-        alignSelf: 'center',
-    },
-    keySection: {
-        gap: 8,
-        alignSelf: 'center',
-        width: '100%',
-    },
-    keySectionLetters: {
-        marginTop: 6,
-        paddingTop: 12,
-        borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: palette.border,
-    },
-    keySectionLabel: {
-        fontSize: 10,
-        color: palette.dimText,
-        letterSpacing: 1.4,
-        textTransform: 'uppercase',
-        marginBottom: 4,
-        textAlign: 'center',
-        alignSelf: 'stretch',
-    },
-    keyRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        alignSelf: 'center',
-        justifyContent: 'flex-start',
-    },
-    keyRowCluster: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        alignSelf: 'center',
-    },
-    keyRowClusterSide: {
-        flex: 1,
-        minWidth: 0,
-    },
-    keyRowClusterKeys: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    keyRowLettersLast: {
-        marginTop: 6,
-    },
-    keyDeleteOuterMargin: {
-        marginVertical: 3,
-    },
-    key: {
-        overflow: 'hidden',
-        backgroundColor: palette.card,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: palette.border,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    keyDelete: {
-        backgroundColor: 'rgb(255, 125, 125)',
-    },
-    keyPressed: {
-        opacity: 0.82,
-    },
-    keyText: {
-        fontSize: 19,
-        color: palette.text,
+        marginBottom: 35
     },
 });

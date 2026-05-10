@@ -153,13 +153,13 @@ export async function leaveRoom(
     });
 }
 
-/** POST /game/room/cancel */
+/** PATCH /game/room/cancel */
 export async function cancelRoom(
     accessToken: string,
     gameCode: string,
 ): Promise<Result<{ message: string; data: GameRoomDto }>> {
     return apiFetch(accessToken, '/game/room/cancel', {
-        method: 'POST',
+        method: 'PATCH',
         body: JSON.stringify({ gameCode }),
     });
 }
@@ -215,5 +215,15 @@ export async function moveToken(
     return apiFetch(accessToken, '/game/move-token', {
         method: 'POST',
         body: JSON.stringify(payload),
+    });
+}
+
+export async function skipTurn(
+    accessToken: string,
+    gameCode: string,
+): Promise<Result<{ message: string }>> {
+    return apiFetch(accessToken, '/game/skip-turn', {
+        method: 'POST',
+        body: JSON.stringify({ gameCode }),
     });
 }

@@ -216,7 +216,7 @@ export default function LobbyScreen() {
                     if (payload.new.status === 'PLAYING') {
                         // All players navigate to board
                         serverLeaveDoneRef.current = true;
-                        // router.replace(`/(game)/board?gameCode=${roomCode}&roomId=${roomId}`);
+                        router.replace(`/(game)/board?gameCode=${roomCode}&roomId=${roomId}`);
                     }
                     if (payload.new.status === 'CANCELLED') {
                         showError('Room Cancelled', 'The host cancelled the room.');

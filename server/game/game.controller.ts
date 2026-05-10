@@ -1,12 +1,20 @@
 import type { Request, Response } from 'express';
 import { roomCodeGenerator } from '../util/room-code-generator';
 import { prisma } from '../lib/prisma';
+import { rollDiceValue } from '../util/dice-value-generator';
 
 const COLOR_MAP: Record<number, 'RED' | 'BLUE' | 'GREEN' | 'YELLOW'> = {
     0: 'RED',
     1: 'BLUE',
     2: 'GREEN',
     3: 'YELLOW',
+};
+
+const COLOR_ENTRY: Record<string, number> = {
+    RED: 0,
+    BLUE: 13,
+    GREEN: 26,
+    YELLOW: 39,
 };
 
 // ─── Create Room ──────────────────────────────────────────────────────────────
@@ -274,7 +282,8 @@ export async function rollDice(req: Request, res: Response) {
             return res.status(400).json({ message: "It's not your turn." });
         }
 
-        const diceValue = Math.floor(Math.random() * 6) + 1;
+        // const diceValue = 6;
+        const diceValue = rollDiceValue();
 
         await prisma.gameRoom.update({
             where: { gameCode },
@@ -327,23 +336,37 @@ export async function moveToken(req: Request, res: Response) {
         const newPositions = [...player.tokenPositions];
         newPositions[tokenIndex] = toPosition;
 
-        // Determine action type
+        // ─── Capture logic ────────────────────────────────────────────────────
+
         let actionType: 'MOVE' | 'CAPTURE' | 'ENTER_HOME' | 'SAFE' | 'WIN' = 'MOVE';
-        if (toPosition === 57) actionType = 'WIN';      // position 57 = home center
-        else if (toPosition === fromPosition) actionType = 'SAFE';
 
-        // Check capture — any opponent on toPosition (not a safe cell)
-        const SAFE_POSITIONS = [0, 8, 13, 21, 26, 34, 39, 47];
-        const isSafe = SAFE_POSITIONS.includes(toPosition);
+        if (toPosition === 57) {
+            actionType = 'WIN';
+        }
 
-        if (!isSafe) {
+        // No capture possible in these zones
+        const isSafeZone =
+            toPosition === 0 ||   // home base
+            toPosition >= 52 ||   // home stretch (private per color)
+            toPosition === 1;        // entry cell — safe by convention
+
+        if (!isSafeZone) {
+            // Convert my position to absolute board index
+            const myBoardIndex = (COLOR_ENTRY[player.color] + toPosition - 1) % 52;
+
             for (const opponent of room.players) {
                 if (opponent.userId === userId) continue;
-                const captured = opponent.tokenPositions.findIndex(pos => pos === toPosition);
-                if (captured !== -1) {
+
+                const capturedIndex = opponent.tokenPositions.findIndex(opponentPos => {
+                    if (opponentPos === 0 || opponentPos >= 52) return false;
+                    const opponentBoardIndex = ((COLOR_ENTRY[opponent.color] ?? 0) + opponentPos - 1) % 52;
+                    return opponentBoardIndex === myBoardIndex;
+                });
+
+                if (capturedIndex !== -1) {
                     actionType = 'CAPTURE';
                     const opponentPositions = [...opponent.tokenPositions];
-                    opponentPositions[captured] = 0;
+                    opponentPositions[capturedIndex] = 0; // send back home
                     await prisma.gamePlayer.update({
                         where: { id: opponent.id },
                         data: { tokenPositions: opponentPositions },
@@ -352,13 +375,15 @@ export async function moveToken(req: Request, res: Response) {
             }
         }
 
-        // Update player token positions
+        // ─── Update moving player positions ───────────────────────────────────
+
         await prisma.gamePlayer.update({
             where: { id: player.id },
             data: { tokenPositions: newPositions },
         });
 
-        // Log move
+        // ─── Log move ─────────────────────────────────────────────────────────
+
         await prisma.gameMove.create({
             data: {
                 gameRoomId: room.id,
@@ -371,57 +396,109 @@ export async function moveToken(req: Request, res: Response) {
             },
         });
 
-        // Check win condition — all 4 tokens at position 57
+        // ─── Win check ────────────────────────────────────────────────────────
+
         const hasWon = newPositions.every(pos => pos === 57);
 
         if (hasWon) {
-            // Count finished players to assign rank
             const finishedCount = room.players.filter(p => p.rank !== null).length;
+
             await prisma.gamePlayer.update({
                 where: { id: player.id },
                 data: { rank: finishedCount + 1 },
             });
 
-            // Check if all players finished
-            const allFinished = room.players.filter(p => p.userId !== userId).every(p => p.rank !== null);
+            const remainingPlayers = room.players.filter(p => p.userId !== userId);
+            const allOthersFinished = remainingPlayers.every(p => p.rank !== null);
 
-            if (allFinished || room.players.length - 1 === finishedCount) {
+            if (allOthersFinished || remainingPlayers.length === finishedCount) {
                 await prisma.gameRoom.update({
                     where: { gameCode },
                     data: { status: 'FINISHED', endedAt: new Date(), winnerId: userId },
                 });
 
-                // Update user stats
                 await prisma.user.update({
                     where: { id: userId },
                     data: { totalWins: { increment: 1 }, totalGames: { increment: 1 } },
                 });
 
-                return res.status(200).json({ message: 'Game over! You win!', data: { actionType, won: true } });
+                return res.status(200).json({
+                    message: 'Game over! You win!',
+                    data: { actionType, won: true },
+                });
             }
         }
 
-        // Advance turn — skip to next active player
+        // ─── Advance turn ─────────────────────────────────────────────────────
+
         const activeColors = room.players
-            .filter(p => p.rank === null)   // not finished
+            .filter(p => p.rank === null)
             .sort((a, b) => a.seatNumber - b.seatNumber)
             .map(p => p.color);
 
         const currentIndex = activeColors.indexOf(player.color);
-        // If rolled 6 and no win → same player rolls again
+
+        // Rolled 6 and didn't win → same player rolls again
         const nextColor = diceValue === 6 && !hasWon
             ? player.color
             : activeColors[(currentIndex + 1) % activeColors.length];
 
+        // ✅ Update GameRoom FIRST so Realtime fires turn change before token positions
         await prisma.gameRoom.update({
             where: { gameCode },
             data: { currentTurnColor: nextColor, currentDice: null },
         });
 
-        return res.status(200).json({ message: 'Token moved.', data: { actionType, won: false, nextTurn: nextColor } });
+        return res.status(200).json({
+            message: 'Token moved.',
+            data: { actionType, won: false, nextTurn: nextColor },
+        });
 
     } catch (error: any) {
         console.error('moveToken:', error?.message);
+        return res.status(500).json({ message: 'Something went wrong.' });
+    }
+}
+
+// POST /game/skip-turn
+export async function skipTurn(req: Request, res: Response) {
+    try {
+        if (!req.user) return res.status(401).json({ message: 'Please log in first.' });
+
+        const userId = req.user?.id;
+        const { gameCode } = req.body;
+
+        const room = await prisma.gameRoom.findUnique({
+            where: { gameCode },
+            include: { players: true }
+        });
+
+        if (!room) return res.status(404).json({ message: "Room not found." });
+
+        const player = room.players.find(p => p.userId === userId);
+        if (!player) return res.status(403).json({ message: 'Not in this game.' });
+
+        if (room.currentTurnColor !== player.color) {
+            return res.status(400).json({ message: 'Not your turn.' });
+        }
+
+        const activeColors = room.players
+            .filter(p => p.rank === null)
+            .sort((a, b) => a.seatNumber - b.seatNumber)
+            .map(p => p.color);
+
+        const currentIndex = activeColors.indexOf(player.color);
+        const nextColor = activeColors[(currentIndex + 1) % activeColors.length];
+
+        await prisma.gameRoom.update({
+            where: { gameCode },
+            data: { currentTurnColor: nextColor, currentDice: null }
+        });
+
+        return res.status(200).json({ message: 'Turn skipped.' });
+
+    } catch (error: any) {
+        console.error('skipTurn:', error?.message);
         return res.status(500).json({ message: 'Something went wrong.' });
     }
 }

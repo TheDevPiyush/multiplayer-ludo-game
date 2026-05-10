@@ -6,7 +6,7 @@ export default function GameRoomLayout() {
         <Stack initialRouteName="create-room" screenOptions={{ headerShown: false }}>
             <Stack.Screen name="create-room" />
             <Stack.Screen name="join-room" />
-            <Stack.Screen name="matchmaking" />
+            <Stack.Screen name="board" />
         </Stack>
     )
 }

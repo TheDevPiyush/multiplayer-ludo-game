@@ -47,13 +47,11 @@ export default function RootLayout() {
   // getting session from supabase
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
-      console.log(session)
       if (session) router.replace('/(tabs)')
       else router.replace('/(login)')
     })
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      console.log(listener)
       if (session) router.replace('/(tabs)')
       else router.replace('/(login)')
     })
@@ -100,6 +98,7 @@ function RootLayoutNav() {
           <Stack.Screen name="(login)" options={{ headerShown: false }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="(game)" options={{ headerShown: false }} />
+          <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
         </Stack>
       </ThemeProvider>
     </PaperProvider>
