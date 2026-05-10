@@ -1,10 +1,9 @@
-import type { Response } from 'express';
-import type { AuthenticatedRequest } from '../middleware/tokenVerify.middleware.ts';
+import type { Request, Response } from 'express';
 
 import { prisma } from '../lib/prisma.ts';
 
 export async function registerUser(
-    req: AuthenticatedRequest,
+    req: Request,
     res: Response
 ) {
     try {
@@ -18,7 +17,10 @@ export async function registerUser(
 
         const existingUser = await prisma.user.findFirst({
             where: {
-                providerId: supabaseUser.id,
+                OR: [
+                    { id: supabaseUser.id },
+                    { providerId: supabaseUser.id },
+                ],
             },
         });
 
@@ -72,6 +74,7 @@ export async function registerUser(
 
         const user = await prisma.user.create({
             data: {
+                id: supabaseUser.id,
                 username,
                 provider,
                 providerId: supabaseUser.id,

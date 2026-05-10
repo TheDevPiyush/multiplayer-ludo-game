@@ -15,8 +15,7 @@ export type RegisterUserResponse = {
     user: BackendUser;
 };
 
-export type RegisterUserResult =
-    | { ok: true; data: RegisterUserResponse }
+export type RegisterUserResult = | { ok: true; data: RegisterUserResponse }
     | { ok: false; error: string; status?: number };
 
 function apiBaseUrl(): string | null {

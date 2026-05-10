@@ -15,7 +15,7 @@ export {
 } from 'expo-router';
 
 export const unstable_settings = {
-  initialRouteName: '(auth)',
+  initialRouteName: '(login)',
 };
 
 SplashScreen.preventAutoHideAsync();
@@ -49,13 +49,13 @@ export default function RootLayout() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       console.log(session)
       if (session) router.replace('/(tabs)')
-      else router.replace('/(auth)')
+      else router.replace('/(login)')
     })
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       console.log(listener)
       if (session) router.replace('/(tabs)')
-      else router.replace('/(auth)')
+      else router.replace('/(login)')
     })
 
     return () => listener.subscription.unsubscribe()
@@ -79,7 +79,7 @@ function RootLayoutNav() {
     ...MD3DarkTheme,
     colors: {
       ...MD3DarkTheme.colors,
-      secondaryContainer: 'rgb(88, 28, 199)',
+      secondaryContainer: 'rgba(255, 255, 255, 0.1)',
       onSecondaryContainer: 'rgba(255, 255, 255, 1)',
       surface: 'rgba(14, 14, 28, 1)',
       onSurface: 'rgb(216, 202, 250)',
@@ -92,13 +92,14 @@ function RootLayoutNav() {
     <PaperProvider theme={theme}>
       <ThemeProvider value={navigationTheme(colorScheme)}>
         <Stack
-          initialRouteName={"(auth)"}
+          initialRouteName={"(login)"}
           screenOptions={{
             contentStyle: { backgroundColor: bg },
           }}
         >
-          <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+          <Stack.Screen name="(login)" options={{ headerShown: false }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="(game)" options={{ headerShown: false }} />
         </Stack>
       </ThemeProvider>
     </PaperProvider>

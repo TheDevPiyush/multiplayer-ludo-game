@@ -5,6 +5,11 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
 
+const TAB_COLORS: Record<string, string> = {
+  index: '#D94444', // Home   → Red
+  profile: '#3B7DD8', // Profile → Blue
+};
+
 export default function TabLayout() {
   const colorScheme = useColorScheme() ?? 'dark';
   const palette = Colors[colorScheme];
@@ -13,14 +18,14 @@ export default function TabLayout() {
     <Tabs
       screenOptions={{
         sceneStyle: { backgroundColor: palette.background },
-        headerShown: false
+        headerShown: false,
       }}
       tabBar={({ navigation, state, descriptors, insets }) => (
         <BottomNavigation.Bar
           navigationState={state}
           safeAreaInsets={insets}
-          style={{ backgroundColor: palette.card}}
-          activeColor={palette.tabIconSelected}
+          style={{ backgroundColor: palette.card }}
+          activeColor={TAB_COLORS[state.routes[state.index].name] ?? palette.tabIconSelected}
           inactiveColor={palette.tabIconDefault}
           onTabPress={({ route, preventDefault }) => {
             const event = navigation.emit({
@@ -34,9 +39,14 @@ export default function TabLayout() {
               target: state.key,
             });
           }}
-          renderIcon={({ route, focused, color }) =>
-            descriptors[route.key].options.tabBarIcon?.({ focused, color, size: 24 }) ?? null
-          }
+          renderIcon={({ route, focused, color }) => {
+            const activeColor = focused ? TAB_COLORS[route.name] ?? color : color;
+            return descriptors[route.key].options.tabBarIcon?.({
+              focused,
+              color: activeColor,
+              size: 24,
+            }) ?? null;
+          }}
           getLabelText={({ route }) =>
             descriptors[route.key].options.title ?? route.name
           }
@@ -53,7 +63,7 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="two"
+        name="profile"
         options={{
           title: 'Profile',
           tabBarIcon: ({ color, size }) => (

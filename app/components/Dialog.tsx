@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 import { Button, Dialog as PaperDialog, Paragraph, Portal } from 'react-native-paper';
+import { Text } from './Themed';
 
 type DialogAction = {
     label: string;
@@ -35,11 +36,15 @@ export default function AppDialog({
     return (
         <Portal>
             <PaperDialog visible={visible} onDismiss={onDismiss} dismissable={dismissable}>
-                <PaperDialog.Title>{title}</PaperDialog.Title>
+                <PaperDialog.Title>
+                    <Text>
+                        {title}
+                    </Text>
+                </PaperDialog.Title>
 
                 {(message || children) && (
                     <PaperDialog.Content>
-                        {message ? <Paragraph>{message}</Paragraph> : null}
+                        {message ? <Text>{message}</Text> : null}
                         {children}
                     </PaperDialog.Content>
                 )}

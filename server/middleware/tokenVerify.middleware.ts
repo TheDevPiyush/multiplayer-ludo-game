@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import { createClient, type User } from '@supabase/supabase-js';
+import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -9,12 +9,8 @@ const supabase =
         ? createClient(supabaseUrl, supabaseServiceRoleKey)
         : null;
 
-export type AuthenticatedRequest = Request & {
-    user?: User;
-};
-
 export async function verifySupabaseToken(
-    req: AuthenticatedRequest,
+    req: Request,
     res: Response,
     next: NextFunction,
 ) {

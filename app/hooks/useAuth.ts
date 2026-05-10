@@ -4,6 +4,7 @@ import * as WebBrowser from 'expo-web-browser'
 import { makeRedirectUri } from 'expo-auth-session'
 import { useState } from 'react';
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 if (Platform.OS === 'web') {
     WebBrowser.maybeCompleteAuthSession()
@@ -77,11 +78,15 @@ export function useAuth() {
 
             const { data: sessionData } = await supabase.auth.getSession();
             const accessToken = sessionData.session?.access_token;
+
             let message = 'You are now signed in.';
             if (accessToken) {
                 const reg = await registerUserAfterOAuth(accessToken);
                 if (!reg.ok) {
                     message = `${message}\n\nCould not sync your profile with the game server: ${reg.error}`;
+                }
+                else {
+                    await AsyncStorage.setItem('user', JSON.stringify(reg.data))
                 }
             }
 
@@ -105,24 +110,34 @@ export function useAuth() {
                 skipBrowserRedirect: true,
             },
         })
+
         if (error || !data.url) return
 
         const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo)
         if (result.type === 'success') {
+
             const url = new URL(result.url);
             const code = url.searchParams.get('code');
+
             if (code) {
                 const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
                 if (exchangeError) {
                     showDialog('GitHub sign-in failed', exchangeError.message);
-                } else {
+                }
+
+                else {
+
                     const { data: sessionData } = await supabase.auth.getSession();
                     const accessToken = sessionData.session?.access_token;
+
                     let message = 'You are now signed in.';
                     if (accessToken) {
                         const reg = await registerUserAfterOAuth(accessToken);
                         if (!reg.ok) {
                             message = `${message}\n\nCould not sync your profile with the game server: ${reg.error}`;
+                        }
+                        else {
+                            await AsyncStorage.setItem('user', JSON.stringify(reg.data))
                         }
                     }
                     showDialog('Login successful', message);
@@ -132,7 +147,9 @@ export function useAuth() {
         setLoading(prev => ({ ...prev, googleLoading: false, githubLoading: false }))
     }
 
-    const signOut = async () => await supabase.auth.signOut()
-
+    const signOut = async () => {
+        await supabase.auth.signOut()
+        await AsyncStorage.setItem('user', 'null');
+    }
     return { signInWithGoogle, signInWithGithub, signOut, loading, dialog, hideDialog }
 }
