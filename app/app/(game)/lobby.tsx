@@ -1,7 +1,7 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Animated,
     Easing,
@@ -11,24 +11,17 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { getRoom, leaveRoom, startGame } from '@/apis/game-api';
+import { leaveRoom, startGame } from '@/apis/game-api';
 import AppDialog from '@/components/Dialog';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
 import { supabase } from '@/util/supabase-client';
+import { setActiveRoom } from '@/util/active-room';
+import { useGameRoom, type RoomPlayer } from '@/hooks/useGameRoom';
+import { useSocket } from '@/components/SocketProvider';
+import { useVoiceRoom } from '@/components/VoiceRoomProvider';
 
 const palette = Colors['dark'];
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-type Player = {
-    id: string;
-    userId: string;
-    username: string;
-    color: 'RED' | 'BLUE' | 'GREEN' | 'YELLOW';
-    isReady: boolean;
-    isHost: boolean;
-};
 
 const COLOR_HEX: Record<string, string> = {
     RED: '#D94444',
@@ -52,9 +45,18 @@ function WaitingDot({ delay }: { delay: number }) {
     return <Animated.View style={[styles.waitDot, { opacity: anim }]} />;
 }
 
-function PlayerSlot({ player }: { player: Player | null }) {
+type SlotData = RoomPlayer & { isHost: boolean; isOnline: boolean; inVoice: boolean; voiceMuted: boolean };
+
+function PlayerSlot({
+    player,
+    onMicTap,
+}: {
+    player: SlotData | null;
+    onMicTap?: () => void;
+}) {
     const fadeAnim = useRef(new Animated.Value(0)).current;
     const scaleAnim = useRef(new Animated.Value(0.88)).current;
+    const voiceRing = useRef(new Animated.Value(0)).current;
 
     useEffect(() => {
         if (player) {
@@ -64,6 +66,20 @@ function PlayerSlot({ player }: { player: Player | null }) {
             ]).start();
         }
     }, [player?.id]);
+
+    useEffect(() => {
+        if (player?.inVoice && !player.voiceMuted) {
+            Animated.loop(
+                Animated.sequence([
+                    Animated.timing(voiceRing, { toValue: 1, duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
+                    Animated.timing(voiceRing, { toValue: 0, duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
+                ])
+            ).start();
+        } else {
+            voiceRing.stopAnimation();
+            voiceRing.setValue(0);
+        }
+    }, [player?.inVoice, player?.voiceMuted]);
 
     const color = player ? COLOR_HEX[player.color] : null;
 
@@ -81,17 +97,31 @@ function PlayerSlot({ player }: { player: Player | null }) {
         );
     }
 
+    const ringScale = voiceRing.interpolate({ inputRange: [0, 1], outputRange: [1, 1.18] });
+    const ringOpacity = voiceRing.interpolate({ inputRange: [0, 1], outputRange: [0.55, 0] });
+
     return (
-        <Animated.View style={[styles.slot, { opacity: fadeAnim, transform: [{ scale: scaleAnim }], borderColor: color + '40' }]}>
+        <Animated.View style={[styles.slot, { opacity: fadeAnim, transform: [{ scale: scaleAnim }], borderColor: (color || '#fff') + '40' }]}>
             <RNView style={[styles.slotAccent, { backgroundColor: color! }]} />
-            <RNView style={[styles.slotAvatar, { backgroundColor: color! }]}>
-                <Text weight="bold" style={styles.slotAvatarText}>
-                    {player.username.slice(0, 2).toUpperCase()}
-                </Text>
-                <RNView style={styles.slotAvatarDot} />
+
+            <RNView style={{ alignItems: 'center', justifyContent: 'center' }}>
+                {player.inVoice && !player.voiceMuted && (
+                    <Animated.View style={[
+                        StyleSheet.absoluteFill,
+                        styles.voiceRing,
+                        { borderColor: color!, transform: [{ scale: ringScale }], opacity: ringOpacity },
+                    ]} />
+                )}
+                <RNView style={[styles.slotAvatar, { backgroundColor: color!, opacity: player.isOnline ? 1 : 0.4 }]}>
+                    <Text weight="bold" style={styles.slotAvatarText}>
+                        {player.user.username.slice(0, 2).toUpperCase()}
+                    </Text>
+                </RNView>
             </RNView>
-            <Text weight="bold" style={styles.slotUsername} numberOfLines={1}>@{player.username}</Text>
+
+            <Text weight="bold" style={styles.slotUsername} numberOfLines={1}>@{player.user.username}</Text>
             <Text weight="semiBold" style={[styles.slotColor, { color: color! }]}>{player.color}</Text>
+
             <RNView style={styles.slotBadgeRow}>
                 {player.isHost && (
                     <RNView style={styles.hostBadge}>
@@ -99,13 +129,41 @@ function PlayerSlot({ player }: { player: Player | null }) {
                         <Text weight="bold" style={styles.hostBadgeText}>HOST</Text>
                     </RNView>
                 )}
-                <RNView style={[styles.readyBadge, { backgroundColor: player.isReady ? '#2DAA5C20' : palette.elevated }]}>
-                    <RNView style={[styles.readyDot, { backgroundColor: player.isReady ? '#2DAA5C' : palette.dimText }]} />
-                    <Text weight="semiBold" style={[styles.readyText, { color: player.isReady ? '#2DAA5C' : palette.dimText }]}>
-                        {player.isReady ? 'Ready' : 'Waiting'}
-                    </Text>
-                </RNView>
+                {!player.isOnline && (
+                    <RNView style={styles.offlineBadge}>
+                        <RNView style={[styles.readyDot, { backgroundColor: '#E8A520' }]} />
+                        <Text weight="bold" style={styles.offlineBadgeText}>RECONNECTING</Text>
+                    </RNView>
+                )}
             </RNView>
+
+            <TouchableOpacity
+                onPress={onMicTap}
+                disabled={!onMicTap}
+                activeOpacity={0.7}
+                style={[
+                    styles.micChip,
+                    {
+                        backgroundColor: player.inVoice ? color! + '20' : palette.elevated,
+                        borderColor: player.inVoice ? color! + '60' : palette.border,
+                    },
+                ]}
+            >
+                <FontAwesome
+                    name={
+                        !player.inVoice
+                            ? 'microphone-slash'
+                            : player.voiceMuted
+                                ? 'microphone-slash'
+                                : 'microphone'
+                    }
+                    size={10}
+                    color={player.inVoice && !player.voiceMuted ? color! : palette.mutedText}
+                />
+                <Text weight="semiBold" style={[styles.micChipText, { color: player.inVoice && !player.voiceMuted ? color! : palette.mutedText }]}>
+                    {!player.inVoice ? 'OFF' : player.voiceMuted ? 'MUTED' : 'LIVE'}
+                </Text>
+            </TouchableOpacity>
         </Animated.View>
     );
 }
@@ -116,6 +174,7 @@ export default function LobbyScreen() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
     const navigation = useNavigation();
+    const { status: socketStatus } = useSocket();
 
     const { gameCode: rawGameCode, maxPlayers_: maxPlayersParam, roomId: rawRoomId } =
         useLocalSearchParams<{
@@ -128,8 +187,6 @@ export default function LobbyScreen() {
     const roomId = typeof rawRoomId === 'string' ? rawRoomId.trim() : String(rawRoomId?.[0] ?? '').trim();
     const maxPlayers = Number(maxPlayersParam) || 4;
 
-    // ── State ──
-    const [players, setPlayers] = useState<Player[]>([]);
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [starting, setStarting] = useState(false);
     const [dialog, setDialog] = useState({
@@ -138,99 +195,66 @@ export default function LobbyScreen() {
     });
 
     const serverLeaveDoneRef = useRef(false);
+    const { room, onlineUserIds, voicePeers, joinError } = useGameRoom({ roomId, gameCode: roomCode });
+    const voice = useVoiceRoom();
+
+    const players = room?.players ?? [];
     const selfPlayer = players.find(p => p.userId === currentUserId);
-    const isHost = selfPlayer?.isHost ?? false;
+    const isHost = !!room && !!selfPlayer && selfPlayer.userId === room.createdById;
     const isFull = players.length === maxPlayers;
     const canStart = players.length >= 2;
 
-    // ── Dialog helpers ──
+    // Persist active room
+    useEffect(() => {
+        if (roomId && roomCode) {
+            void setActiveRoom({ roomId, gameCode: roomCode, maxPlayers, screen: 'lobby' });
+        }
+    }, [roomId, roomCode, maxPlayers]);
+
+    // Navigate to board when game starts
+    useEffect(() => {
+        if (room?.status === 'PLAYING') {
+            void setActiveRoom({ roomId, gameCode: roomCode, maxPlayers, screen: 'board' });
+            serverLeaveDoneRef.current = true;
+            router.replace({
+                pathname: '/(game)/board',
+                params: { gameCode: roomCode, roomId },
+            });
+        }
+        if (room?.status === 'CANCELLED') {
+            showError('Room Cancelled', 'The host cancelled the room.');
+            setTimeout(() => {
+                void setActiveRoom(null);
+                serverLeaveDoneRef.current = true;
+                router.replace('/(tabs)');
+            }, 1800);
+        }
+    }, [room?.status]);
+
+    // Dialog helpers
     const hideDialog = () => setDialog(p => ({ ...p, visible: false }));
     const showError = (title: string, message: string) =>
         setDialog({ visible: true, title, message, actions: undefined });
 
-    // ── Get current user ──
+    // Get current user
     useEffect(() => {
         supabase.auth.getUser().then(({ data }) => {
             setCurrentUserId(data.user?.id ?? null);
         });
     }, []);
 
-    // ── Initial room fetch ──
-    const fetchPlayers = useCallback(async () => {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const token = sessionData.session?.access_token;
-        if (!token || !roomCode) return;
-
-        const result = await getRoom(token, roomCode);
-        if (!result.ok) return;
-
-        const room = result.data.data;
-        const mapped: Player[] = room.players.map((p: any) => ({
-            id: p.id,
-            userId: p.userId,
-            username: p.user.username,
-            color: p.color,
-            isReady: p.isReady,
-            isHost: p.userId === room.createdById,
-        }));
-        setPlayers(mapped);
-    }, [roomCode]);
-
-    useEffect(() => { fetchPlayers(); }, [fetchPlayers]);
-
-    // ── Supabase Realtime ──
+    // Show join error
     useEffect(() => {
-        if (!roomId) return;
+        if (joinError) showError('Could not join', joinError);
+    }, [joinError]);
 
-        const channel = supabase
-            .channel(`lobby:${roomId}`)
-
-            // game_players — player joins / leaves / updates ready
-            .on(
-                'postgres_changes',
-                { event: '*', schema: 'public', table: 'GamePlayer', filter: `gameRoomId=eq.${roomId}` },
-                (payload) => {
-                    if (payload.eventType === 'INSERT') {
-                        fetchPlayers();
-                    }
-                    if (payload.eventType === 'UPDATE') {
-                        setPlayers(prev =>
-                            prev.map(p =>
-                                p.id === payload.new.id
-                                    ? { ...p, isReady: payload.new.is_ready }
-                                    : p
-                            )
-                        );
-                    }
-                    if (payload.eventType === 'DELETE') {
-                        setPlayers(prev => prev.filter(p => p.id !== payload.old.id));
-                    }
-                }
-            )
-
-            // game_rooms — host starts or cancels
-            .on(
-                'postgres_changes',
-                { event: 'UPDATE', schema: 'public', table: 'GameRoom', filter: `id=eq.${roomId}` },
-                (payload) => {
-                    if (payload.new.status === 'PLAYING') {
-                        // All players navigate to board
-                        serverLeaveDoneRef.current = true;
-                        router.replace(`/(game)/board?gameCode=${roomCode}&roomId=${roomId}`);
-                    }
-                    if (payload.new.status === 'CANCELLED') {
-                        showError('Room Cancelled', 'The host cancelled the room.');
-                        setTimeout(() => {
-                            serverLeaveDoneRef.current = true;
-                            router.replace('/(tabs)');
-                        }, 2000);
-                    }
-                }
-            )
-            .subscribe();
-
-        return () => { supabase.removeChannel(channel); };
-    }, [roomId, fetchPlayers]);
+    // Auto-join voice when entering lobby (if room has voice enabled)
+    useEffect(() => {
+        if (!room?.voiceEnabled || !roomId) return;
+        if (voice.roomId !== roomId) {
+            void voice.join(roomId);
+        }
+    }, [room?.voiceEnabled, roomId, voice.roomId]);
 
     // ── Leave helpers ──
     async function notifyServerLeave() {
@@ -260,6 +284,8 @@ export default function LobbyScreen() {
                                 showError('Could not leave', (result as any).error);
                                 return;
                             }
+                            voice.leave();
+                            await setActiveRoom(null);
                             serverLeaveDoneRef.current = true;
                             hideDialog();
                             router.back();
@@ -270,7 +296,6 @@ export default function LobbyScreen() {
         });
     }
 
-    // Intercept hardware back / gesture swipe
     useEffect(() => {
         const unsub = navigation.addListener('beforeRemove', (e) => {
             if (serverLeaveDoneRef.current) { serverLeaveDoneRef.current = false; return; }
@@ -279,6 +304,8 @@ export default function LobbyScreen() {
             void (async () => {
                 const result = await notifyServerLeave();
                 if (!result.ok) { showError('Could not leave', (result as any).error); return; }
+                voice.leave();
+                await setActiveRoom(null);
                 serverLeaveDoneRef.current = true;
                 navigation.dispatch(e.data.action);
             })();
@@ -286,7 +313,6 @@ export default function LobbyScreen() {
         return unsub;
     }, [navigation, roomCode]);
 
-    // ── Start game ──
     const handleStart = async () => {
         if (!canStart) { showError('Not enough players', 'Need at least 2 players to start.'); return; }
         try {
@@ -295,7 +321,6 @@ export default function LobbyScreen() {
             const token = sessionData.session?.access_token!;
             const result = await startGame(token, roomCode);
             if (!result.ok) showError('Could not start', (result as any).error);
-            // Navigation triggered by Realtime game_rooms UPDATE → PLAYING
         } catch {
             showError('Error', 'Something went wrong.');
         } finally {
@@ -308,7 +333,24 @@ export default function LobbyScreen() {
         setDialog({ visible: true, title: 'Copied!', message: `Room code ${roomCode} copied.`, actions: undefined });
     };
 
-    // ── Animations ──
+    // ── Slot computation ──
+    const slotData = useMemo<SlotData[]>(() => {
+        if (!room) return [];
+        return players.map(p => {
+            const inVoice = voicePeers.includes(p.userId) || (p.userId === currentUserId && voice.inRoom);
+            const isMe = p.userId === currentUserId;
+            const voiceMuted = isMe ? voice.isMuted : (voice.peers.find(vp => vp.userId === p.userId)?.muted ?? false);
+            return {
+                ...p,
+                isHost: p.userId === room.createdById,
+                isOnline: onlineUserIds.includes(p.userId) || isMe,
+                inVoice,
+                voiceMuted,
+            };
+        });
+    }, [room, players, voicePeers, voice.peers, voice.isMuted, voice.inRoom, onlineUserIds, currentUserId]);
+
+    // Animations
     const fadeHeader = useRef(new Animated.Value(0)).current;
     const slideHeader = useRef(new Animated.Value(-16)).current;
     const fadeGrid = useRef(new Animated.Value(0)).current;
@@ -337,7 +379,10 @@ export default function LobbyScreen() {
         ]).start();
     }, []);
 
-    const slots = Array.from({ length: maxPlayers }, (_, i) => players[i] ?? null);
+    const slots = useMemo<(SlotData | null)[]>(
+        () => Array.from({ length: maxPlayers }, (_, i) => slotData[i] ?? null),
+        [slotData, maxPlayers],
+    );
 
     return (
         <RNView style={[styles.screen, { backgroundColor: palette.background }]}>
@@ -345,14 +390,15 @@ export default function LobbyScreen() {
             <RNView style={[styles.blob, { top: -60, left: -60, backgroundColor: '#2DAA5C' }]} />
             <RNView style={[styles.blob, { bottom: -60, right: -60, backgroundColor: '#3B7DD8' }]} />
 
-            {/* ── Header ── */}
             <Animated.View style={[styles.header, { paddingTop: insets.top + 12, opacity: fadeHeader, transform: [{ translateY: slideHeader }] }]}>
                 <TouchableOpacity onPress={openLeaveDialog} style={styles.backBtn} activeOpacity={0.7}>
                     <FontAwesome name="chevron-left" size={14} color={palette.mutedText} />
                 </TouchableOpacity>
                 <RNView style={styles.headerCenter}>
                     <Text weight="bold" style={styles.headerTitle}>Waiting Room</Text>
-                    <Text weight="medium" style={styles.headerSub}>{players.length}/{maxPlayers} players joined</Text>
+                    <Text weight="medium" style={styles.headerSub}>
+                        {players.length}/{maxPlayers} players · {socketStatus === 'connected' ? 'Live' : socketStatus === 'reconnecting' ? 'Reconnecting' : socketStatus}
+                    </Text>
                 </RNView>
                 <TouchableOpacity style={styles.codeChip} onPress={copyCode} activeOpacity={0.8}>
                     <Text weight="bold" style={styles.codeText}>{roomCode || '—'}</Text>
@@ -360,21 +406,26 @@ export default function LobbyScreen() {
                 </TouchableOpacity>
             </Animated.View>
 
-            {/* ── Progress bar ── */}
             <RNView style={styles.progressBar}>
                 <RNView style={[styles.progressFill, { width: `${(players.length / maxPlayers) * 100}%` as any }]} />
             </RNView>
 
-            {/* ── Player grid ── */}
             <Animated.View style={[styles.gridWrap, { opacity: fadeGrid, transform: [{ translateY: slideGrid }] }]}>
                 <RNView style={[styles.grid, maxPlayers === 2 && styles.gridTwo]}>
                     {slots.map((player, i) => (
-                        <PlayerSlot key={player?.id ?? `empty-${i}`} player={player} />
+                        <PlayerSlot
+                            key={player?.id ?? `empty-${i}`}
+                            player={player}
+                            onMicTap={
+                                player && player.userId === currentUserId && voice.inRoom
+                                    ? voice.toggleMute
+                                    : undefined
+                            }
+                        />
                     ))}
                 </RNView>
             </Animated.View>
 
-            {/* ── Status line ── */}
             <Animated.View style={[styles.statusRow, { opacity: fadeFooter }]}>
                 {isFull ? (
                     <>
@@ -393,7 +444,6 @@ export default function LobbyScreen() {
                 )}
             </Animated.View>
 
-            {/* ── Footer ── */}
             <Animated.View style={[styles.footer, { paddingBottom: insets.bottom + 16, opacity: fadeFooter }]}>
                 <TouchableOpacity style={styles.shareBtn} onPress={copyCode} activeOpacity={0.8}>
                     <FontAwesome name="share-alt" size={13} color={palette.mutedText} />
@@ -403,6 +453,38 @@ export default function LobbyScreen() {
                     </Text>
                     <FontAwesome name="copy" size={12} color={palette.mutedText} />
                 </TouchableOpacity>
+
+                {/* Voice control row */}
+                {room?.voiceEnabled && (
+                    <RNView style={styles.voiceRow}>
+                        <TouchableOpacity
+                            style={[styles.voiceBtn, voice.inRoom && !voice.isMuted && styles.voiceBtnActive]}
+                            onPress={() => {
+                                if (!voice.inRoom) void voice.join(roomId);
+                                else voice.toggleMute();
+                            }}
+                            activeOpacity={0.8}
+                        >
+                            <FontAwesome
+                                name={voice.inRoom && !voice.isMuted ? 'microphone' : 'microphone-slash'}
+                                size={14}
+                                color={voice.inRoom && !voice.isMuted ? '#2DAA5C' : palette.mutedText}
+                            />
+                            <Text weight="semiBold" style={[styles.voiceBtnText, voice.inRoom && !voice.isMuted && { color: '#2DAA5C' }]}>
+                                {!voice.inRoom ? 'Join Voice' : voice.isMuted ? 'Unmute' : 'Mute'}
+                            </Text>
+                        </TouchableOpacity>
+                        {voice.inRoom && (
+                            <TouchableOpacity
+                                style={styles.voiceLeaveBtn}
+                                onPress={voice.leave}
+                                activeOpacity={0.8}
+                            >
+                                <FontAwesome name="phone" size={12} color="#D94444" style={{ transform: [{ rotate: '135deg' }] }} />
+                            </TouchableOpacity>
+                        )}
+                    </RNView>
+                )}
 
                 {isHost ? (
                     <TouchableOpacity
@@ -437,8 +519,6 @@ export default function LobbyScreen() {
     );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
     screen: { flex: 1 },
     blob: { position: 'absolute', width: 200, height: 200, borderRadius: 100, opacity: 0.05 },
@@ -458,15 +538,17 @@ const styles = StyleSheet.create({
     slotAccent: { position: 'absolute', top: 0, left: 0, right: 0, height: 3 },
     slotAvatar: { width: 60, height: 60, borderRadius: 30, alignItems: 'center', justifyContent: 'center', borderWidth: 2.5, borderColor: 'rgba(255,255,255,0.2)' },
     slotAvatarText: { fontSize: 20, color: '#fff', letterSpacing: 1 },
-    slotAvatarDot: { position: 'absolute', width: 18, height: 18, borderRadius: 9, backgroundColor: 'rgba(255,255,255,0.22)' },
+    voiceRing: { borderRadius: 30, borderWidth: 2 },
     slotUsername: { fontSize: 13, color: palette.text, letterSpacing: 0.2 },
     slotColor: { fontSize: 10, letterSpacing: 1.5 },
     slotBadgeRow: { flexDirection: 'row', gap: 6, alignItems: 'center' },
     hostBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#E8A52018', borderRadius: 6, paddingVertical: 3, paddingHorizontal: 6 },
     hostBadgeText: { fontSize: 8, color: '#E8A520', letterSpacing: 0.5 },
-    readyBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 6, paddingVertical: 3, paddingHorizontal: 6 },
+    offlineBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#E8A52018', borderRadius: 6, paddingVertical: 3, paddingHorizontal: 6 },
+    offlineBadgeText: { fontSize: 8, color: '#E8A520', letterSpacing: 0.5 },
     readyDot: { width: 5, height: 5, borderRadius: 2.5 },
-    readyText: { fontSize: 9, letterSpacing: 0.3 },
+    micChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 999, borderWidth: 1 },
+    micChipText: { fontSize: 9, letterSpacing: 0.6 },
     slotEmpty: { borderStyle: 'dashed', backgroundColor: 'transparent' },
     slotEmptyAvatar: { width: 60, height: 60, borderRadius: 30, backgroundColor: palette.elevated, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: palette.border, borderStyle: 'dashed' },
     slotEmptyText: { fontSize: 12, color: palette.dimText },
@@ -478,6 +560,11 @@ const styles = StyleSheet.create({
     footer: { paddingHorizontal: 16, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border, gap: 10 },
     shareBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: palette.elevated, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.border, paddingVertical: 12, paddingHorizontal: 16 },
     shareBtnText: { flex: 1, fontSize: 13, color: palette.mutedText },
+    voiceRow: { flexDirection: 'row', gap: 8 },
+    voiceBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: palette.elevated, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.border, borderRadius: 14, paddingVertical: 12 },
+    voiceBtnActive: { backgroundColor: '#2DAA5C12', borderColor: '#2DAA5C40' },
+    voiceBtnText: { fontSize: 13, color: palette.mutedText },
+    voiceLeaveBtn: { width: 44, height: 44, borderRadius: 14, backgroundColor: '#D9444415', borderWidth: StyleSheet.hairlineWidth, borderColor: '#D9444440', alignItems: 'center', justifyContent: 'center' },
     startBtn: { backgroundColor: '#D94444', borderRadius: 16, paddingVertical: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
     startBtnText: { fontSize: 15, color: '#fff', letterSpacing: 0.3 },
     waitingBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: palette.card, borderRadius: 16, paddingVertical: 15, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.border },

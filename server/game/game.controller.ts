@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { roomCodeGenerator } from '../util/room-code-generator';
 import { prisma } from '../lib/prisma';
 import { rollDiceValue } from '../util/dice-value-generator';
+import { broadcastToRoom } from '../socket/socket-server';
 
 const COLOR_MAP: Record<number, 'RED' | 'BLUE' | 'GREEN' | 'YELLOW'> = {
     0: 'RED',
@@ -54,6 +55,8 @@ export async function createRoom(req: Request, res: Response) {
             },
         });
 
+        broadcastToRoom(room.id, 'room:created', { roomId: room.id, gameCode: room.gameCode });
+
         return res.status(201).json({ message: 'Room created.', data: room });
 
     } catch (error: any) {
@@ -99,7 +102,10 @@ export async function joinRoom(req: Request, res: Response) {
                 color,
                 isReady: false,
             },
+            include: { user: { select: { username: true, avatarUrl: true } } },
         });
+
+        broadcastToRoom(room.id, 'player:joined', { player });
 
         return res.status(201).json({ message: 'Joined room.', data: { room, player } });
 
@@ -130,24 +136,44 @@ export async function leaveRoom(req: Request, res: Response) {
         const player = room.players.find(p => p.userId === userId);
         if (!player) return res.status(404).json({ message: 'You are not in this room.' });
 
-        // If game is already playing, mark as disconnected instead of deleting
+        // If game is already playing, mark as LEFT instead of deleting
         if (room.status === 'PLAYING') {
             await prisma.gamePlayer.update({
                 where: { id: player.id },
                 data: { status: 'LEFT', leftAt: new Date() },
             });
+            broadcastToRoom(room.id, 'player:left', { userId, permanent: true });
+
+            // If their turn → auto advance
+            if (room.currentTurnColor === player.color) {
+                const activeColors = room.players
+                    .filter(p => p.rank === null && p.userId !== userId)
+                    .sort((a, b) => a.seatNumber - b.seatNumber)
+                    .map(p => p.color);
+                const idx = activeColors.indexOf(player.color);
+                const next = activeColors[(idx + 1 + activeColors.length) % activeColors.length] ?? null;
+                await prisma.gameRoom.update({
+                    where: { gameCode },
+                    data: { currentTurnColor: next, currentDice: null },
+                });
+                broadcastToRoom(room.id, 'turn:changed', {
+                    currentTurnColor: next,
+                    currentDice: null,
+                    reason: 'left-skip',
+                });
+            }
             return res.status(200).json({ message: 'Left game.' });
         }
 
-        // Delete player from waiting room
         await prisma.gamePlayer.delete({ where: { id: player.id } });
+        broadcastToRoom(room.id, 'player:left', { userId, permanent: true });
 
-        // If host leaves → cancel room
         if (room.createdById === userId) {
             await prisma.gameRoom.update({
                 where: { gameCode },
                 data: { status: 'CANCELLED' },
             });
+            broadcastToRoom(room.id, 'room:cancelled', { reason: 'host-left' });
             return res.status(200).json({ message: 'Host left. Room cancelled.' });
         }
 
@@ -180,6 +206,8 @@ export async function cancelRoom(req: Request, res: Response) {
             where: { gameCode },
             data: { status: 'CANCELLED' },
         });
+
+        broadcastToRoom(updated.id, 'room:cancelled', { reason: 'host-cancelled' });
 
         return res.status(200).json({ message: 'Room cancelled.', data: updated });
 
@@ -217,6 +245,12 @@ export async function startGame(req: Request, res: Response) {
                 startedAt: new Date(),
                 currentTurnColor: 'RED',      // RED always starts
             },
+        });
+
+        broadcastToRoom(updated.id, 'game:started', {
+            roomId: updated.id,
+            gameCode: updated.gameCode,
+            currentTurnColor: 'RED',
         });
 
         return res.status(200).json({ message: 'Game started.', data: updated });
@@ -282,7 +316,11 @@ export async function rollDice(req: Request, res: Response) {
             return res.status(400).json({ message: "It's not your turn." });
         }
 
-        // const diceValue = 6;
+        // Block re-rolls while a previous dice is still pending a move
+        if (room.currentDice !== null && room.currentDice !== undefined) {
+            return res.status(400).json({ message: 'Move your token before rolling again.' });
+        }
+
         const diceValue = rollDiceValue();
 
         await prisma.gameRoom.update({
@@ -293,7 +331,11 @@ export async function rollDice(req: Request, res: Response) {
             },
         });
 
-        // Supabase Realtime broadcasts the update to all clients
+        broadcastToRoom(room.id, 'dice:rolled', {
+            diceValue,
+            byUserId: userId,
+            color: player.color,
+        });
 
         return res.status(200).json({ message: 'Dice rolled.', data: { diceValue } });
 
@@ -310,10 +352,13 @@ export async function moveToken(req: Request, res: Response) {
         if (!req.user) return res.status(401).json({ message: 'Please log in first.' });
 
         const userId = req.user.id;
-        const { gameCode, tokenIndex, toPosition } = req.body;
+        const { gameCode, tokenIndex } = req.body as {
+            gameCode?: string;
+            tokenIndex?: number;
+        };
 
-        if (tokenIndex === undefined || toPosition === undefined) {
-            return res.status(400).json({ message: 'tokenIndex and toPosition are required.' });
+        if (typeof tokenIndex !== 'number' || tokenIndex < 0 || tokenIndex > 3) {
+            return res.status(400).json({ message: 'tokenIndex must be 0..3.' });
         }
 
         const room = await prisma.gameRoom.findUnique({
@@ -331,8 +376,30 @@ export async function moveToken(req: Request, res: Response) {
             return res.status(400).json({ message: "It's not your turn." });
         }
 
-        const fromPosition = player.tokenPositions[tokenIndex] as number;
-        const diceValue = room.currentDice!;
+        // ── Authoritative dice — server is the source of truth ───────────────
+        if (room.currentDice === null || room.currentDice === undefined) {
+            return res.status(400).json({ message: 'Roll the dice first.' });
+        }
+
+        const diceValue = room.currentDice;
+
+        const fromPosition = (player.tokenPositions[tokenIndex] ?? 0) as number;
+
+        // ── Compute toPosition server-side. Ignore any client value. ─────────
+        let toPosition: number;
+        if (fromPosition === 0) {
+            if (diceValue !== 6) {
+                return res.status(400).json({ message: 'Need a 6 to bring a token out.' });
+            }
+            toPosition = 1;
+        } else if (fromPosition === 57) {
+            return res.status(400).json({ message: 'Token already home.' });
+        } else if (fromPosition + diceValue > 57) {
+            return res.status(400).json({ message: 'Move would overshoot the center.' });
+        } else {
+            toPosition = fromPosition + diceValue;
+        }
+
         const newPositions = [...player.tokenPositions];
         newPositions[tokenIndex] = toPosition;
 
@@ -344,32 +411,45 @@ export async function moveToken(req: Request, res: Response) {
             actionType = 'WIN';
         }
 
-        // No capture possible in these zones
-        const isSafeZone =
-            toPosition === 0 ||   // home base
-            toPosition >= 52 ||   // home stretch (private per color)
-            toPosition === 1;        // entry cell — safe by convention
+        // Safe board cells (1-indexed on the absolute 52-cell loop):
+        //   star tiles + each color's entry cell
+        const SAFE_BOARD_INDICES = new Set([1, 9, 14, 22, 27, 35, 40, 48]);
 
-        if (!isSafeZone) {
-            // Convert my position to absolute board index
-            const myBoardIndex = (COLOR_ENTRY[player.color] + toPosition - 1) % 52;
+        const noCaptureZone =
+            toPosition === 0 ||      // home base
+            toPosition >= 52;        // private home stretch
+
+        if (!noCaptureZone) {
+            const entry = COLOR_ENTRY[player.color] ?? 0;
+            const myBoardIndex = (entry + toPosition - 1) % 52;        // 0..51
+            const myBoardIndex1 = myBoardIndex + 1;                    // 1..52
+
+            const isStarSafe = SAFE_BOARD_INDICES.has(myBoardIndex1);
 
             for (const opponent of room.players) {
                 if (opponent.userId === userId) continue;
 
+                const opponentEntry = COLOR_ENTRY[opponent.color] ?? 0;
+
                 const capturedIndex = opponent.tokenPositions.findIndex(opponentPos => {
                     if (opponentPos === 0 || opponentPos >= 52) return false;
-                    const opponentBoardIndex = ((COLOR_ENTRY[opponent.color] ?? 0) + opponentPos - 1) % 52;
+                    const opponentBoardIndex = (opponentEntry + opponentPos - 1) % 52;
                     return opponentBoardIndex === myBoardIndex;
                 });
 
-                if (capturedIndex !== -1) {
+                if (capturedIndex !== -1 && !isStarSafe) {
                     actionType = 'CAPTURE';
                     const opponentPositions = [...opponent.tokenPositions];
                     opponentPositions[capturedIndex] = 0; // send back home
                     await prisma.gamePlayer.update({
                         where: { id: opponent.id },
                         data: { tokenPositions: opponentPositions },
+                    });
+                    broadcastToRoom(room.id, 'token:captured', {
+                        byUserId: userId,
+                        capturedUserId: opponent.userId,
+                        capturedColor: opponent.color,
+                        capturedTokenIndex: capturedIndex,
                     });
                 }
             }
@@ -380,6 +460,16 @@ export async function moveToken(req: Request, res: Response) {
         await prisma.gamePlayer.update({
             where: { id: player.id },
             data: { tokenPositions: newPositions },
+        });
+
+        // Pre-emit token move so clients animate immediately
+        broadcastToRoom(room.id, 'token:moved', {
+            byUserId: userId,
+            color: player.color,
+            tokenIndex,
+            fromPosition,
+            toPosition,
+            diceValue,
         });
 
         // ─── Log move ─────────────────────────────────────────────────────────
@@ -399,59 +489,113 @@ export async function moveToken(req: Request, res: Response) {
         // ─── Win check ────────────────────────────────────────────────────────
 
         const hasWon = newPositions.every(pos => pos === 57);
+        let winnerId: string | null = null;
 
         if (hasWon) {
-            const finishedCount = room.players.filter(p => p.rank !== null).length;
-
+            actionType = 'WIN';
+            const alreadyRanked = room.players.filter(p => p.rank !== null).length;
             await prisma.gamePlayer.update({
                 where: { id: player.id },
-                data: { rank: finishedCount + 1 },
+                data: { rank: alreadyRanked + 1 },
             });
 
-            const remainingPlayers = room.players.filter(p => p.userId !== userId);
-            const allOthersFinished = remainingPlayers.every(p => p.rank !== null);
+            // First finisher = winner
+            if (alreadyRanked === 0) winnerId = userId;
+        }
 
-            if (allOthersFinished || remainingPlayers.length === finishedCount) {
-                await prisma.gameRoom.update({
-                    where: { gameCode },
-                    data: { status: 'FINISHED', endedAt: new Date(), winnerId: userId },
+        // How many players are still unranked AFTER this potential win?
+        const stillPlaying = room.players.filter(p =>
+            p.rank === null && p.userId !== (hasWon ? userId : '__none__')
+        );
+
+        // Ends when: 2-player game first finish, OR <=1 unranked left in 3-4p
+        const totalPlayers = room.players.length;
+        const gameOver = hasWon && (totalPlayers === 2 || stillPlaying.length <= 1);
+
+        if (gameOver) {
+            // Auto-rank any leftover unranked players by current progress
+            const leftover = room.players
+                .filter(p => p.rank === null && p.userId !== userId)
+                .sort((a, b) => {
+                    const aSum = (a.tokenPositions as number[]).reduce((x, y) => x + y, 0);
+                    const bSum = (b.tokenPositions as number[]).reduce((x, y) => x + y, 0);
+                    return bSum - aSum;
                 });
-
-                await prisma.user.update({
-                    where: { id: userId },
-                    data: { totalWins: { increment: 1 }, totalGames: { increment: 1 } },
-                });
-
-                return res.status(200).json({
-                    message: 'Game over! You win!',
-                    data: { actionType, won: true },
+            const startRank = room.players.filter(p => p.rank !== null).length + 1;
+            for (let i = 0; i < leftover.length; i++) {
+                const lp = leftover[i];
+                if (!lp) continue;
+                await prisma.gamePlayer.update({
+                    where: { id: lp.id },
+                    data: { rank: startRank + i },
                 });
             }
+
+            await prisma.gameRoom.update({
+                where: { gameCode },
+                data: {
+                    status: 'FINISHED',
+                    endedAt: new Date(),
+                    winnerId: winnerId ?? userId,
+                    currentDice: null,
+                },
+            });
+
+            await prisma.user.update({
+                where: { id: winnerId ?? userId },
+                data: { totalWins: { increment: 1 }, totalGames: { increment: 1 } },
+            });
+
+            // Increment totalGames for everyone else
+            for (const p of room.players) {
+                if (p.userId === (winnerId ?? userId)) continue;
+                await prisma.user.update({
+                    where: { id: p.userId },
+                    data: { totalGames: { increment: 1 } },
+                });
+            }
+
+            broadcastToRoom(room.id, 'game:over', {
+                winnerId: winnerId ?? userId,
+                winnerColor: player.color,
+            });
+
+            return res.status(200).json({
+                message: 'Game over!',
+                data: { actionType, won: true, winnerId: winnerId ?? userId },
+            });
         }
 
         // ─── Advance turn ─────────────────────────────────────────────────────
 
         const activeColors = room.players
-            .filter(p => p.rank === null)
+            .filter(p => p.rank === null && p.userId !== (hasWon ? userId : '__none__'))
             .sort((a, b) => a.seatNumber - b.seatNumber)
             .map(p => p.color);
 
         const currentIndex = activeColors.indexOf(player.color);
 
         // Rolled 6 and didn't win → same player rolls again
-        const nextColor = diceValue === 6 && !hasWon
+        const nextColor = (diceValue === 6 && !hasWon)
             ? player.color
-            : activeColors[(currentIndex + 1) % activeColors.length];
+            : (activeColors.length > 0
+                ? activeColors[(currentIndex + 1 + activeColors.length) % activeColors.length]
+                : null);
 
-        // ✅ Update GameRoom FIRST so Realtime fires turn change before token positions
         await prisma.gameRoom.update({
             where: { gameCode },
             data: { currentTurnColor: nextColor, currentDice: null },
         });
 
+        broadcastToRoom(room.id, 'turn:changed', {
+            currentTurnColor: nextColor,
+            currentDice: null,
+            reason: hasWon ? 'finished' : diceValue === 6 ? 'extra-roll' : 'normal',
+        });
+
         return res.status(200).json({
-            message: 'Token moved.',
-            data: { actionType, won: false, nextTurn: nextColor },
+            message: hasWon ? 'You finished!' : 'Token moved.',
+            data: { actionType, won: hasWon, nextTurn: nextColor },
         });
 
     } catch (error: any) {
@@ -493,6 +637,12 @@ export async function skipTurn(req: Request, res: Response) {
         await prisma.gameRoom.update({
             where: { gameCode },
             data: { currentTurnColor: nextColor, currentDice: null }
+        });
+
+        broadcastToRoom(room.id, 'turn:changed', {
+            currentTurnColor: nextColor,
+            currentDice: null,
+            reason: 'skip',
         });
 
         return res.status(200).json({ message: 'Turn skipped.' });

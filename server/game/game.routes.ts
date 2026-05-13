@@ -81,9 +81,9 @@ gameRouter.post(
     moveToken
 );
 
-// skip turn → POST /game/skil-turn
+// skip turn → POST /game/skip-turn
 gameRouter.post(
-    '/move-token',
+    '/skip-turn',
     verifySupabaseToken,
     skipTurn
 );

@@ -72,7 +72,7 @@ export function useAuth() {
 
             const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
             if (exchangeError) {
-                showDialog('Google sign-in failed', exchangeError.message);
+                console.log('Google sign-in failed', exchangeError.message)
                 return;
             }
 
@@ -83,14 +83,13 @@ export function useAuth() {
             if (accessToken) {
                 const reg = await registerUserAfterOAuth(accessToken);
                 if (!reg.ok) {
-                    message = `${message}\n\nCould not sync your profile with the game server: ${reg.error}`;
+                    message = `${message}\n\nCould not sync your profile with the game server`;
                 }
                 else {
                     await AsyncStorage.setItem('user', JSON.stringify(reg.data))
                 }
             }
 
-            showDialog('Login successful', message);
         } finally {
             setLoading(prev => ({ ...prev, googleLoading: false, githubLoading: false }))
         }

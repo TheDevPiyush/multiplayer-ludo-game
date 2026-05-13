@@ -96,7 +96,7 @@ export default function AuthIndex() {
     const palette = Colors[scheme];
 
 
-    const { signInWithGithub, signInWithGoogle, loading, signOut, dialog, hideDialog } = useAuth();
+    const { signInWithGithub, signInWithGoogle, loading, dialog, hideDialog } = useAuth();
 
 
     // Token float anims
@@ -260,7 +260,7 @@ export default function AuthIndex() {
                         <TouchableOpacity
                             style={styles.btnGithub}
                             activeOpacity={0.85}
-                            onPress={signOut}
+                            onPress={signInWithGithub}
                             disabled={loading.githubLoading || loading.googleLoading}
                         >
                             <FontAwesome name="github" size={16} color="#C0C0D8" />
@@ -270,7 +270,7 @@ export default function AuthIndex() {
                                         ?
                                         <ActivityIndicator color={"blue"} />
                                         :
-                                        "Continue with Google"
+                                        "Continue with GitHub"
                                 }
                             </Text>
                         </TouchableOpacity>

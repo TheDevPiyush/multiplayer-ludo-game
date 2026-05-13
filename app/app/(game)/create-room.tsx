@@ -18,7 +18,8 @@ import AppDialog from '@/components/Dialog';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
 import { supabase } from '@/util/supabase-client';
-import { ActivityIndicator } from 'react-native-paper/src';
+import { setActiveRoom } from '@/util/active-room';
+import { ActivityIndicator } from 'react-native-paper';
 
 const palette = Colors['dark'];
 
@@ -122,6 +123,12 @@ export default function CreateRoomScreen() {
             const maxPlayers_ = result.data.data.maxPlayers;
             const roomId = result.data.data.id;
 
+            await setActiveRoom({
+                roomId,
+                gameCode,
+                maxPlayers: maxPlayers_,
+                screen: 'lobby',
+            });
 
             router.push({
                 pathname: '/(game)/lobby',

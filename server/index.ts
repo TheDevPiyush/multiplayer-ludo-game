@@ -1,8 +1,10 @@
 import type { Request, Response } from 'express';
 import express from 'express';
+import { createServer } from 'http';
 
 import authRouter from './auth/auth.routes.ts';
 import gameRouter from './game/game.routes.ts';
+import { attachSocketServer } from './socket/socket-server.ts';
 
 const app = express();
 
@@ -15,6 +17,10 @@ app.get('/', (_: Request, res: Response) => {
 app.use('/auth', authRouter);
 app.use('/game', gameRouter);
 
-app.listen(process.env.PORT, () => {
-    console.log(`Server is running at ${process.env.PORT}`)
-})
+const httpServer = createServer(app);
+attachSocketServer(httpServer);
+
+const PORT = process.env.PORT || 8080;
+httpServer.listen(PORT, () => {
+  console.log(`HTTP + Socket.io server running at :${PORT}`);
+});

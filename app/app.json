@@ -15,7 +15,11 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.thedevpiyush.simpleludo"
+      "bundleIdentifier": "com.thedevpiyush.simpleludo",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Simple Ludo uses your microphone for in-game voice chat with other players.",
+        "UIBackgroundModes": ["voip"]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -24,7 +28,13 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.thedevpiyush.simpleludo"
+      "package": "com.thedevpiyush.simpleludo",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_CONNECT"
+      ]
     },
     "web": {
       "bundler": "metro",

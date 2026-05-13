@@ -9,6 +9,9 @@ import { useColorScheme } from '@/components/useColorScheme';
 import { navigationTheme } from '@/components/NavigationTheme';
 import { supabase } from '@/util/supabase-client';
 import { MD3DarkTheme, PaperProvider } from 'react-native-paper';
+import { SocketProvider } from '@/components/SocketProvider';
+import { VoiceRoomProvider } from '@/components/VoiceRoomProvider';
+import { getActiveRoom } from '@/util/active-room';
 
 export {
   ErrorBoundary,
@@ -44,16 +47,41 @@ export default function RootLayout() {
   }, [loaded]);
 
 
-  // getting session from supabase
+  // getting session from supabase + auto-resume active room
   useEffect(() => {
+    const resume = async (loggedIn: boolean) => {
+      if (!loggedIn) {
+        router.replace('/(login)');
+        return;
+      }
+      const active = await getActiveRoom();
+      if (active && active.roomId && active.gameCode) {
+        if (active.screen === 'board') {
+          router.replace({
+            pathname: '/(game)/board',
+            params: { gameCode: active.gameCode, roomId: active.roomId },
+          });
+        } else {
+          router.replace({
+            pathname: '/(game)/lobby',
+            params: {
+              gameCode: active.gameCode,
+              roomId: active.roomId,
+              maxPlayers_: String(active.maxPlayers),
+            },
+          });
+        }
+      } else {
+        router.replace('/(tabs)');
+      }
+    };
+
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) router.replace('/(tabs)')
-      else router.replace('/(login)')
-    })
+      void resume(!!session);
+    });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session) router.replace('/(tabs)')
-      else router.replace('/(login)')
+      void resume(!!session);
     })
 
     return () => listener.subscription.unsubscribe()
@@ -88,19 +116,23 @@ function RootLayoutNav() {
 
   return (
     <PaperProvider theme={theme}>
-      <ThemeProvider value={navigationTheme(colorScheme)}>
-        <Stack
-          initialRouteName={"(login)"}
-          screenOptions={{
-            contentStyle: { backgroundColor: bg },
-          }}
-        >
-          <Stack.Screen name="(login)" options={{ headerShown: false }} />
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="(game)" options={{ headerShown: false }} />
-          <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
-        </Stack>
-      </ThemeProvider>
+      <SocketProvider>
+        <VoiceRoomProvider>
+          <ThemeProvider value={navigationTheme(colorScheme)}>
+            <Stack
+              initialRouteName={"(login)"}
+              screenOptions={{
+                contentStyle: { backgroundColor: bg },
+              }}
+            >
+              <Stack.Screen name="(login)" options={{ headerShown: false }} />
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen name="(game)" options={{ headerShown: false }} />
+              <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
+            </Stack>
+          </ThemeProvider>
+        </VoiceRoomProvider>
+      </SocketProvider>
     </PaperProvider>
   );
 }

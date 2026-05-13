@@ -196,13 +196,12 @@ export async function rollDice(
     });
 }
 
-/** POST /game/move-token */
+/** POST /game/move-token — server computes `toPosition` from currentDice */
 export async function moveToken(
     accessToken: string,
     payload: {
         gameCode: string;
         tokenIndex: number;
-        toPosition: number;
     },
 ): Promise<Result<{
     message: string;

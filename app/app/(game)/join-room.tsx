@@ -20,6 +20,7 @@ import AppDialog from '@/components/Dialog';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
 import { supabase } from '@/util/supabase-client';
+import { setActiveRoom } from '@/util/active-room';
 import { AppButton } from '@/components/AppButton';
 import { ActivityIndicator } from 'react-native-paper';
 
@@ -181,6 +182,13 @@ export default function JoinRoomScreen() {
             }
 
             const { room } = result.data.data;
+
+            await setActiveRoom({
+                roomId: room.id,
+                gameCode: room.gameCode,
+                maxPlayers: room.maxPlayers,
+                screen: 'lobby',
+            });
 
             router.push({
                 pathname: '/(game)/lobby',

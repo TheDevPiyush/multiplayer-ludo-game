@@ -152,11 +152,11 @@ export default function HomeTabScreen() {
       ]}>
         <GameButton
           label="Play Online"
-          sublabel="Match with random players"
+          sublabel="Quick match with friends"
           icon="globe"
           color="#D94444"
           large
-          onPress={() => router.push('/(game)/lobby')}
+          onPress={() => router.push('/(game)/join-room')}
         />
         <RNView style={styles.halfRow}>
           <GameButton
