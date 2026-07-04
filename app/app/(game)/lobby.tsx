@@ -5,167 +5,179 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Animated,
     Easing,
+    ScrollView,
     StyleSheet,
     TouchableOpacity,
     View as RNView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { leaveRoom, startGame } from '@/apis/game-api';
+import { leaveRoom } from '@/apis/game-api';
 import AppDialog from '@/components/Dialog';
+import { GlassPanel } from '@/components/GlassPanel';
 import { Text } from '@/components/Themed';
+import { VoiceControls } from '@/components/VoiceControls';
 import Colors from '@/constants/Colors';
-import { supabase } from '@/util/supabase-client';
-import { setActiveRoom } from '@/util/active-room';
+import { LUDO } from '@/constants/LudoColors';
+import { useGameActions } from '@/hooks/useGameActions';
 import { useGameRoom, type RoomPlayer } from '@/hooks/useGameRoom';
 import { useSocket } from '@/components/SocketProvider';
 import { useVoiceRoom } from '@/components/VoiceRoomProvider';
+import { supabase } from '@/util/supabase-client';
+import { setActiveRoom } from '@/util/active-room';
 
-const palette = Colors['dark'];
+const palette = Colors.dark;
 
 const COLOR_HEX: Record<string, string> = {
-    RED: '#D94444',
-    BLUE: '#3B7DD8',
-    GREEN: '#2DAA5C',
-    YELLOW: '#E8A520',
+    RED: LUDO.red,
+    BLUE: LUDO.blue,
+    GREEN: LUDO.green,
+    YELLOW: LUDO.yellow,
 };
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function WaitingDot({ delay }: { delay: number }) {
-    const anim = useRef(new Animated.Value(0.3)).current;
+    const anim = useRef(new Animated.Value(0.25)).current;
     useEffect(() => {
         Animated.loop(
             Animated.sequence([
-                Animated.timing(anim, { toValue: 1, duration: 500, delay, useNativeDriver: true }),
-                Animated.timing(anim, { toValue: 0.3, duration: 500, useNativeDriver: true }),
-            ])
+                Animated.timing(anim, { toValue: 1, duration: 480, delay, useNativeDriver: true }),
+                Animated.timing(anim, { toValue: 0.25, duration: 480, useNativeDriver: true }),
+            ]),
         ).start();
-    }, []);
+    }, [anim, delay]);
     return <Animated.View style={[styles.waitDot, { opacity: anim }]} />;
 }
 
 type SlotData = RoomPlayer & { isHost: boolean; isOnline: boolean; inVoice: boolean; voiceMuted: boolean };
 
-function PlayerSlot({
+function PlayerCard({
     player,
+    index,
     onMicTap,
 }: {
     player: SlotData | null;
+    index: number;
     onMicTap?: () => void;
 }) {
-    const fadeAnim = useRef(new Animated.Value(0)).current;
-    const scaleAnim = useRef(new Animated.Value(0.88)).current;
-    const voiceRing = useRef(new Animated.Value(0)).current;
+    const enter = useRef(new Animated.Value(0)).current;
+    const pulse = useRef(new Animated.Value(0)).current;
 
     useEffect(() => {
-        if (player) {
-            Animated.parallel([
-                Animated.timing(fadeAnim, { toValue: 1, duration: 350, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-                Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, speed: 14, bounciness: 8 }),
-            ]).start();
-        }
-    }, [player?.id]);
+        Animated.timing(enter, {
+            toValue: 1,
+            duration: 400,
+            delay: index * 70,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+        }).start();
+    }, [enter, index]);
 
     useEffect(() => {
         if (player?.inVoice && !player.voiceMuted) {
             Animated.loop(
                 Animated.sequence([
-                    Animated.timing(voiceRing, { toValue: 1, duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
-                    Animated.timing(voiceRing, { toValue: 0, duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
-                ])
+                    Animated.timing(pulse, { toValue: 1, duration: 850, useNativeDriver: true }),
+                    Animated.timing(pulse, { toValue: 0, duration: 850, useNativeDriver: true }),
+                ]),
             ).start();
         } else {
-            voiceRing.stopAnimation();
-            voiceRing.setValue(0);
+            pulse.stopAnimation();
+            pulse.setValue(0);
         }
-    }, [player?.inVoice, player?.voiceMuted]);
-
-    const color = player ? COLOR_HEX[player.color] : null;
+    }, [player?.inVoice, player?.voiceMuted, pulse]);
 
     if (!player) {
         return (
-            <RNView style={[styles.slot, styles.slotEmpty]}>
-                <RNView style={styles.slotEmptyAvatar}>
-                    <FontAwesome name="user-o" size={20} color={palette.dimText} />
-                </RNView>
-                <Text weight="medium" style={styles.slotEmptyText}>Waiting...</Text>
-                <RNView style={styles.slotEmptyDots}>
-                    {[0, 1, 2].map(i => <WaitingDot key={i} delay={i * 200} />)}
-                </RNView>
-            </RNView>
+            <Animated.View style={[styles.cardWrap, { opacity: enter, transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }] }]}>
+                <GlassPanel intensity="light" style={styles.emptyCard}>
+                    <RNView style={styles.emptyAvatar}>
+                        <FontAwesome name="plus" size={16} color={palette.dimText} />
+                    </RNView>
+                    <Text weight="medium" style={styles.emptyLabel}>Open slot</Text>
+                    <RNView style={styles.emptyDots}>
+                        {[0, 1, 2].map(i => <WaitingDot key={i} delay={i * 160} />)}
+                    </RNView>
+                </GlassPanel>
+            </Animated.View>
         );
     }
 
-    const ringScale = voiceRing.interpolate({ inputRange: [0, 1], outputRange: [1, 1.18] });
-    const ringOpacity = voiceRing.interpolate({ inputRange: [0, 1], outputRange: [0.55, 0] });
+    const color = COLOR_HEX[player.color] ?? LUDO.blue;
+    const ringScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.14] });
+    const ringOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0] });
 
     return (
-        <Animated.View style={[styles.slot, { opacity: fadeAnim, transform: [{ scale: scaleAnim }], borderColor: (color || '#fff') + '40' }]}>
-            <RNView style={[styles.slotAccent, { backgroundColor: color! }]} />
+        <Animated.View style={[styles.cardWrap, { opacity: enter, transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }] }]}>
+            <GlassPanel intensity="medium" accent={color} style={styles.playerCard}>
+                <RNView style={[styles.colorBar, { backgroundColor: color }]} />
 
-            <RNView style={{ alignItems: 'center', justifyContent: 'center' }}>
-                {player.inVoice && !player.voiceMuted && (
-                    <Animated.View style={[
-                        StyleSheet.absoluteFill,
-                        styles.voiceRing,
-                        { borderColor: color!, transform: [{ scale: ringScale }], opacity: ringOpacity },
-                    ]} />
-                )}
-                <RNView style={[styles.slotAvatar, { backgroundColor: color!, opacity: player.isOnline ? 1 : 0.4 }]}>
-                    <Text weight="bold" style={styles.slotAvatarText}>
-                        {player.user.username.slice(0, 2).toUpperCase()}
-                    </Text>
+                <RNView style={styles.avatarWrap}>
+                    {player.inVoice && !player.voiceMuted && (
+                        <Animated.View
+                            style={[styles.voiceRing, { borderColor: color, transform: [{ scale: ringScale }], opacity: ringOpacity }]}
+                        />
+                    )}
+                    <RNView style={[styles.avatar, { backgroundColor: color, opacity: player.isOnline ? 1 : 0.45 }]}>
+                        <Text weight="bold" style={styles.avatarText}>
+                            {player.user.username.slice(0, 2).toUpperCase()}
+                        </Text>
+                    </RNView>
+                    {!player.isOnline && <RNView style={styles.offlineDot} />}
                 </RNView>
-            </RNView>
 
-            <Text weight="bold" style={styles.slotUsername} numberOfLines={1}>@{player.user.username}</Text>
-            <Text weight="semiBold" style={[styles.slotColor, { color: color! }]}>{player.color}</Text>
-
-            <RNView style={styles.slotBadgeRow}>
-                {player.isHost && (
-                    <RNView style={styles.hostBadge}>
-                        <FontAwesome name="star" size={8} color="#E8A520" />
-                        <Text weight="bold" style={styles.hostBadgeText}>HOST</Text>
-                    </RNView>
-                )}
-                {!player.isOnline && (
-                    <RNView style={styles.offlineBadge}>
-                        <RNView style={[styles.readyDot, { backgroundColor: '#E8A520' }]} />
-                        <Text weight="bold" style={styles.offlineBadgeText}>RECONNECTING</Text>
-                    </RNView>
-                )}
-            </RNView>
-
-            <TouchableOpacity
-                onPress={onMicTap}
-                disabled={!onMicTap}
-                activeOpacity={0.7}
-                style={[
-                    styles.micChip,
-                    {
-                        backgroundColor: player.inVoice ? color! + '20' : palette.elevated,
-                        borderColor: player.inVoice ? color! + '60' : palette.border,
-                    },
-                ]}
-            >
-                <FontAwesome
-                    name={
-                        !player.inVoice
-                            ? 'microphone-slash'
-                            : player.voiceMuted
-                                ? 'microphone-slash'
-                                : 'microphone'
-                    }
-                    size={10}
-                    color={player.inVoice && !player.voiceMuted ? color! : palette.mutedText}
-                />
-                <Text weight="semiBold" style={[styles.micChipText, { color: player.inVoice && !player.voiceMuted ? color! : palette.mutedText }]}>
-                    {!player.inVoice ? 'OFF' : player.voiceMuted ? 'MUTED' : 'LIVE'}
+                <Text weight="bold" style={styles.playerName} numberOfLines={1}>
+                    {player.user.username}
                 </Text>
-            </TouchableOpacity>
+
+                <RNView style={styles.badgeRow}>
+                    <RNView style={[styles.colorPill, { backgroundColor: color + '22', borderColor: color + '55' }]}>
+                        <RNView style={[styles.colorDot, { backgroundColor: color }]} />
+                        <Text weight="semiBold" style={[styles.colorPillText, { color }]}>{player.color}</Text>
+                    </RNView>
+                    {player.isHost && (
+                        <RNView style={styles.hostPill}>
+                            <FontAwesome name="star" size={8} color={LUDO.yellow} />
+                            <Text weight="bold" style={styles.hostText}>HOST</Text>
+                        </RNView>
+                    )}
+                </RNView>
+
+                <TouchableOpacity
+                    onPress={onMicTap}
+                    disabled={!onMicTap}
+                    activeOpacity={0.75}
+                    style={[
+                        styles.voiceChip,
+                        {
+                            backgroundColor: player.inVoice ? color + '18' : 'rgba(255,255,255,0.06)',
+                            borderColor: player.inVoice ? color + '44' : palette.glassBorder,
+                        },
+                    ]}
+                >
+                    <FontAwesome
+                        name={!player.inVoice || player.voiceMuted ? 'microphone-slash' : 'microphone'}
+                        size={10}
+                        color={player.inVoice && !player.voiceMuted ? color : palette.mutedText}
+                    />
+                    <Text
+                        weight="semiBold"
+                        style={[styles.voiceChipText, { color: player.inVoice && !player.voiceMuted ? color : palette.mutedText }]}
+                    >
+                        {!player.inVoice ? 'Voice off' : player.voiceMuted ? 'Muted' : 'Live'}
+                    </Text>
+                </TouchableOpacity>
+            </GlassPanel>
         </Animated.View>
     );
+}
+
+function connectionLabel(phase: string): string {
+    if (phase === 'connected') return 'Connected';
+    if (phase === 'offline') return 'Offline';
+    if (phase === 'reconnecting') return 'Reconnecting…';
+    return 'Connecting…';
 }
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
@@ -174,7 +186,7 @@ export default function LobbyScreen() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
     const navigation = useNavigation();
-    const { status: socketStatus } = useSocket();
+    const { connectionPhase, isRealtimeReady } = useSocket();
 
     const { gameCode: rawGameCode, maxPlayers_: maxPlayersParam, roomId: rawRoomId } =
         useLocalSearchParams<{
@@ -190,12 +202,19 @@ export default function LobbyScreen() {
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [starting, setStarting] = useState(false);
     const [dialog, setDialog] = useState({
-        visible: false, title: '', message: '' as string | undefined,
+        visible: false,
+        title: '',
+        message: '' as string | undefined,
         actions: undefined as undefined | { label: string; onPress: () => void }[],
     });
 
     const serverLeaveDoneRef = useRef(false);
+    const voiceSyncedRef = useRef(false);
+    const heroScale = useRef(new Animated.Value(0.96)).current;
+    const heroFade = useRef(new Animated.Value(0)).current;
+
     const { room, onlineUserIds, voicePeers, joinError } = useGameRoom({ roomId, gameCode: roomCode });
+    const { startGame } = useGameActions(roomCode);
     const voice = useVoiceRoom();
 
     const players = room?.players ?? [];
@@ -204,22 +223,24 @@ export default function LobbyScreen() {
     const isFull = players.length === maxPlayers;
     const canStart = players.length >= 2;
 
-    // Persist active room
+    useEffect(() => {
+        Animated.parallel([
+            Animated.spring(heroScale, { toValue: 1, useNativeDriver: true, speed: 14, bounciness: 6 }),
+            Animated.timing(heroFade, { toValue: 1, duration: 500, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        ]).start();
+    }, [heroFade, heroScale]);
+
     useEffect(() => {
         if (roomId && roomCode) {
             void setActiveRoom({ roomId, gameCode: roomCode, maxPlayers, screen: 'lobby' });
         }
     }, [roomId, roomCode, maxPlayers]);
 
-    // Navigate to board when game starts
     useEffect(() => {
         if (room?.status === 'PLAYING') {
             void setActiveRoom({ roomId, gameCode: roomCode, maxPlayers, screen: 'board' });
             serverLeaveDoneRef.current = true;
-            router.replace({
-                pathname: '/(game)/board',
-                params: { gameCode: roomCode, roomId },
-            });
+            router.replace({ pathname: '/(game)/board', params: { gameCode: roomCode, roomId } });
         }
         if (room?.status === 'CANCELLED') {
             showError('Room Cancelled', 'The host cancelled the room.');
@@ -229,34 +250,38 @@ export default function LobbyScreen() {
                 router.replace('/(tabs)');
             }, 1800);
         }
-    }, [room?.status]);
+    }, [room?.status, roomCode, roomId, maxPlayers, router]);
 
-    // Dialog helpers
     const hideDialog = () => setDialog(p => ({ ...p, visible: false }));
-    const showError = (title: string, message: string) =>
+    const showError = useCallback((title: string, message: string) => {
         setDialog({ visible: true, title, message, actions: undefined });
-
-    // Get current user
-    useEffect(() => {
-        supabase.auth.getUser().then(({ data }) => {
-            setCurrentUserId(data.user?.id ?? null);
-        });
     }, []);
 
-    // Show join error
+    useEffect(() => {
+        supabase.auth.getUser().then(({ data }) => setCurrentUserId(data.user?.id ?? null));
+    }, []);
+
     useEffect(() => {
         if (joinError) showError('Could not join', joinError);
-    }, [joinError]);
+    }, [joinError, showError]);
 
-    // Auto-join voice when entering lobby (if room has voice enabled)
+    // Voice: wait for socket room join, then join or resync voice
     useEffect(() => {
-        if (!room?.voiceEnabled || !roomId) return;
-        if (voice.roomId !== roomId) {
+        voiceSyncedRef.current = false;
+    }, [roomId]);
+
+    useEffect(() => {
+        if (!room?.voiceEnabled || !roomId || !isRealtimeReady) return;
+        if (voiceSyncedRef.current) return;
+        voiceSyncedRef.current = true;
+
+        if (voice.inRoom && voice.roomId === roomId) {
+            voice.resync();
+        } else {
             void voice.join(roomId);
         }
-    }, [room?.voiceEnabled, roomId, voice.roomId]);
+    }, [room?.voiceEnabled, roomId, isRealtimeReady, voice.inRoom, voice.roomId, voice.join, voice.resync]);
 
-    // ── Leave helpers ──
     async function notifyServerLeave() {
         if (!roomCode) return { ok: true as const };
         const { data: sessionData } = await supabase.auth.getSession();
@@ -281,7 +306,7 @@ export default function LobbyScreen() {
                             const result = await notifyServerLeave();
                             if (!result.ok) {
                                 hideDialog();
-                                showError('Could not leave', (result as any).error);
+                                showError('Could not leave', (result as { error: string }).error);
                                 return;
                             }
                             voice.leave();
@@ -303,7 +328,7 @@ export default function LobbyScreen() {
             e.preventDefault();
             void (async () => {
                 const result = await notifyServerLeave();
-                if (!result.ok) { showError('Could not leave', (result as any).error); return; }
+                if (!result.ok) { showError('Could not leave', (result as { error: string }).error); return; }
                 voice.leave();
                 await setActiveRoom(null);
                 serverLeaveDoneRef.current = true;
@@ -311,16 +336,15 @@ export default function LobbyScreen() {
             })();
         });
         return unsub;
-    }, [navigation, roomCode]);
+    }, [navigation, roomCode, showError, voice]);
 
     const handleStart = async () => {
         if (!canStart) { showError('Not enough players', 'Need at least 2 players to start.'); return; }
+        if (!isRealtimeReady) { showError('Not connected', 'Waiting for server connection…'); return; }
         try {
             setStarting(true);
-            const { data: sessionData } = await supabase.auth.getSession();
-            const token = sessionData.session?.access_token!;
-            const result = await startGame(token, roomCode);
-            if (!result.ok) showError('Could not start', (result as any).error);
+            const result = await startGame();
+            if (!result.ok) showError('Could not start', result.error);
         } catch {
             showError('Error', 'Something went wrong.');
         } finally {
@@ -330,10 +354,9 @@ export default function LobbyScreen() {
 
     const copyCode = async () => {
         await Clipboard.setStringAsync(roomCode);
-        setDialog({ visible: true, title: 'Copied!', message: `Room code ${roomCode} copied.`, actions: undefined });
+        setDialog({ visible: true, title: 'Copied!', message: `Room code ${roomCode} copied to clipboard.`, actions: undefined });
     };
 
-    // ── Slot computation ──
     const slotData = useMemo<SlotData[]>(() => {
         if (!room) return [];
         return players.map(p => {
@@ -350,72 +373,62 @@ export default function LobbyScreen() {
         });
     }, [room, players, voicePeers, voice.peers, voice.isMuted, voice.inRoom, onlineUserIds, currentUserId]);
 
-    // Animations
-    const fadeHeader = useRef(new Animated.Value(0)).current;
-    const slideHeader = useRef(new Animated.Value(-16)).current;
-    const fadeGrid = useRef(new Animated.Value(0)).current;
-    const slideGrid = useRef(new Animated.Value(20)).current;
-    const fadeFooter = useRef(new Animated.Value(0)).current;
-    const pulseRing = useRef(new Animated.Value(1)).current;
-
-    useEffect(() => {
-        Animated.loop(
-            Animated.sequence([
-                Animated.timing(pulseRing, { toValue: 1.06, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-                Animated.timing(pulseRing, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-            ])
-        ).start();
-
-        Animated.stagger(100, [
-            Animated.parallel([
-                Animated.timing(fadeHeader, { toValue: 1, duration: 400, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-                Animated.timing(slideHeader, { toValue: 0, duration: 400, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-            ]),
-            Animated.parallel([
-                Animated.timing(fadeGrid, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-                Animated.timing(slideGrid, { toValue: 0, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-            ]),
-            Animated.timing(fadeFooter, { toValue: 1, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        ]).start();
-    }, []);
-
     const slots = useMemo<(SlotData | null)[]>(
         () => Array.from({ length: maxPlayers }, (_, i) => slotData[i] ?? null),
         [slotData, maxPlayers],
     );
 
+    const connColor = connectionPhase === 'connected' ? LUDO.green : connectionPhase === 'offline' ? LUDO.red : LUDO.yellow;
+
     return (
-        <RNView style={[styles.screen, { backgroundColor: palette.background }]}>
-
-            <RNView style={[styles.blob, { top: -60, left: -60, backgroundColor: '#2DAA5C' }]} />
-            <RNView style={[styles.blob, { bottom: -60, right: -60, backgroundColor: '#3B7DD8' }]} />
-
-            <Animated.View style={[styles.header, { paddingTop: insets.top + 12, opacity: fadeHeader, transform: [{ translateY: slideHeader }] }]}>
-                <TouchableOpacity onPress={openLeaveDialog} style={styles.backBtn} activeOpacity={0.7}>
-                    <FontAwesome name="chevron-left" size={14} color={palette.mutedText} />
-                </TouchableOpacity>
-                <RNView style={styles.headerCenter}>
-                    <Text weight="bold" style={styles.headerTitle}>Waiting Room</Text>
-                    <Text weight="medium" style={styles.headerSub}>
-                        {players.length}/{maxPlayers} players · {socketStatus === 'connected' ? 'Live' : socketStatus === 'reconnecting' ? 'Reconnecting' : socketStatus}
-                    </Text>
+        <RNView style={styles.screen}>
+            <ScrollView
+                contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 8, paddingBottom: insets.bottom + 16 }]}
+                showsVerticalScrollIndicator={false}
+            >
+                {/* Header */}
+                <RNView style={styles.topBar}>
+                    <TouchableOpacity onPress={openLeaveDialog} style={styles.iconBtn} activeOpacity={0.7}>
+                        <FontAwesome name="chevron-left" size={14} color={palette.mutedText} />
+                    </TouchableOpacity>
+                    <RNView style={styles.topCenter}>
+                        <Text weight="bold" style={styles.topTitle}>Lobby</Text>
+                        <RNView style={styles.connRow}>
+                            <RNView style={[styles.connDot, { backgroundColor: connColor }]} />
+                            <Text weight="medium" style={styles.connText}>{connectionLabel(connectionPhase)}</Text>
+                        </RNView>
+                    </RNView>
+                    <RNView style={styles.iconBtnPlaceholder} />
                 </RNView>
-                <TouchableOpacity style={styles.codeChip} onPress={copyCode} activeOpacity={0.8}>
-                    <Text weight="bold" style={styles.codeText}>{roomCode || '—'}</Text>
-                    <FontAwesome name="copy" size={10} color={palette.mutedText} />
-                </TouchableOpacity>
-            </Animated.View>
 
-            <RNView style={styles.progressBar}>
-                <RNView style={[styles.progressFill, { width: `${(players.length / maxPlayers) * 100}%` as any }]} />
-            </RNView>
+                {/* Room code hero */}
+                <Animated.View style={{ opacity: heroFade, transform: [{ scale: heroScale }] }}>
+                    <GlassPanel intensity="heavy" accent={LUDO.red} style={styles.codeHero}>
+                        <Text weight="medium" style={styles.codeLabel}>ROOM CODE</Text>
+                        <TouchableOpacity onPress={copyCode} activeOpacity={0.85} style={styles.codeTap}>
+                            <Text weight="bold" style={styles.codeValue}>{roomCode || '——'}</Text>
+                            <RNView style={styles.copyBadge}>
+                                <FontAwesome name="copy" size={11} color={palette.text} />
+                            </RNView>
+                        </TouchableOpacity>
+                        <Text weight="medium" style={styles.codeHint}>Tap to copy · share with friends</Text>
 
-            <Animated.View style={[styles.gridWrap, { opacity: fadeGrid, transform: [{ translateY: slideGrid }] }]}>
+                        <RNView style={styles.progressTrack}>
+                            <RNView style={[styles.progressFill, { width: `${(players.length / maxPlayers) * 100}%` as `${number}%` }]} />
+                        </RNView>
+                        <Text weight="semiBold" style={styles.playerCount}>
+                            {players.length} / {maxPlayers} players
+                        </Text>
+                    </GlassPanel>
+                </Animated.View>
+
+                {/* Player grid */}
                 <RNView style={[styles.grid, maxPlayers === 2 && styles.gridTwo]}>
                     {slots.map((player, i) => (
-                        <PlayerSlot
+                        <PlayerCard
                             key={player?.id ?? `empty-${i}`}
                             player={player}
+                            index={i}
                             onMicTap={
                                 player && player.userId === currentUserId && voice.inRoom
                                     ? voice.toggleMute
@@ -424,89 +437,53 @@ export default function LobbyScreen() {
                         />
                     ))}
                 </RNView>
-            </Animated.View>
 
-            <Animated.View style={[styles.statusRow, { opacity: fadeFooter }]}>
-                {isFull ? (
-                    <>
-                        <RNView style={[styles.statusDot, { backgroundColor: '#2DAA5C' }]} />
-                        <Text weight="semiBold" style={[styles.statusText, { color: '#2DAA5C' }]}>Room is full — ready to start!</Text>
-                    </>
-                ) : (
-                    <>
-                        <Animated.View style={{ transform: [{ scale: pulseRing }] }}>
-                            <RNView style={[styles.statusDot, { backgroundColor: '#E8A520' }]} />
-                        </Animated.View>
-                        <Text weight="medium" style={styles.statusText}>
-                            Waiting for {maxPlayers - players.length} more player{maxPlayers - players.length > 1 ? 's' : ''}...
-                        </Text>
-                    </>
-                )}
-            </Animated.View>
-
-            <Animated.View style={[styles.footer, { paddingBottom: insets.bottom + 16, opacity: fadeFooter }]}>
-                <TouchableOpacity style={styles.shareBtn} onPress={copyCode} activeOpacity={0.8}>
-                    <FontAwesome name="share-alt" size={13} color={palette.mutedText} />
-                    <Text weight="medium" style={styles.shareBtnText}>
-                        Share code{'  '}
-                        <Text weight="bold" style={{ color: palette.text }}>{roomCode || '—'}</Text>
+                {/* Status */}
+                <RNView style={styles.statusWrap}>
+                    <Text weight="medium" style={styles.statusText}>
+                        {isFull
+                            ? 'Everyone is here — ready to roll!'
+                            : `Waiting for ${maxPlayers - players.length} more player${maxPlayers - players.length > 1 ? 's' : ''}…`}
                     </Text>
-                    <FontAwesome name="copy" size={12} color={palette.mutedText} />
-                </TouchableOpacity>
+                </RNView>
 
-                {/* Voice control row */}
+                {/* Voice */}
                 {room?.voiceEnabled && (
-                    <RNView style={styles.voiceRow}>
+                    <RNView style={styles.voiceSection}>
+                        <Text weight="semiBold" style={styles.sectionLabel}>Voice chat</Text>
+                        <VoiceControls roomId={roomId} />
+                    </RNView>
+                )}
+
+                {/* Actions */}
+                <RNView style={styles.actions}>
+                    <TouchableOpacity style={styles.shareBtn} onPress={copyCode} activeOpacity={0.8}>
+                        <FontAwesome name="share-alt" size={13} color={palette.mutedText} />
+                        <Text weight="medium" style={styles.shareText}>Share room code</Text>
+                    </TouchableOpacity>
+
+                    {isHost ? (
                         <TouchableOpacity
-                            style={[styles.voiceBtn, voice.inRoom && !voice.isMuted && styles.voiceBtnActive]}
-                            onPress={() => {
-                                if (!voice.inRoom) void voice.join(roomId);
-                                else voice.toggleMute();
-                            }}
-                            activeOpacity={0.8}
+                            style={[styles.startBtn, (!canStart || starting) && styles.startBtnDisabled]}
+                            activeOpacity={0.88}
+                            onPress={handleStart}
+                            disabled={!canStart || starting}
                         >
-                            <FontAwesome
-                                name={voice.inRoom && !voice.isMuted ? 'microphone' : 'microphone-slash'}
-                                size={14}
-                                color={voice.inRoom && !voice.isMuted ? '#2DAA5C' : palette.mutedText}
-                            />
-                            <Text weight="semiBold" style={[styles.voiceBtnText, voice.inRoom && !voice.isMuted && { color: '#2DAA5C' }]}>
-                                {!voice.inRoom ? 'Join Voice' : voice.isMuted ? 'Unmute' : 'Mute'}
+                            <FontAwesome name="play" size={14} color="#fff" />
+                            <Text weight="bold" style={styles.startText}>
+                                {starting ? 'Starting…' : isFull ? 'Start Game' : `Start (${players.length}/${maxPlayers})`}
                             </Text>
                         </TouchableOpacity>
-                        {voice.inRoom && (
-                            <TouchableOpacity
-                                style={styles.voiceLeaveBtn}
-                                onPress={voice.leave}
-                                activeOpacity={0.8}
-                            >
-                                <FontAwesome name="phone" size={12} color="#D94444" style={{ transform: [{ rotate: '135deg' }] }} />
-                            </TouchableOpacity>
-                        )}
-                    </RNView>
-                )}
-
-                {isHost ? (
-                    <TouchableOpacity
-                        style={[styles.startBtn, (!canStart || starting) && { opacity: 0.5 }]}
-                        activeOpacity={0.85}
-                        onPress={handleStart}
-                        disabled={!canStart || starting}
-                    >
-                        <FontAwesome name="play" size={14} color="#fff" />
-                        <Text weight="bold" style={styles.startBtnText}>
-                            {starting ? 'Starting...' : isFull ? 'Start Game' : `Start Anyway (${players.length}/${maxPlayers})`}
-                        </Text>
-                    </TouchableOpacity>
-                ) : (
-                    <RNView style={styles.waitingBtn}>
-                        <WaitingDot delay={0} />
-                        <WaitingDot delay={200} />
-                        <WaitingDot delay={400} />
-                        <Text weight="medium" style={styles.waitingBtnText}>Waiting for host to start</Text>
-                    </RNView>
-                )}
-            </Animated.View>
+                    ) : (
+                        <GlassPanel intensity="light" style={styles.waitPanel}>
+                            <RNView style={styles.waitDots}>
+                                {[0, 1, 2].map(i => <WaitingDot key={i} delay={i * 180} />)}
+                            </RNView>
+                            <Text weight="medium" style={styles.waitText}>Waiting for host to start</Text>
+                        </GlassPanel>
+                    )}
+                </RNView>
+            </ScrollView>
 
             <AppDialog
                 visible={dialog.visible}
@@ -520,53 +497,171 @@ export default function LobbyScreen() {
 }
 
 const styles = StyleSheet.create({
-    screen: { flex: 1 },
-    blob: { position: 'absolute', width: 200, height: 200, borderRadius: 100, opacity: 0.05 },
-    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border },
-    backBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: palette.elevated, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.border, alignItems: 'center', justifyContent: 'center' },
-    headerCenter: { alignItems: 'center', gap: 2 },
-    headerTitle: { fontSize: 16, color: palette.text, letterSpacing: 0.2 },
-    headerSub: { fontSize: 11, color: palette.mutedText },
-    codeChip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: palette.elevated, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.border, borderRadius: 10, paddingVertical: 6, paddingHorizontal: 10 },
-    codeText: { fontSize: 13, color: palette.text, letterSpacing: 2, fontFamily: 'SpaceMono-Regular' },
-    progressBar: { height: 2, backgroundColor: palette.elevated },
-    progressFill: { height: 2, backgroundColor: '#D94444', borderRadius: 2 },
-    gridWrap: { flex: 1, padding: 16, justifyContent: 'center' },
-    grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'center' },
-    gridTwo: { flexDirection: 'row', flexWrap: 'nowrap' },
-    slot: { width: '47%', backgroundColor: palette.card, borderRadius: 20, borderWidth: 1, borderColor: palette.border, overflow: 'hidden', alignItems: 'center', paddingVertical: 22, paddingHorizontal: 12, gap: 8 },
-    slotAccent: { position: 'absolute', top: 0, left: 0, right: 0, height: 3 },
-    slotAvatar: { width: 60, height: 60, borderRadius: 30, alignItems: 'center', justifyContent: 'center', borderWidth: 2.5, borderColor: 'rgba(255,255,255,0.2)' },
-    slotAvatarText: { fontSize: 20, color: '#fff', letterSpacing: 1 },
-    voiceRing: { borderRadius: 30, borderWidth: 2 },
-    slotUsername: { fontSize: 13, color: palette.text, letterSpacing: 0.2 },
-    slotColor: { fontSize: 10, letterSpacing: 1.5 },
-    slotBadgeRow: { flexDirection: 'row', gap: 6, alignItems: 'center' },
-    hostBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#E8A52018', borderRadius: 6, paddingVertical: 3, paddingHorizontal: 6 },
-    hostBadgeText: { fontSize: 8, color: '#E8A520', letterSpacing: 0.5 },
-    offlineBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#E8A52018', borderRadius: 6, paddingVertical: 3, paddingHorizontal: 6 },
-    offlineBadgeText: { fontSize: 8, color: '#E8A520', letterSpacing: 0.5 },
-    readyDot: { width: 5, height: 5, borderRadius: 2.5 },
-    micChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 999, borderWidth: 1 },
-    micChipText: { fontSize: 9, letterSpacing: 0.6 },
-    slotEmpty: { borderStyle: 'dashed', backgroundColor: 'transparent' },
-    slotEmptyAvatar: { width: 60, height: 60, borderRadius: 30, backgroundColor: palette.elevated, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: palette.border, borderStyle: 'dashed' },
-    slotEmptyText: { fontSize: 12, color: palette.dimText },
-    slotEmptyDots: { flexDirection: 'row', gap: 5, alignItems: 'center' },
+    screen: { flex: 1, backgroundColor: 'transparent' },
+    scroll: { paddingHorizontal: 18, gap: 18 },
+    topBar: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
+    iconBtn: {
+        width: 40,
+        height: 40,
+        borderRadius: 12,
+        backgroundColor: palette.elevated,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: palette.glassBorder,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    iconBtnPlaceholder: { width: 40 },
+    topCenter: { flex: 1, alignItems: 'center', gap: 4 },
+    topTitle: { fontSize: 17, color: palette.text, letterSpacing: 0.3 },
+    connRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    connDot: { width: 6, height: 6, borderRadius: 3 },
+    connText: { fontSize: 11, color: palette.mutedText },
+    codeHero: { alignItems: 'center', paddingVertical: 28, paddingHorizontal: 20, gap: 10 },
+    codeLabel: { fontSize: 11, color: palette.mutedText, letterSpacing: 2.5 },
+    codeTap: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    codeValue: {
+        fontSize: 42,
+        color: palette.text,
+        letterSpacing: 10,
+        fontFamily: 'SpaceMono-Regular',
+    },
+    copyBadge: {
+        width: 32,
+        height: 32,
+        borderRadius: 10,
+        backgroundColor: 'rgba(255,255,255,0.08)',
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: palette.glassBorder,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    codeHint: { fontSize: 12, color: palette.dimText },
+    progressTrack: {
+        width: '100%',
+        height: 3,
+        borderRadius: 2,
+        backgroundColor: 'rgba(255,255,255,0.08)',
+        marginTop: 6,
+        overflow: 'hidden',
+    },
+    progressFill: { height: 3, backgroundColor: LUDO.red, borderRadius: 2 },
+    playerCount: { fontSize: 13, color: palette.mutedText },
+    grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between' },
+    gridTwo: { flexWrap: 'nowrap' },
+    cardWrap: { width: '47.5%' },
+    playerCard: { alignItems: 'center', paddingTop: 16, paddingBottom: 14, paddingHorizontal: 12, gap: 8, overflow: 'hidden' },
+    colorBar: { position: 'absolute', top: 0, left: 0, right: 0, height: 3 },
+    avatarWrap: { alignItems: 'center', justifyContent: 'center', width: 64, height: 64 },
+    voiceRing: {
+        position: 'absolute',
+        width: 64,
+        height: 64,
+        borderRadius: 32,
+        borderWidth: 2,
+    },
+    avatar: {
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 2,
+        borderColor: 'rgba(255,255,255,0.22)',
+    },
+    avatarText: { fontSize: 18, color: '#fff', letterSpacing: 0.5 },
+    offlineDot: {
+        position: 'absolute',
+        bottom: 2,
+        right: 2,
+        width: 12,
+        height: 12,
+        borderRadius: 6,
+        backgroundColor: LUDO.yellow,
+        borderWidth: 2,
+        borderColor: palette.card,
+    },
+    playerName: { fontSize: 14, color: palette.text, maxWidth: '100%' },
+    badgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'center' },
+    colorPill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        paddingVertical: 3,
+        paddingHorizontal: 8,
+        borderRadius: 999,
+        borderWidth: 1,
+    },
+    colorDot: { width: 6, height: 6, borderRadius: 3 },
+    colorPillText: { fontSize: 9, letterSpacing: 1 },
+    hostPill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingVertical: 3,
+        paddingHorizontal: 7,
+        borderRadius: 999,
+        backgroundColor: 'rgba(240, 181, 48, 0.14)',
+    },
+    hostText: { fontSize: 8, color: LUDO.yellow, letterSpacing: 0.6 },
+    voiceChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        paddingVertical: 4,
+        paddingHorizontal: 10,
+        borderRadius: 999,
+        borderWidth: 1,
+    },
+    voiceChipText: { fontSize: 9, letterSpacing: 0.4 },
+    emptyCard: { alignItems: 'center', paddingVertical: 24, paddingHorizontal: 12, gap: 8, borderStyle: 'dashed' },
+    emptyAvatar: {
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        borderWidth: 1.5,
+        borderColor: palette.glassBorder,
+        borderStyle: 'dashed',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    emptyLabel: { fontSize: 12, color: palette.dimText },
+    emptyDots: { flexDirection: 'row', gap: 5 },
     waitDot: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: palette.dimText },
-    statusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 10 },
-    statusDot: { width: 7, height: 7, borderRadius: 3.5 },
-    statusText: { fontSize: 12, color: palette.mutedText },
-    footer: { paddingHorizontal: 16, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border, gap: 10 },
-    shareBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: palette.elevated, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.border, paddingVertical: 12, paddingHorizontal: 16 },
-    shareBtnText: { flex: 1, fontSize: 13, color: palette.mutedText },
-    voiceRow: { flexDirection: 'row', gap: 8 },
-    voiceBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: palette.elevated, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.border, borderRadius: 14, paddingVertical: 12 },
-    voiceBtnActive: { backgroundColor: '#2DAA5C12', borderColor: '#2DAA5C40' },
-    voiceBtnText: { fontSize: 13, color: palette.mutedText },
-    voiceLeaveBtn: { width: 44, height: 44, borderRadius: 14, backgroundColor: '#D9444415', borderWidth: StyleSheet.hairlineWidth, borderColor: '#D9444440', alignItems: 'center', justifyContent: 'center' },
-    startBtn: { backgroundColor: '#D94444', borderRadius: 16, paddingVertical: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
-    startBtnText: { fontSize: 15, color: '#fff', letterSpacing: 0.3 },
-    waitingBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: palette.card, borderRadius: 16, paddingVertical: 15, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.border },
-    waitingBtnText: { fontSize: 14, color: palette.mutedText },
+    statusWrap: { alignItems: 'center' },
+    statusText: { fontSize: 13, color: palette.mutedText, textAlign: 'center' },
+    voiceSection: { gap: 10 },
+    sectionLabel: { fontSize: 12, color: palette.mutedText, letterSpacing: 0.5 },
+    actions: { gap: 10 },
+    shareBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 12,
+        borderRadius: 14,
+        backgroundColor: palette.elevated,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: palette.glassBorder,
+    },
+    shareText: { fontSize: 13, color: palette.mutedText },
+    startBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+        backgroundColor: LUDO.red,
+        borderRadius: 16,
+        paddingVertical: 16,
+    },
+    startBtnDisabled: { opacity: 0.45 },
+    startText: { fontSize: 15, color: '#fff', letterSpacing: 0.3 },
+    waitPanel: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+        paddingVertical: 16,
+    },
+    waitDots: { flexDirection: 'row', gap: 5 },
+    waitText: { fontSize: 14, color: palette.mutedText },
 });

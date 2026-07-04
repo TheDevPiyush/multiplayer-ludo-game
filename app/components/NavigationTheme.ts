@@ -12,7 +12,7 @@ export function navigationTheme(colorScheme: 'light' | 'dark' | null | undefined
             card: palette.card,
             text: palette.text,
             primary: palette.tint,
-            border: '#1E1E38',
+            border: palette.glassBorder,
         },
     };
 }

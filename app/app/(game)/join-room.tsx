@@ -220,7 +220,7 @@ export default function JoinRoomScreen() {
             : insets.bottom + 24;
 
     return (
-        <RNView style={[styles.screen, { backgroundColor: palette.background }]}>
+        <RNView style={styles.screen}>
             <RNView style={styles.screenInner}>
 
                 <RNView style={[styles.blob, { top: -60, right: -60, backgroundColor: '#3B7DD8' }]} />
@@ -342,7 +342,7 @@ export default function JoinRoomScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-    screen: { flex: 1 },
+    screen: { flex: 1, backgroundColor: 'transparent' },
     screenInner: { flex: 1 },
     blob: { position: 'absolute', width: 200, height: 200, borderRadius: 100, opacity: 0.05 },
 

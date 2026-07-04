@@ -1,6 +1,6 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Dimensions,
     Pressable,
@@ -20,6 +20,7 @@ import Animated, {
 import Svg, {
     Circle,
     Defs,
+    Ellipse,
     G,
     LinearGradient,
     Path,
@@ -31,10 +32,13 @@ import Svg, {
 } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { moveToken, rollDice, skipTurn, leaveRoom } from '@/apis/game-api';
+import { leaveRoom } from '@/apis/game-api';
 import AppDialog from '@/components/Dialog';
+import { GlassPanel } from '@/components/GlassPanel';
 import { Text } from '@/components/Themed';
+import { VoiceControls } from '@/components/VoiceControls';
 import Colors from '@/constants/Colors';
+import { useGameActions } from '@/hooks/useGameActions';
 import { useGameRoom, type RoomPlayer } from '@/hooks/useGameRoom';
 import { useSocket } from '@/components/SocketProvider';
 import { useVoiceRoom } from '@/components/VoiceRoomProvider';
@@ -43,8 +47,15 @@ import { supabase } from '@/util/supabase-client';
 
 const { width: W } = Dimensions.get('window');
 
+const ROLL_ANIM_MS = 800;
+
+function sleep(ms: number) {
+    return new Promise<void>(resolve => setTimeout(resolve, ms));
+}
+
 const BOARD_SIZE = Math.min(W - 16, 460);
-const CELL = BOARD_SIZE / 15;
+const BOARD_PAD = 7;
+const CELL = (BOARD_SIZE - BOARD_PAD * 2) / 15;
 
 const palette = Colors['dark'];
 
@@ -53,6 +64,13 @@ const COLOR_HEX: Record<string, string> = {
     BLUE: '#4488E8',
     GREEN: '#37BD6A',
     YELLOW: '#F0B530',
+};
+
+const COLOR_BRIGHT: Record<string, string> = {
+    RED: '#FF7B6E',
+    BLUE: '#7FB1FF',
+    GREEN: '#6FE39A',
+    YELLOW: '#FFD76A',
 };
 
 const COLOR_DARK: Record<string, string> = {
@@ -120,7 +138,7 @@ function posToCoord(pos: number, color: string): [number, number] {
 }
 
 function cellCenter(col: number, row: number) {
-    return { x: col * CELL + CELL / 2, y: row * CELL + CELL / 2 };
+    return { x: BOARD_PAD + col * CELL + CELL / 2, y: BOARD_PAD + row * CELL + CELL / 2 };
 }
 
 // Detect token-stacks at same coord so we can spread them out a bit
@@ -146,42 +164,121 @@ const DICE_DOTS: Record<number, [number, number][]> = {
 
 function DiceFace({ value, size, color, glow }: { value: number; size: number; color: string; glow?: boolean }) {
     const dots = DICE_DOTS[value] ?? [];
-    const r = size * 0.08;
+    const r = size * 0.085;
     return (
         <Svg width={size} height={size}>
             <Defs>
-                <LinearGradient id="dgrad" x1="0" y1="0" x2="1" y2="1">
-                    <Stop offset="0" stopColor="#FFFFFF" stopOpacity="1" />
-                    <Stop offset="1" stopColor="#E2E2EE" stopOpacity="1" />
+                <LinearGradient id="dgrad" x1="0" y1="0" x2="0.6" y2="1">
+                    <Stop offset="0" stopColor="#FFFFFF" />
+                    <Stop offset="0.55" stopColor="#F2F2F8" />
+                    <Stop offset="1" stopColor="#D8D8E4" />
                 </LinearGradient>
+                <RadialGradient id="dotG" cx="35%" cy="30%" r="80%">
+                    <Stop offset="0" stopColor={color} stopOpacity="1" />
+                    <Stop offset="1" stopColor="#000000" stopOpacity="0.85" />
+                </RadialGradient>
             </Defs>
+            {/* body */}
             <Rect
-                x={1}
-                y={1}
-                width={size - 2}
-                height={size - 2}
-                rx={size * 0.2}
+                x={1.5}
+                y={1.5}
+                width={size - 3}
+                height={size - 3}
+                rx={size * 0.22}
                 fill="url(#dgrad)"
-                stroke={glow ? color : '#B5B5C5'}
-                strokeWidth={glow ? 2.5 : 1.5}
+                stroke={glow ? color : '#B9B9CB'}
+                strokeWidth={glow ? 3 : 1.5}
             />
+            {/* top gloss */}
             <Rect
-                x={3}
-                y={3}
-                width={size - 6}
-                height={size * 0.42}
-                rx={size * 0.16}
-                fill="rgba(255,255,255,0.5)"
+                x={size * 0.1}
+                y={size * 0.06}
+                width={size * 0.8}
+                height={size * 0.34}
+                rx={size * 0.15}
+                fill="rgba(255,255,255,0.65)"
             />
             {dots.map(([cx, cy], i) => (
-                <Circle
-                    key={i}
-                    cx={cx * size}
-                    cy={cy * size}
-                    r={r}
-                    fill={color}
-                />
+                <G key={i}>
+                    <Circle cx={cx * size} cy={cy * size + 0.8} r={r} fill="rgba(0,0,0,0.25)" />
+                    <Circle cx={cx * size} cy={cy * size} r={r} fill={color} />
+                    <Circle cx={cx * size - r * 0.3} cy={cy * size - r * 0.35} r={r * 0.32} fill="rgba(255,255,255,0.7)" />
+                </G>
             ))}
+        </Svg>
+    );
+}
+
+// 5-point star path used for safe cells and the board center
+function starPath(cx: number, cy: number, outerR: number, innerR: number): string {
+    let d = '';
+    for (let i = 0; i < 10; i++) {
+        const r = i % 2 === 0 ? outerR : innerR;
+        const a = (Math.PI / 5) * i - Math.PI / 2;
+        const px = cx + r * Math.cos(a);
+        const py = cy + r * Math.sin(a);
+        d += `${i === 0 ? 'M' : 'L'}${px.toFixed(2)},${py.toFixed(2)}`;
+    }
+    return d + 'Z';
+}
+
+// Quadrant rect with only its outer board corner rounded
+function quadrantPath(bx: number, by: number, size: number, corner: 'tl' | 'tr' | 'bl' | 'br', rad: number): string {
+    const x = bx, y = by, s = size, r = rad;
+    switch (corner) {
+        case 'tl':
+            return `M${x + r},${y} L${x + s},${y} L${x + s},${y + s} L${x},${y + s} L${x},${y + r} A${r},${r} 0 0 1 ${x + r},${y} Z`;
+        case 'tr':
+            return `M${x},${y} L${x + s - r},${y} A${r},${r} 0 0 1 ${x + s},${y + r} L${x + s},${y + s} L${x},${y + s} Z`;
+        case 'br':
+            return `M${x},${y} L${x + s},${y} L${x + s},${y + s - r} A${r},${r} 0 0 1 ${x + s - r},${y + s} L${x},${y + s} Z`;
+        case 'bl':
+            return `M${x},${y} L${x + s},${y} L${x + s},${y + s} L${x + r},${y + s} A${r},${r} 0 0 1 ${x},${y + s - r} Z`;
+    }
+}
+
+function MarbleToken({ color, tokenIndex, size, selected }: {
+    color: string;
+    tokenIndex: number;
+    size: number;
+    selected?: boolean;
+}) {
+    const hex = COLOR_HEX[color] ?? '#888';
+    const dark = COLOR_DARK[color] ?? '#444';
+    const bright = COLOR_BRIGHT[color] ?? '#aaa';
+    const r = size * 0.42;
+
+    return (
+        <Svg width={size} height={size}>
+            <Defs>
+                <RadialGradient id={`tg-${color}-${tokenIndex}`} cx="38%" cy="32%" r="68%">
+                    <Stop offset="0" stopColor={bright} />
+                    <Stop offset="0.55" stopColor={hex} />
+                    <Stop offset="1" stopColor={dark} />
+                </RadialGradient>
+            </Defs>
+            <Ellipse cx={size / 2} cy={size * 0.9} rx={r * 0.85} ry={r * 0.18} fill="rgba(0,0,0,0.28)" />
+            <Circle cx={size / 2} cy={size / 2} r={r} fill={`url(#tg-${color}-${tokenIndex})`} />
+            <Circle
+                cx={size / 2}
+                cy={size / 2}
+                r={r}
+                stroke={selected ? '#FFFFFF' : 'rgba(0,0,0,0.18)'}
+                strokeWidth={selected ? 2.5 : 1.2}
+                fill="none"
+            />
+            <Circle cx={size * 0.36} cy={size * 0.3} r={r * 0.22} fill="rgba(255,255,255,0.55)" />
+            <Circle cx={size * 0.52} cy={size * 0.52} r={r * 0.38} fill="rgba(0,0,0,0.12)" />
+            <SvgText
+                x={size / 2}
+                y={size / 2 + size * 0.07}
+                fontSize={size * 0.28}
+                fontWeight="700"
+                textAnchor="middle"
+                fill="#FFFFFF"
+            >
+                {tokenIndex + 1}
+            </SvgText>
         </Svg>
     );
 }
@@ -189,13 +286,20 @@ function DiceFace({ value, size, color, glow }: { value: number; size: number; c
 function LudoBoard() {
     const S = BOARD_SIZE;
     const C = CELL;
+    const pad = BOARD_PAD;
+    const inner = S - pad * 2;
 
     return (
         <Svg width={S} height={S}>
             <Defs>
+                <LinearGradient id="wood" x1="0" y1="0" x2="1" y2="1">
+                    <Stop offset="0" stopColor="#8B5A2B" />
+                    <Stop offset="0.45" stopColor="#6B4226" />
+                    <Stop offset="1" stopColor="#4A2E18" />
+                </LinearGradient>
                 <LinearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-                    <Stop offset="0" stopColor="#F7EFD7" />
-                    <Stop offset="1" stopColor="#E7D9B5" />
+                    <Stop offset="0" stopColor="#FFFDF5" />
+                    <Stop offset="1" stopColor="#F0E6C8" />
                 </LinearGradient>
                 <RadialGradient id="redG" cx="50%" cy="50%" r="50%">
                     <Stop offset="0" stopColor="#F26B6B" />
@@ -215,8 +319,11 @@ function LudoBoard() {
                 </RadialGradient>
             </Defs>
 
-            <Rect width={S} height={S} fill="url(#bg)" rx={14} />
+            {/* Wood frame */}
+            <Rect width={S} height={S} fill="url(#wood)" rx={18} />
+            <Rect x={pad} y={pad} width={inner} height={inner} fill="url(#bg)" rx={12} />
 
+            <G transform={`translate(${pad}, ${pad})`}>
             {/* Path cells */}
             {Array.from({ length: 15 }).map((_, r) =>
                 Array.from({ length: 15 }).map((_, c) => {
@@ -225,6 +332,7 @@ function LudoBoard() {
                     if (r >= 9 && c < 6) return null;
                     if (r >= 9 && c >= 9) return null;
                     if (r >= 6 && r <= 8 && c >= 6 && c <= 8) return null;
+                    const alt = (r + c) % 2 === 0;
                     return (
                         <Rect
                             key={`${r}-${c}`}
@@ -232,9 +340,9 @@ function LudoBoard() {
                             y={r * C}
                             width={C}
                             height={C}
-                            fill="#FFFEF7"
-                            stroke="#C9B68A"
-                            strokeWidth={0.6}
+                            fill={alt ? '#FFFEF8' : '#FFF9EE'}
+                            stroke="#D4C4A0"
+                            strokeWidth={0.5}
                         />
                     );
                 })
@@ -256,7 +364,7 @@ function LudoBoard() {
                             width={C}
                             height={C}
                             fill={lane.color}
-                            opacity={0.7}
+                            opacity={0.88}
                         />
                     ))}
                 </G>
@@ -279,17 +387,19 @@ function LudoBoard() {
                 );
             })}
 
-            {/* HOMES (4 corners) */}
-            {(['RED', 'BLUE', 'GREEN', 'YELLOW'] as const).map((c, i) => {
-                const [bx, by] = HOME_BASE_BOX[c];
+            {/* HOMES (4 corners) — rounded outer board corners */}
+            {([
+                { c: 'RED' as const, bx: 0, by: 0, corner: 'tl' as const },
+                { c: 'BLUE' as const, bx: 9, by: 0, corner: 'tr' as const },
+                { c: 'GREEN' as const, bx: 9, by: 9, corner: 'br' as const },
+                { c: 'YELLOW' as const, bx: 0, by: 9, corner: 'bl' as const },
+            ]).map(({ c, bx, by, corner }) => {
                 const grad = c === 'RED' ? 'redG' : c === 'BLUE' ? 'blueG' : c === 'GREEN' ? 'greenG' : 'yellowG';
+                const size = 6 * C;
                 return (
                     <G key={`home-${c}`}>
-                        <Rect
-                            x={bx * C}
-                            y={by * C}
-                            width={6 * C}
-                            height={6 * C}
+                        <Path
+                            d={quadrantPath(bx * C, by * C, size, corner, C * 1.1)}
                             fill={`url(#${grad})`}
                         />
                         <Rect
@@ -298,18 +408,19 @@ function LudoBoard() {
                             width={4 * C}
                             height={4 * C}
                             fill="#FFFEF7"
-                            rx={6}
+                            rx={8}
+                            stroke="rgba(0,0,0,0.08)"
+                            strokeWidth={1}
                         />
-                        {/* Token slot pads inside home */}
                         {HOME_TOKEN_SLOTS[c].map(([sx, sy], k) => (
                             <Circle
                                 key={`slot-${c}-${k}`}
                                 cx={sx * C}
                                 cy={sy * C}
-                                r={C * 0.45}
+                                r={C * 0.42}
                                 fill={`url(#${grad})`}
-                                stroke="rgba(0,0,0,0.12)"
-                                strokeWidth={1}
+                                stroke="rgba(255,255,255,0.35)"
+                                strokeWidth={1.5}
                             />
                         ))}
                     </G>
@@ -376,11 +487,12 @@ function LudoBoard() {
                 return (
                     <Path
                         key={`arrow-${color}`}
-                        d={`M${left[0]},${left[1]} L${tip[0]},${tip[1]} L${right[0]},${right[1]}`}
-                        fill="rgba(0,0,0,0.4)"
+                        d={`M${left[0]},${left[1]} L${tip[0]},${tip[1]} L${right[0]},${right[1]} Z`}
+                        fill="rgba(0,0,0,0.35)"
                     />
                 );
             })}
+            </G>
         </Svg>
     );
 }
@@ -451,10 +563,10 @@ function Token({
 
     const animatedStyle = useAnimatedStyle(() => ({
         position: 'absolute',
-        width: CELL * 0.74,
-        height: CELL * 0.74,
-        left: x.value - (CELL * 0.74) / 2,
-        top: y.value - (CELL * 0.74) / 2,
+        width: CELL * 0.78,
+        height: CELL * 0.78,
+        left: x.value - (CELL * 0.78) / 2,
+        top: y.value - (CELL * 0.78) / 2,
         transform: [{ scale: scale.value + pulse.value * 0.12 }],
         zIndex: canMove ? 200 : 10,
     }));
@@ -465,8 +577,10 @@ function Token({
 
     const ringStyle = useAnimatedStyle(() => ({
         position: 'absolute',
-        width: CELL * 0.74,
-        height: CELL * 0.74,
+        width: CELL * 0.82,
+        height: CELL * 0.82,
+        left: x.value - (CELL * 0.82) / 2,
+        top: y.value - (CELL * 0.82) / 2,
         borderRadius: 100,
         borderWidth: 2.5,
         borderColor: COLOR_HEX[color],
@@ -480,18 +594,14 @@ function Token({
             <Pressable
                 onPress={() => onPress?.(tokenIndex)}
                 disabled={!onPress || !canMove}
-                style={[
-                    styles.token,
-                    {
-                        backgroundColor: COLOR_HEX[color],
-                        borderColor: canMove ? '#fff' : 'rgba(0,0,0,0.15)',
-                    },
-                ]}
+                style={{ width: CELL * 0.78, height: CELL * 0.78 }}
             >
-                <RNView style={[styles.tokenHighlight, { backgroundColor: 'rgba(255,255,255,0.45)' }]} />
-                <RNView style={[styles.tokenInner, { backgroundColor: COLOR_DARK[color] }]}>
-                    <Text weight="bold" style={styles.tokenLabel}>{tokenIndex + 1}</Text>
-                </RNView>
+                <MarbleToken
+                    color={color}
+                    tokenIndex={tokenIndex}
+                    size={CELL * 0.78}
+                    selected={canMove}
+                />
             </Pressable>
             <Animated.View
                 pointerEvents="none"
@@ -543,7 +653,11 @@ function PlayerStrip({ player }: { player: StripPlayer }) {
     const color = COLOR_HEX[player.color];
 
     return (
-        <RNView style={[styles.strip, player.isActive && { borderColor: color, backgroundColor: color + '12' }]}>
+        <GlassPanel
+            intensity="medium"
+            accent={player.isActive ? color : undefined}
+            style={[styles.strip, player.isActive && { borderColor: color + '55' }]}
+        >
             <RNView style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center' }}>
                 <Animated.View style={[StyleSheet.absoluteFill, { borderRadius: 18, borderWidth: 2, borderColor: color }, ringStyle]} />
                 <RNView style={[styles.stripAvatar, { backgroundColor: color, opacity: player.isOnline ? 1 : 0.4 }]}>
@@ -580,7 +694,7 @@ function PlayerStrip({ player }: { player: StripPlayer }) {
             {player.isActive && (
                 <RNView style={[styles.activeDot, { backgroundColor: color }]} />
             )}
-        </RNView>
+        </GlassPanel>
     );
 }
 
@@ -592,19 +706,21 @@ export default function GameBoardScreen() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
     const navigation = useNavigation();
-    const { status: socketStatus } = useSocket();
-    const voice = useVoiceRoom();
-
     const { gameCode: rawCode, roomId: rawRoomId } = useLocalSearchParams<any>();
     const gameCode = typeof rawCode === 'string' ? rawCode : String(rawCode?.[0] ?? '');
     const roomId = typeof rawRoomId === 'string' ? rawRoomId : String(rawRoomId?.[0] ?? '');
 
+    const { connectionPhase, isRealtimeReady } = useSocket();
+    const voice = useVoiceRoom();
+    const { rollDice, moveToken, skipTurn } = useGameActions(gameCode);
+
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [rolling, setRolling] = useState(false);
-    const [displayDice, setDisplayDice] = useState<number | null>(null);
-    // Separate face used only during the rolling animation — purely visual,
-    // never affects gameplay decisions or move logic.
+    /** Last rolled value — kept visible after turn changes until the next roll. */
+    const [lastShownDice, setLastShownDice] = useState<number | null>(null);
     const [rollingFace, setRollingFace] = useState(6);
+    /** Color of the player whose roll is animating (for opponent rolls). */
+    const [rollingColor, setRollingColor] = useState<string | null>(null);
     const [disconnectingIds, setDisconnectingIds] = useState<Set<string>>(new Set());
     const [capturedKey, setCapturedKey] = useState<string | null>(null);
     const [winnerInfo, setWinnerInfo] = useState<{ winnerId: string; winnerColor: string } | null>(null);
@@ -614,18 +730,32 @@ export default function GameBoardScreen() {
     });
 
     const leftRef = useRef(false);
+    const rollingRef = useRef(false);
+    const currentUserIdRef = useRef<string | null>(null);
+    const runRollAnimationRef = useRef<(finalValue: number, rollerColor: string) => Promise<void>>(
+        async () => {},
+    );
+    currentUserIdRef.current = currentUserId;
+    rollingRef.current = rolling;
 
     const { room } = useGameRoom({
         roomId,
         gameCode,
         onEvent: (e) => {
+            if (e.type === 'dice') {
+                // Local player already animates in handleRollDice — skip duplicate.
+                if (e.byUserId !== currentUserIdRef.current) {
+                    void runRollAnimationRef.current(e.diceValue, e.color);
+                }
+                return;
+            }
             if (e.type === 'capture') {
                 setCapturedKey(`${e.capturedUserId}:${e.capturedTokenIndex}:${Date.now()}`);
             }
             if (e.type === 'presence:disconnecting') {
                 setDisconnectingIds(prev => new Set(prev).add(e.userId));
             }
-            if (e.type === 'presence:connected') {
+            if (e.type === 'presence:connected' || e.type === 'presence:reconnected') {
                 setDisconnectingIds(prev => {
                     const next = new Set(prev);
                     next.delete(e.userId);
@@ -682,20 +812,28 @@ export default function GameBoardScreen() {
         });
     }, []);
 
-    // Auto-join voice on board if enabled
+    // Keep voice alive across lobby → board; resync peers when board loads
+    const voiceSyncedRef = useRef(false);
     useEffect(() => {
-        if (!room?.voiceEnabled || !roomId) return;
-        if (voice.roomId !== roomId) {
+        voiceSyncedRef.current = false;
+    }, [roomId]);
+
+    useEffect(() => {
+        if (!room?.voiceEnabled || !roomId || !isRealtimeReady || room?.status !== 'PLAYING') return;
+        if (voiceSyncedRef.current) return;
+        voiceSyncedRef.current = true;
+
+        if (voice.inRoom && voice.roomId === roomId) {
+            voice.resync();
+        } else {
             void voice.join(roomId);
         }
-    }, [room?.voiceEnabled, roomId, voice.roomId]);
+    }, [room?.voiceEnabled, roomId, room?.status, isRealtimeReady, voice.inRoom, voice.roomId, voice.join, voice.resync]);
 
-    // Keep displayDice in sync with authoritative room.currentDice.
-    // Skip during rolling so a slow socket event can't override the visual mid-spin.
+    // Remember every rolled value so it stays visible after the turn advances.
     useEffect(() => {
-        if (rolling) return;
-        setDisplayDice(diceValue);
-    }, [diceValue, rolling]);
+        if (diceValue !== null) setLastShownDice(diceValue);
+    }, [diceValue]);
 
     // ── Dice animation ──
     const diceRotate = useSharedValue(0);
@@ -707,45 +845,89 @@ export default function GameBoardScreen() {
         ],
     }));
 
-    const handleRollDice = async () => {
-        if (!isMyTurn || rolling || diceValue !== null) return;
+    const runRollAnimation = useCallback(async (finalValue: number, rollerColor: string) => {
+        if (rollingRef.current) return;
+
         setRolling(true);
-        let fakeInterval: any = null;
+        setRollingColor(rollerColor);
+        rollingRef.current = true;
+
+        diceRotate.value = withTiming(diceRotate.value + 720, {
+            duration: ROLL_ANIM_MS,
+            easing: Easing.out(Easing.exp),
+        });
+        diceScale.value = withSequence(
+            withTiming(1.22, { duration: 160 }),
+            withSpring(1),
+        );
+
+        const fakeInterval = setInterval(() => {
+            setRollingFace(Math.floor(Math.random() * 6) + 1);
+        }, 80);
+
+        await sleep(ROLL_ANIM_MS);
+        clearInterval(fakeInterval);
+
+        setLastShownDice(finalValue);
+        setRolling(false);
+        setRollingColor(null);
+        rollingRef.current = false;
+    }, [diceRotate, diceScale]);
+
+    runRollAnimationRef.current = runRollAnimation;
+
+    const handleRollDice = async () => {
+        if (!isMyTurn || rolling || diceValue !== null || !isRealtimeReady || !selfPlayer) return;
+
+        setRolling(true);
+        setRollingColor(selfPlayer.color);
+        rollingRef.current = true;
+        let fakeInterval: ReturnType<typeof setInterval> | null = null;
 
         try {
-            diceRotate.value = withTiming(diceRotate.value + 720, { duration: 800, easing: Easing.out(Easing.exp) });
+            diceRotate.value = withTiming(diceRotate.value + 720, {
+                duration: ROLL_ANIM_MS,
+                easing: Easing.out(Easing.exp),
+            });
             diceScale.value = withSequence(
                 withTiming(1.22, { duration: 160 }),
                 withSpring(1),
             );
 
-            // Spin a visual-only face — does NOT touch displayDice / gameplay state.
             fakeInterval = setInterval(() => {
                 setRollingFace(Math.floor(Math.random() * 6) + 1);
             }, 80);
 
-            const { data } = await supabase.auth.getSession();
-            const token = data.session?.access_token;
-            if (!token) {
-                clearInterval(fakeInterval);
-                return;
-            }
-
-            const result = await rollDice(token, gameCode);
-            clearInterval(fakeInterval);
+            const [result] = await Promise.all([rollDice(), sleep(ROLL_ANIM_MS)]);
+            if (fakeInterval) clearInterval(fakeInterval);
 
             if (!result.ok) {
+                console.warn('[board] rollDice failed:', result.error);
+                setDialog({
+                    visible: true,
+                    title: 'Could not roll',
+                    message: result.error,
+                    actions: undefined,
+                });
                 return;
             }
-            // Authoritative value from server — set explicitly so we never race
-            // with the dice:rolled socket event or the fakeInterval.
-            setDisplayDice(result.data.data.diceValue);
+            setLastShownDice(result.data?.diceValue ?? null);
         } catch (e) {
             if (fakeInterval) clearInterval(fakeInterval);
         } finally {
             setRolling(false);
+            setRollingColor(null);
+            rollingRef.current = false;
         }
     };
+
+    const visibleDice = diceValue ?? lastShownDice;
+    const diceFaceColor = rolling
+        ? COLOR_HEX[rollingColor ?? currentColor] ?? palette.mutedText
+        : diceValue !== null
+            ? COLOR_HEX[currentColor] ?? palette.mutedText
+            : palette.mutedText;
+    const canRoll = isMyTurn && diceValue === null && !rolling && isRealtimeReady;
 
     // Auto-skip after a moment if no valid move.
     // Re-runs when token positions change (e.g. after a capture lands on you).
@@ -760,10 +942,7 @@ export default function GameBoardScreen() {
         if (hasValidMove) return;
 
         const t = setTimeout(async () => {
-            const { data } = await supabase.auth.getSession();
-            const token = data.session?.access_token;
-            if (!token) return;
-            await skipTurn(token, gameCode);
+            await skipTurn();
         }, 1300);
         return () => clearTimeout(t);
     }, [isMyTurn, diceValue, selfPlayer?.id, positionsKey]);
@@ -777,11 +956,7 @@ export default function GameBoardScreen() {
         if (fromPos === 57) return;
         if (fromPos !== 0 && fromPos + diceValue > 57) return;
 
-        const { data } = await supabase.auth.getSession();
-        const token = data.session?.access_token;
-        if (!token) return;
-
-        await moveToken(token, { gameCode, tokenIndex });
+        await moveToken(tokenIndex);
     };
 
     // Token coords & stacking
@@ -955,7 +1130,7 @@ export default function GameBoardScreen() {
     };
 
     return (
-        <RNView style={[styles.screen, { backgroundColor: palette.background, paddingTop: insets.top }]}>
+        <RNView style={[styles.screen, { paddingTop: insets.top }]}>
             {/* TOP BAR */}
             <RNView style={styles.topBar}>
                 <TouchableOpacity onPress={openExit} style={styles.iconBtnSmall}>
@@ -964,32 +1139,16 @@ export default function GameBoardScreen() {
                 <RNView style={styles.statusChip}>
                     <RNView style={[
                         styles.statusDot,
-                        { backgroundColor: socketStatus === 'connected' ? '#37BD6A' : '#E8A520' },
+                        { backgroundColor: isRealtimeReady ? '#37BD6A' : '#E8A520' },
                     ]} />
                     <Text weight="medium" style={styles.statusText}>
-                        {socketStatus === 'connected' ? 'Live' :
-                         socketStatus === 'reconnecting' ? 'Reconnecting…' :
-                         socketStatus}
+                        {connectionPhase === 'connected' ? 'Live' :
+                         connectionPhase === 'offline' ? 'No network' :
+                         connectionPhase === 'reconnecting' ? 'Reconnecting…' :
+                         connectionPhase === 'connecting' ? 'Connecting…' :
+                         'Connection lost'}
                     </Text>
                 </RNView>
-                {room?.voiceEnabled && (
-                    <TouchableOpacity
-                        onPress={() => {
-                            if (!voice.inRoom) void voice.join(roomId);
-                            else voice.toggleMute();
-                        }}
-                        style={[
-                            styles.iconBtnSmall,
-                            voice.inRoom && !voice.isMuted && { backgroundColor: '#37BD6A22', borderColor: '#37BD6A50' },
-                        ]}
-                    >
-                        <FontAwesome
-                            name={voice.inRoom && !voice.isMuted ? 'microphone' : 'microphone-slash'}
-                            size={13}
-                            color={voice.inRoom && !voice.isMuted ? '#37BD6A' : palette.mutedText}
-                        />
-                    </TouchableOpacity>
-                )}
             </RNView>
 
             {/* TOP STRIP */}
@@ -1020,7 +1179,13 @@ export default function GameBoardScreen() {
             </RNView>
 
             {/* DICE / ACTIONS */}
-            <RNView style={[styles.bottomBar, { paddingBottom: insets.bottom + 10 }]}>
+            <RNView style={{ paddingBottom: insets.bottom + 10 }}>
+                {room?.voiceEnabled && (
+                    <RNView style={styles.voiceBar}>
+                        <VoiceControls roomId={roomId} compact showLeave={false} />
+                    </RNView>
+                )}
+                <RNView style={styles.bottomBar}>
                 <RNView style={styles.turnPill}>
                     <RNView style={[styles.turnDot, { backgroundColor: COLOR_HEX[currentColor] ?? '#fff' }]} />
                     <Text weight="semiBold" style={styles.turnText}>
@@ -1029,60 +1194,47 @@ export default function GameBoardScreen() {
                 </RNView>
 
                 <RNView style={styles.diceWrap}>
-                    {rolling ? (
+                    <TouchableOpacity
+                        activeOpacity={canRoll ? 0.85 : 1}
+                        style={[styles.rollBtn, !canRoll && styles.rollBtnDisabled]}
+                        disabled={!canRoll}
+                        onPress={handleRollDice}
+                    >
                         <Animated.View style={diceStyle}>
                             <DiceFace
-                                value={rollingFace}
+                                value={rolling ? rollingFace : (visibleDice ?? 1)}
                                 size={64}
-                                color={COLOR_HEX[currentColor]}
-                                glow
+                                color={diceFaceColor}
+                                glow={rolling || diceValue !== null}
                             />
                         </Animated.View>
-                    ) : displayDice !== null ? (
-                        <Animated.View style={diceStyle}>
-                            <DiceFace
-                                value={displayDice}
-                                size={64}
-                                color={isMyTurn ? COLOR_HEX[currentColor] : palette.mutedText}
-                                glow={isMyTurn}
-                            />
-                        </Animated.View>
-                    ) : (
-                        <TouchableOpacity
-                            activeOpacity={0.85}
-                            style={[styles.rollBtn, !isMyTurn && styles.rollBtnDisabled]}
-                            disabled={!isMyTurn}
-                            onPress={handleRollDice}
-                        >
-                            <Animated.View style={diceStyle}>
-                                <DiceFace
-                                    value={6}
-                                    size={64}
-                                    color={isMyTurn ? COLOR_HEX[currentColor] : palette.mutedText}
-                                    glow={isMyTurn}
-                                />
-                            </Animated.View>
-                        </TouchableOpacity>
-                    )}
+                    </TouchableOpacity>
                     <Text weight="medium" style={styles.diceHint}>
                         {!isMyTurn
-                            ? 'Waiting…'
+                            ? rolling
+                                ? 'Rolling…'
+                                : diceValue !== null
+                                    ? 'Waiting for move…'
+                                    : 'Waiting…'
                             : rolling
                                 ? 'Rolling…'
-                                : displayDice !== null
+                                : diceValue !== null
                                     ? 'Tap a token to move'
                                     : 'Tap to roll'}
                     </Text>
                 </RNView>
 
                 <RNView style={styles.bottomActions} />
+                </RNView>
             </RNView>
 
             {/* Reconnecting banner */}
-            {socketStatus !== 'connected' && (
+            {!isRealtimeReady && (
                 <RNView style={[styles.banner, { top: insets.top + 8 }]}>
                     <Text weight="bold" style={styles.bannerText}>
-                        {socketStatus === 'reconnecting' ? 'Reconnecting to game…' : 'Connection lost'}
+                        {connectionPhase === 'offline' ? 'No internet — waiting for network…' :
+                         connectionPhase === 'reconnecting' ? 'Reconnecting to game…' :
+                         'Connecting to server…'}
                     </Text>
                 </RNView>
             )}
@@ -1121,7 +1273,7 @@ export default function GameBoardScreen() {
 }
 
 const styles = StyleSheet.create({
-    screen: { flex: 1 },
+    screen: { flex: 1, backgroundColor: 'transparent' },
 
     topBar: {
         flexDirection: 'row',
@@ -1162,9 +1314,6 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,
-        backgroundColor: palette.card,
-        borderWidth: 1.5,
-        borderColor: palette.border,
         borderRadius: 14,
         paddingVertical: 8,
         paddingHorizontal: 10,
@@ -1183,41 +1332,19 @@ const styles = StyleSheet.create({
         width: BOARD_SIZE,
         height: BOARD_SIZE,
         alignSelf: 'center',
-        marginVertical: 8,
+        marginVertical: 4,
     },
     boardShadow: {
         position: 'absolute',
-        top: 6, left: 6, right: -6, bottom: -6,
-        backgroundColor: '#000',
-        opacity: 0.25,
-        borderRadius: 16,
+        width: BOARD_SIZE,
+        height: BOARD_SIZE,
+        borderRadius: 18,
+        backgroundColor: 'rgba(0,0,0,0.35)',
+        top: 5,
+        left: 3,
+        zIndex: -1,
     },
 
-    token: {
-        width: '100%', height: '100%',
-        borderRadius: 100,
-        borderWidth: 2.5,
-        alignItems: 'center',
-        justifyContent: 'center',
-        overflow: 'hidden',
-    },
-    tokenHighlight: {
-        position: 'absolute',
-        top: '8%', left: '20%',
-        width: '60%', height: '30%',
-        borderRadius: 100,
-        opacity: 0.7,
-    },
-    tokenInner: {
-        width: '52%',
-        height: '52%',
-        borderRadius: 100,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderWidth: 1,
-        borderColor: 'rgba(0,0,0,0.18)',
-    },
-    tokenLabel: { color: '#fff', fontSize: CELL * 0.34 },
     captureFlash: {
         borderRadius: 100,
         backgroundColor: '#FFFFFF',
@@ -1240,6 +1367,7 @@ const styles = StyleSheet.create({
     },
     turnDot: { width: 8, height: 8, borderRadius: 4 },
     turnText: { fontSize: 12, color: palette.text },
+    voiceBar: { width: '100%', paddingHorizontal: 20, marginBottom: 8 },
     diceWrap: { alignItems: 'center', gap: 6 },
     diceHint: { fontSize: 11, color: palette.mutedText },
     rollBtn: {

@@ -159,18 +159,12 @@ export default function AuthIndex() {
     }, []);
 
     return (
-        <SafeAreaView style={{ flex: 1 }}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: 'transparent' }}>
 
-            <View style={[styles.screen, { backgroundColor: '#08080F' }]}>
+            <View style={styles.screen}>
 
                 {/* Full-screen animated grid */}
                 <GridBackground opacity={fadeGrid} />
-
-                {/* Corner color blobs */}
-                <View style={[styles.blob, { top: -60, left: -60, backgroundColor: '#D94444' }]} />
-                <View style={[styles.blob, { top: -60, right: -60, backgroundColor: '#3B7DD8' }]} />
-                <View style={[styles.blob, { bottom: -60, left: -60, backgroundColor: '#2DAA5C' }]} />
-                <View style={[styles.blob, { bottom: -60, right: -60, backgroundColor: '#E8A520' }]} />
 
                 {/* Floating tokens */}
                 {TOKENS.map((t, i) => (
@@ -225,9 +219,11 @@ export default function AuthIndex() {
                     style={[
                         styles.card,
                         {
-                            backgroundColor: '#0E0E1C', opacity: fadeCard, transform: [{ translateY: slideCard }],
-                            paddingBottom: insets.bottom + 24
-                        }
+                            backgroundColor: 'rgba(255, 255, 255, 0.11)',
+                            opacity: fadeCard,
+                            transform: [{ translateY: slideCard }],
+                            paddingBottom: insets.bottom + 24,
+                        },
                     ]}
                 >
                     {/* Card handle */}
@@ -299,13 +295,7 @@ export default function AuthIndex() {
 const styles = StyleSheet.create({
     screen: {
         flex: 1,
-    },
-    blob: {
-        position: 'absolute',
-        width: 160,
-        height: 160,
-        borderRadius: 80,
-        opacity: 0.10,
+        backgroundColor: 'transparent',
     },
     token: {
         position: 'absolute',
@@ -327,9 +317,9 @@ const styles = StyleSheet.create({
         width: 50,
         height: 50,
         borderRadius: 12,
-        backgroundColor: '#13132A',
+        backgroundColor: 'rgba(255, 255, 255, 0.12)',
         borderWidth: 1.5,
-        borderColor: '#252545',
+        borderColor: 'rgba(255, 255, 255, 0.22)',
     },
     dot: {
         position: 'absolute',
@@ -353,12 +343,12 @@ const styles = StyleSheet.create({
     divLine: {
         width: 22,
         height: StyleSheet.hairlineWidth,
-        backgroundColor: '#2A2A42',
+        backgroundColor: 'rgba(255, 255, 255, 0.22)',
     },
     tagline: {
         fontSize: 9,
         letterSpacing: 2.5,
-        color: '#383852',
+        color: 'rgba(255, 255, 255, 0.45)',
     },
     pillRow: {
         flexDirection: 'row',
@@ -368,9 +358,9 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 5,
-        backgroundColor: '#111122',
+        backgroundColor: 'rgba(255, 255, 255, 0.08)',
         borderWidth: StyleSheet.hairlineWidth,
-        borderColor: '#1E1E38',
+        borderColor: 'rgba(255, 255, 255, 0.16)',
         borderRadius: 20,
         paddingVertical: 6,
         paddingHorizontal: 11,
@@ -381,7 +371,7 @@ const styles = StyleSheet.create({
         borderRadius: 3,
     },
     pillText: {
-        color: '#55556E',
+        color: 'rgba(255, 255, 255, 0.55)',
         fontSize: 10,
     },
 
@@ -390,7 +380,7 @@ const styles = StyleSheet.create({
         borderTopLeftRadius: 32,
         borderTopRightRadius: 32,
         borderWidth: StyleSheet.hairlineWidth,
-        borderColor: '#17172A',
+        borderColor: 'rgba(255, 255, 255, 0.18)',
         paddingHorizontal: 24,
         paddingTop: 14,
     },
@@ -398,7 +388,7 @@ const styles = StyleSheet.create({
         width: 38,
         height: 4,
         borderRadius: 2,
-        backgroundColor: '#252538',
+        backgroundColor: 'rgba(255, 255, 255, 0.28)',
         alignSelf: 'center',
         marginBottom: 22,
     },
@@ -410,7 +400,7 @@ const styles = StyleSheet.create({
     },
     subtitle: {
         fontSize: 13,
-        color: '#44445E',
+        color: 'rgba(255, 255, 255, 0.52)',
         textAlign: 'center',
         marginTop: 5,
         marginBottom: 24,
@@ -438,15 +428,15 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         gap: 10,
-        backgroundColor: '#13132A',
+        backgroundColor: 'rgba(255, 255, 255, 0.10)',
         borderRadius: 16,
         paddingVertical: 15,
         borderWidth: 1.5,
-        borderColor: '#252540',
+        borderColor: 'rgba(255, 255, 255, 0.18)',
     },
     btnGithubText: {
         fontSize: 14,
-        color: '#A0A0C0',
+        color: 'rgba(255, 255, 255, 0.82)',
         letterSpacing: 0.2,
     },
     terms: {

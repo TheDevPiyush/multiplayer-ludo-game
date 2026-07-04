@@ -1,4 +1,5 @@
 import { Tabs } from 'expo-router';
+import { StyleSheet } from 'react-native';
 import { BottomNavigation } from 'react-native-paper';
 import { CommonActions } from '@react-navigation/native';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -6,8 +7,9 @@ import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
 
 const TAB_COLORS: Record<string, string> = {
-  index: '#D94444', // Home   → Red
-  profile: '#3B7DD8', // Profile → Blue
+  index: '#E04848',
+  history: '#F0B530',
+  profile: '#4488E8',
 };
 
 export default function TabLayout() {
@@ -17,14 +19,18 @@ export default function TabLayout() {
   return (
     <Tabs
       screenOptions={{
-        sceneStyle: { backgroundColor: palette.background },
+        sceneStyle: { backgroundColor: 'transparent' },
         headerShown: false,
       }}
       tabBar={({ navigation, state, descriptors, insets }) => (
         <BottomNavigation.Bar
           navigationState={state}
           safeAreaInsets={insets}
-          style={{ backgroundColor: palette.card }}
+          style={{
+            backgroundColor: 'rgba(20, 14, 48, 0.88)',
+            borderTopWidth: StyleSheet.hairlineWidth,
+            borderTopColor: palette.glassBorder,
+          }}
           activeColor={TAB_COLORS[state.routes[state.index].name] ?? palette.tabIconSelected}
           inactiveColor={palette.tabIconDefault}
           onTabPress={({ route, preventDefault }) => {
@@ -59,6 +65,15 @@ export default function TabLayout() {
           title: 'Home',
           tabBarIcon: ({ color, size }) => (
             <FontAwesome name="home" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="history"
+        options={{
+          title: 'History',
+          tabBarIcon: ({ color, size }) => (
+            <FontAwesome name="history" size={size} color={color} />
           ),
         }}
       />

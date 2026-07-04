@@ -3,14 +3,16 @@ import { useFonts } from 'expo-font';
 import { useRouter, Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
+import * as SystemUI from 'expo-system-ui';
+import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
-import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
 import { navigationTheme } from '@/components/NavigationTheme';
 import { supabase } from '@/util/supabase-client';
 import { MD3DarkTheme, PaperProvider } from 'react-native-paper';
 import { SocketProvider } from '@/components/SocketProvider';
 import { VoiceRoomProvider } from '@/components/VoiceRoomProvider';
+import { LudoBackground } from '@/components/LudoBackground';
 import { getActiveRoom } from '@/util/active-room';
 
 export {
@@ -99,37 +101,45 @@ export default function RootLayout() {
 
 function RootLayoutNav() {
   const colorScheme = useColorScheme();
-  const bg = Colors[colorScheme === 'dark' ? 'dark' : 'light'].background;
+
+  useEffect(() => {
+    void SystemUI.setBackgroundColorAsync('#1A1048');
+  }, []);
 
   const theme = {
     ...MD3DarkTheme,
     colors: {
       ...MD3DarkTheme.colors,
-      secondaryContainer: 'rgba(255, 255, 255, 0.1)',
+      secondaryContainer: 'rgba(255, 255, 255, 0.12)',
       onSecondaryContainer: 'rgba(255, 255, 255, 1)',
-      surface: 'rgba(14, 14, 28, 1)',
-      onSurface: 'rgb(216, 202, 250)',
-      onSurfaceVariant: 'rgba(102, 102, 122, 1)',
+      surface: 'rgba(255, 255, 255, 0.10)',
+      onSurface: 'rgba(255, 255, 255, 0.95)',
+      onSurfaceVariant: 'rgba(255, 255, 255, 0.58)',
     },
   };
 
 
   return (
     <PaperProvider theme={theme}>
+      <StatusBar style="light" />
       <SocketProvider>
         <VoiceRoomProvider>
           <ThemeProvider value={navigationTheme(colorScheme)}>
-            <Stack
-              initialRouteName={"(login)"}
-              screenOptions={{
-                contentStyle: { backgroundColor: bg },
-              }}
-            >
-              <Stack.Screen name="(login)" options={{ headerShown: false }} />
-              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-              <Stack.Screen name="(game)" options={{ headerShown: false }} />
-              <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
-            </Stack>
+            <LudoBackground style={{ flex: 1 }}>
+              <Stack
+                initialRouteName={"(login)"}
+                screenOptions={{
+                  contentStyle: { backgroundColor: 'transparent' },
+                  animation: 'fade',
+                }}
+              >
+                <Stack.Screen name="(login)" options={{ headerShown: false }} />
+                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                <Stack.Screen name="(game)" options={{ headerShown: false }} />
+                <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
+                <Stack.Screen name="edit-username" options={{ headerShown: false, presentation: 'modal' }} />
+              </Stack>
+            </LudoBackground>
           </ThemeProvider>
         </VoiceRoomProvider>
       </SocketProvider>

@@ -1,11 +1,9 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
-import { useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useRouter, useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
-  Dimensions,
   Easing,
   Image,
   ScrollView,
@@ -17,35 +15,12 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import AppDialog from '@/components/Dialog';
+import { GlassPanel } from '@/components/GlassPanel';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
+import { LUDO } from '@/constants/LudoColors';
+import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { supabase } from '@/util/supabase-client';
-
-const { width: W } = Dimensions.get('window');
-
-type ProfileUser = {
-  username: string;
-  avatarUrl: string | null;
-  provider: string | null;
-  totalGames: number;
-  totalWins: number;
-};
-
-const DEFAULT_USER: ProfileUser = {
-  username: 'piyush_4821',
-  avatarUrl: null,
-  provider: 'google',   
-  totalGames: 42,
-  totalWins: 17,
-};
-
-type StoredUser = {
-  username?: string | null;
-  avatarUrl?: string | null;
-  provider?: string | null;
-  totalGames?: number;
-  totalWins?: number;
-};
 
 type DialogAction = {
   label: string;
@@ -119,7 +94,7 @@ export default function ProfileTabScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const palette = Colors['dark'];
-  const [user, setUser] = useState<ProfileUser>(DEFAULT_USER);
+  const { user, loading, refresh } = useCurrentUser();
   const [dialog, setDialog] = useState<DialogState>({
     visible: false,
     title: '',
@@ -127,11 +102,11 @@ export default function ProfileTabScreen() {
     dismissable: true,
   });
 
-  const providerName = user.provider === 'google' ? 'Google' : user.provider === 'github' ? 'GitHub' : 'OAuth';
+  const providerName = user?.provider === 'google' ? 'Google' : user?.provider === 'github' ? 'GitHub' : 'OAuth';
 
-  const winRate = user.totalGames > 0
-    ? Math.round((user.totalWins / user.totalGames) * 100)
-    : 0;
+  const totalGames = user?.totalGames ?? 0;
+  const totalWins = user?.totalWins ?? 0;
+  const winRate = totalGames > 0 ? Math.round((totalWins / totalGames) * 100) : 0;
 
   // ── Animations ──
   const fadeHeader = useRef(new Animated.Value(0)).current;
@@ -157,6 +132,12 @@ export default function ProfileTabScreen() {
     });
   };
 
+  useFocusEffect(
+    useCallback(() => {
+      void refresh();
+    }, [refresh]),
+  );
+
   useEffect(() => {
     Animated.stagger(100, [
       Animated.timing(fadeHeader, { toValue: 1, duration: 450, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
@@ -177,48 +158,22 @@ export default function ProfileTabScreen() {
       easing: Easing.out(Easing.cubic),
       useNativeDriver: false,
     }).start();
-  }, []);
-
-  useEffect(() => {
-    const loadStoredUser = async () => {
-      try {
-        const rawUser = await AsyncStorage.getItem('user');
-        if (!rawUser) return;
-
-        const parsed = JSON.parse(rawUser) as { user?: StoredUser } | StoredUser;
-        const storedUser: StoredUser =
-          parsed && typeof parsed === 'object' && 'user' in parsed && parsed.user
-            ? parsed.user
-            : (parsed as StoredUser);
-
-        setUser((prev) => ({
-          ...prev,
-          username: storedUser.username ?? prev.username,
-          avatarUrl: storedUser.avatarUrl ?? prev.avatarUrl,
-          provider: storedUser.provider ?? prev.provider,
-          totalGames: typeof storedUser.totalGames === 'number' ? storedUser.totalGames : prev.totalGames,
-          totalWins: typeof storedUser.totalWins === 'number' ? storedUser.totalWins : prev.totalWins,
-        }));
-      } catch {
-        showInfoDialog('Profile data error', 'Could not load profile data from local storage.');
-      }
-    };
-
-    loadStoredUser();
-  }, []);
+  }, [winRate]);
 
   // ── Actions ──
   const copyUsername = async () => {
+    if (!user?.username) return;
     await Clipboard.setStringAsync(user.username);
     showInfoDialog('Copied!', `@${user.username} copied to clipboard.`);
   };
 
   const shareProfile = async () => {
+    if (!user?.username) return;
     await Share.share({ message: `Challenge me on Simple Ludo! My username: @${user.username}` });
   };
 
   const editUsername = () => {
-    showInfoDialog('Edit Username', 'Coming soon!');
+    router.push('/edit-username');
   };
 
   const handleSignOut = () => {
@@ -243,31 +198,26 @@ export default function ProfileTabScreen() {
 
   return (
     <ScrollView
-      style={{ flex: 1, backgroundColor: palette.background }}
+      style={{ flex: 1, backgroundColor: 'transparent' }}
       contentContainerStyle={{ paddingBottom: insets.bottom + 32 }}
       showsVerticalScrollIndicator={false}
     >
       {/* ── Header ── */}
-      <Animated.View style={[styles.header, { paddingTop: insets.top + 16, opacity: fadeHeader }]}>
-        {/* Corner accents */}
-        <RNView style={[styles.cornerBlob, { top: -30, left: -30, backgroundColor: '#D94444' }]} />
-        <RNView style={[styles.cornerBlob, { top: -30, right: -30, backgroundColor: '#3B7DD8' }]} />
-
-        <Avatar name={user.username} url={user.avatarUrl} size={88} />
-
-        <Text weight="bold" style={styles.username}>@{user.username}</Text>
-
-        {/* Provider badge */}
-        <RNView style={styles.providerBadge}>
-          <FontAwesome
-            name={user.provider === 'google' ? 'google' : 'github'}
-            size={11}
-            color={user.provider === 'google' ? '#EA4335' : '#C0C0D8'}
-          />
-          <Text weight="semiBold" style={styles.providerText}>
-            {providerName} account
-          </Text>
-        </RNView>
+      <Animated.View style={[styles.headerWrap, { paddingTop: insets.top + 12, opacity: fadeHeader }]}>
+        <GlassPanel intensity="heavy" style={styles.header}>
+          <Avatar name={user?.username ?? '?'} url={user?.avatarUrl} size={88} />
+          <Text weight="bold" style={styles.username}>@{user?.username ?? (loading ? '…' : 'player')}</Text>
+          <RNView style={styles.providerBadge}>
+            <FontAwesome
+              name={user?.provider === 'google' ? 'google' : 'github'}
+              size={11}
+              color={user?.provider === 'google' ? '#EA4335' : '#C0C0D8'}
+            />
+            <Text weight="semiBold" style={styles.providerText}>
+              {providerName} account
+            </Text>
+          </RNView>
+        </GlassPanel>
       </Animated.View>
 
       {/* ── Stats Row ── */}
@@ -275,9 +225,9 @@ export default function ProfileTabScreen() {
         styles.statsRow,
         { opacity: fadeStats, transform: [{ translateY: slideStats }] },
       ]}>
-        <StatCard value={user.totalGames} label="Games" color="#3B7DD8" />
-        <StatCard value={user.totalWins} label="Wins" color="#2DAA5C" />
-        <StatCard value={`${winRate}%`} label="Win Rate" color="#E8A520" />
+        <StatCard value={totalGames} label="Games" color={LUDO.blue} />
+        <StatCard value={totalWins} label="Wins" color={LUDO.green} />
+        <StatCard value={`${winRate}%`} label="Win Rate" color={LUDO.yellow} />
       </Animated.View>
 
 
@@ -318,22 +268,14 @@ export default function ProfileTabScreen() {
 const palette = Colors['dark'];
 
 const styles = StyleSheet.create({
+  headerWrap: {
+    paddingHorizontal: 16,
+  },
   header: {
     alignItems: 'center',
     paddingHorizontal: 24,
-    paddingBottom: 28,
-    backgroundColor: palette.card,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: palette.border,
-    overflow: 'hidden',
+    paddingVertical: 28,
     gap: 10,
-  },
-  cornerBlob: {
-    position: 'absolute',
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    opacity: 0.08,
   },
   avatarWrap: {
     backgroundColor: '#D94444',

@@ -1,32 +1,37 @@
 const basePalette = {
-  background:            'rgb(9, 9, 20)',
-  card:                  'rgba(14, 14, 28, 1)',
-  elevated:              'rgba(19, 19, 42, 1)',
-  border:                'rgba(30, 30, 56, 1)',
+  /** Screens use LudoBackground — keep transparent so gradient shows through. */
+  background:            'transparent',
+  card:                  'rgba(255, 255, 255, 0.12)',
+  elevated:              'rgba(28, 20, 58, 0.55)',
+  border:                'rgba(255, 255, 255, 0.14)',
 
-  text:                  'rgba(238, 238, 248, 1)',
-  mutedText:             'rgba(102, 102, 122, 1)',
-  dimText:               'rgba(46, 46, 72, 1)',
+  text:                  'rgba(255, 255, 255, 0.96)',
+  mutedText:             'rgba(255, 255, 255, 0.58)',
+  dimText:               'rgba(255, 255, 255, 0.32)',
 
-  tint:                  'rgba(217, 68, 68, 1)',
-  tabIconDefault:        'rgba(68, 68, 90, 1)',
-  tabIconSelected:       'rgba(238, 238, 248, 1)',
+  tint:                  'rgba(224, 72, 72, 1)',
+  tabIconDefault:        'rgba(255, 255, 255, 0.38)',
+  tabIconSelected:       'rgba(255, 255, 255, 0.96)',
 
-  buttonPrimaryBg:       'rgba(255, 255, 255, 1)',
-  buttonPrimaryText:     'rgba(17, 17, 32, 1)',
-  buttonSecondaryBg:     'rgba(19, 19, 42, 1)',
-  buttonSecondaryText:   'rgba(160, 160, 192, 1)',
-  buttonSecondaryBorder: 'rgba(30, 30, 56, 1)',
+  buttonPrimaryBg:       'rgba(255, 255, 255, 0.95)',
+  buttonPrimaryText:     'rgba(26, 17, 80, 1)',
+  buttonSecondaryBg:     'rgba(255, 255, 255, 0.10)',
+  buttonSecondaryText:   'rgba(255, 255, 255, 0.88)',
+  buttonSecondaryBorder: 'rgba(255, 255, 255, 0.20)',
 
-  playerRed:             'rgba(217, 68, 68, 1)',
-  playerBlue:            'rgba(59, 125, 216, 1)',
-  playerGreen:           'rgba(45, 170, 92, 1)',
-  playerYellow:          'rgba(232, 165, 32, 1)',
+  playerRed:             'rgba(224, 72, 72, 1)',
+  playerBlue:            'rgba(68, 136, 232, 1)',
+  playerGreen:           'rgba(55, 189, 106, 1)',
+  playerYellow:          'rgba(240, 181, 48, 1)',
 
-  success:               'rgba(45, 170, 92, 1)',
-  warning:               'rgba(232, 165, 32, 1)',
-  info:                  'rgba(59, 125, 216, 1)',
-  danger:                'rgba(217, 68, 68, 1)',
+  success:               'rgba(55, 189, 106, 1)',
+  warning:               'rgba(240, 181, 48, 1)',
+  info:                  'rgba(68, 136, 232, 1)',
+  danger:                'rgba(224, 72, 72, 1)',
+
+  /** Frosted tab bar / overlays on gradient */
+  glass:                 'rgba(255, 255, 255, 0.10)',
+  glassBorder:           'rgba(255, 255, 255, 0.14)',
 };
 
 export default {

@@ -10,307 +10,273 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { GlassPanel } from '@/components/GlassPanel';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
+import { LUDO } from '@/constants/LudoColors';
+import { useCurrentUser } from '@/hooks/useCurrentUser';
 
-// ─── Mock — replace with store/context ───────────────────────────────────────
-const MOCK_USER = {
-  username: 'piyush_4821',
-  totalGames: 42,
-  totalWins: 17,
-};
+const palette = Colors.dark;
 
-const palette = Colors['dark'];
-
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
-function StatPill({ value, label, color }: { value: string | number; label: string; color: string }) {
-  return (
-    <RNView style={[styles.statPill, { borderColor: color + '30' }]}>
-      <RNView style={[styles.statDot, { backgroundColor: color }]} />
-      <Text weight="bold" style={[styles.statValue, { color }]}>{value}</Text>
-      <Text weight="medium" style={styles.statLabel}>{label}</Text>
-    </RNView>
-  );
-}
-
-function GameButton({
-  label, sublabel, icon, color, onPress, large = false,
+function PlayTile({
+  label,
+  sublabel,
+  icon,
+  color,
+  onPress,
+  large,
 }: {
-  label: string; sublabel: string; icon: string;
-  color: string; onPress: () => void; large?: boolean;
+  label: string;
+  sublabel: string;
+  icon: string;
+  color: string;
+  onPress: () => void;
+  large?: boolean;
 }) {
   const scale = useRef(new Animated.Value(1)).current;
 
-  const onPressIn = () => Animated.spring(scale, { toValue: 0.96, useNativeDriver: true, speed: 40 }).start();
-  const onPressOut = () => Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 40 }).start();
-
   return (
-    <Animated.View style={[{ transform: [{ scale }] }, large ? { width: '100%' } : { flex: 1 }]}>
+    <Animated.View style={[{ transform: [{ scale }] }, large ? styles.tileLarge : styles.tileSmall]}>
       <TouchableOpacity
-        style={[styles.btn, large && styles.btnLarge, { borderColor: color + '35' }]}
-        activeOpacity={1}
+        activeOpacity={0.92}
         onPress={onPress}
-        onPressIn={onPressIn}
-        onPressOut={onPressOut}
+        onPressIn={() => Animated.spring(scale, { toValue: 0.97, useNativeDriver: true, speed: 55 }).start()}
+        onPressOut={() => Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 55 }).start()}
       >
-        {/* Ambient blob */}
-        <RNView style={[styles.btnBlob, { backgroundColor: color }]} />
-
-        {/* Centered content */}
-        <RNView style={styles.btnContent}>
-          <RNView style={[styles.btnIconWrap, { backgroundColor: color + '18' }]}>
-            <FontAwesome name={icon as any} size={large ? 22 : 18} color={color} />
+        <GlassPanel intensity="heavy" accent={color} style={[styles.tile, large && styles.tileHero]}>
+          <RNView style={[styles.tileAccent, { backgroundColor: color }]} />
+          <RNView style={styles.tileRow}>
+            <RNView style={[styles.iconBubble, { backgroundColor: color + '22', borderColor: color + '44' }]}>
+              <FontAwesome name={icon as any} size={large ? 22 : 18} color={color} />
+            </RNView>
+            <RNView style={styles.tileText}>
+              <Text weight="bold" style={[styles.tileLabel, large && styles.tileLabelHero]}>{label}</Text>
+              <Text weight="medium" style={styles.tileSub} numberOfLines={2}>{sublabel}</Text>
+            </RNView>
+            {large ? <FontAwesome name="arrow-right" size={14} color={palette.dimText} /> : null}
           </RNView>
-          <Text weight="bold" style={[styles.btnLabel, large && styles.btnLabelLarge]}>{label}</Text>
-          <Text weight="medium" style={styles.btnSub}>{sublabel}</Text>
-        </RNView>
-
-        {/* Bottom accent line */}
-        <RNView style={[styles.btnAccent, { backgroundColor: color }]} />
+        </GlassPanel>
       </TouchableOpacity>
     </Animated.View>
   );
 }
 
-// ─── Main Screen ──────────────────────────────────────────────────────────────
-
 export default function HomeTabScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { user } = useCurrentUser();
 
-  const winRate = MOCK_USER.totalGames > 0
-    ? Math.round((MOCK_USER.totalWins / MOCK_USER.totalGames) * 100)
-    : 0;
-
-  const fadeTop = useRef(new Animated.Value(0)).current;
-  const slideTop = useRef(new Animated.Value(-16)).current;
-  const fadePills = useRef(new Animated.Value(0)).current;
-  const fadeBtns = useRef(new Animated.Value(0)).current;
-  const slideBtns = useRef(new Animated.Value(24)).current;
-  const dicePulse = useRef(new Animated.Value(1)).current;
+  const fade = useRef(new Animated.Value(0)).current;
+  const floatY = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    Animated.timing(fade, {
+      toValue: 1,
+      duration: 550,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+
     Animated.loop(
       Animated.sequence([
-        Animated.timing(dicePulse, { toValue: 1.1, duration: 1200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(dicePulse, { toValue: 1, duration: 1200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      ])
+        Animated.timing(floatY, { toValue: -6, duration: 2200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(floatY, { toValue: 0, duration: 2200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ]),
     ).start();
-
-    Animated.stagger(120, [
-      Animated.parallel([
-        Animated.timing(fadeTop, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        Animated.timing(slideTop, { toValue: 0, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-      ]),
-      Animated.timing(fadePills, { toValue: 1, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-      Animated.parallel([
-        Animated.timing(fadeBtns, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        Animated.timing(slideBtns, { toValue: 0, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-      ]),
-    ]).start();
   }, []);
 
+  const username = user?.username ?? 'player';
+
   return (
-    <RNView style={[styles.screen, { backgroundColor: palette.background }]}>
-
-      {/* Ambient corner blobs */}
-      <RNView style={[styles.blob, { top: -60, left: -60, backgroundColor: '#D94444' }]} />
-      <RNView style={[styles.blob, { bottom: -60, right: -60, backgroundColor: '#3B7DD8' }]} />
-
-      {/* ── Top bar ── */}
-      <Animated.View style={[
-        styles.topBar,
-        { paddingTop: insets.top + 16, opacity: fadeTop, transform: [{ translateY: slideTop }] },
-      ]}>
-        <RNView>
-          <Text weight="medium" style={styles.greeting}>Helloo 👋</Text>
-          <Text weight="bold" style={styles.username}>@{MOCK_USER.username}</Text>
+    <RNView style={[styles.screen, { paddingTop: insets.top + 8, paddingBottom: insets.bottom + 8 }]}>
+      <Animated.View style={[styles.body, { opacity: fade }]}>
+        {/* Greeting chip */}
+        <RNView style={styles.greetRow}>
+          <Text weight="medium" style={styles.greet}>Hey, </Text>
+          <Text weight="bold" style={styles.greetName}>@{username}</Text>
         </RNView>
 
-        <Animated.View style={{ transform: [{ scale: dicePulse }] }}>
-          <RNView style={styles.dice}>
-            <RNView style={[styles.diceDot, { top: 7, left: 7, backgroundColor: '#D94444' }]} />
-            <RNView style={[styles.diceDot, { top: 7, right: 7, backgroundColor: '#3B7DD8' }]} />
-            <RNView style={[styles.diceDot, { bottom: 7, left: 7, backgroundColor: '#2DAA5C' }]} />
-            <RNView style={[styles.diceDot, { bottom: 7, right: 7, backgroundColor: '#E8A520' }]} />
-          </RNView>
+        {/* Hero brand block */}
+        <Animated.View style={{ transform: [{ translateY: floatY }] }}>
+          <GlassPanel intensity="medium" style={styles.heroPanel}>
+            <RNView style={styles.heroInner}>
+              <RNView style={styles.logoMark}>
+                {[LUDO.red, LUDO.blue, LUDO.green, LUDO.yellow].map((c, i) => (
+                  <RNView key={i} style={[styles.logoDot, { backgroundColor: c }]} />
+                ))}
+              </RNView>
+              <Text weight="bold" style={styles.brand}>Simple Ludo</Text>
+              <Text weight="medium" style={styles.tagline}>
+                Roll dice · move tokens · talk live with friends
+              </Text>
+            </RNView>
+          </GlassPanel>
         </Animated.View>
-      </Animated.View>
 
-      {/* ── Stat pills ── */}
-      <Animated.View style={[styles.pillsRow, { opacity: fadePills }]}>
-        <StatPill value={MOCK_USER.totalGames} label="Games" color="#3B7DD8" />
-        <StatPill value={MOCK_USER.totalWins} label="Wins" color="#2DAA5C" />
-        <StatPill value={`${winRate}%`} label="Win Rate" color="#E8A520" />
-      </Animated.View>
-
-      {/* ── Buttons — hero of the screen ── */}
-      <Animated.View style={[
-        styles.btnsWrap,
-        { opacity: fadeBtns, transform: [{ translateY: slideBtns }] },
-      ]}>
-        <GameButton
-          label="Play Online"
-          sublabel="Quick match with friends"
-          icon="globe"
-          color="#D94444"
-          large
-          onPress={() => router.push('/(game)/join-room')}
-        />
-        <RNView style={styles.halfRow}>
-          <GameButton
-            label="Create"
-            sublabel="Private room"
-            icon="plus-circle"
-            color="#2DAA5C"
-            onPress={() => router.push('/(game)/create-room')}
-          />
-          <GameButton
-            label="Join"
-            sublabel="Enter code"
-            icon="sign-in"
-            color="#3B7DD8"
+        {/* Play section */}
+        <RNView style={styles.playSection}>
+          <Text weight="semiBold" style={styles.sectionLabel}>Get started</Text>
+          <PlayTile
+            label="Play Online"
+            sublabel="Jump into a room and play in real time"
+            icon="globe"
+            color={LUDO.red}
+            large
             onPress={() => router.push('/(game)/join-room')}
           />
+          <RNView style={styles.row}>
+            <PlayTile
+              label="Create"
+              sublabel="Host a private room"
+              icon="plus"
+              color={LUDO.green}
+              onPress={() => router.push('/(game)/create-room')}
+            />
+            <PlayTile
+              label="Join"
+              sublabel="Enter a room code"
+              icon="sign-in"
+              color={LUDO.blue}
+              onPress={() => router.push('/(game)/join-room')}
+            />
+          </RNView>
         </RNView>
-      </Animated.View>
 
-      <Text weight="regular" style={[styles.buildTag, { paddingBottom: insets.bottom + 12 }]}>
-        Simple Ludo v1.0.0
-      </Text>
+        <Text weight="regular" style={styles.footer}>Simple Ludo · v1.0.0</Text>
+      </Animated.View>
     </RNView>
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
-  blob: {
-    position: 'absolute',
-    width: 200, height: 200,
-    borderRadius: 100,
-    opacity: 0.06,
+  screen: {
+    flex: 1,
+    backgroundColor: 'transparent',
+    paddingHorizontal: 20,
   },
-
-  // Top bar
-  topBar: {
+  body: {
+    flex: 1,
+    gap: 20,
+  },
+  greetRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 22,
-    paddingBottom: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: palette.border,
+    alignItems: 'baseline',
+    paddingHorizontal: 4,
   },
-  greeting: {
-    fontSize: 12,
+  greet: {
+    fontSize: 15,
     color: palette.mutedText,
   },
-  username: {
-    fontSize: 18,
-    color: palette.text,
-    letterSpacing: 0.2,
-  },
-  dice: {
-    width: 40, height: 40,
-    borderRadius: 10,
-    backgroundColor: palette.elevated,
-    borderWidth: 1.5,
-    borderColor: palette.border,
-  },
-  diceDot: {
-    position: 'absolute',
-    width: 7, height: 7,
-    borderRadius: 3.5,
-  },
-
-  // Stat pills
-  pillsRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 8,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: palette.border,
-  },
-  statPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-    backgroundColor: palette.elevated,
-    borderWidth: 0.5,
-    borderRadius: 20,
-    paddingVertical: 5,
-    paddingHorizontal: 10,
-  },
-  statDot: { width: 5, height: 5, borderRadius: 2.5 },
-  statValue: { fontSize: 12 },
-  statLabel: { fontSize: 11, color: palette.mutedText },
-
-  // Buttons
-  btnsWrap: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    gap: 12,
-    justifyContent: 'center',
-  },
-  halfRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  btn: {
-    backgroundColor: palette.card,
-    borderRadius: 22,
-    borderWidth: 1,
-    overflow: 'hidden',
-    minHeight: 130,
-    justifyContent: 'center',
-  },
-  btnLarge: { minHeight: 150 },
-  btnBlob: {
-    position: 'absolute',
-    top: -40, right: -40,
-    width: 110, height: 110,
-    borderRadius: 55,
-    opacity: 0.06,
-  },
-  btnContent: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 20,
-    paddingHorizontal: 16,
-  },
-  btnIconWrap: {
-    width: 48, height: 48,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  btnLabel: {
+  greetName: {
     fontSize: 15,
     color: palette.text,
-    letterSpacing: 0.2,
   },
-  btnLabelLarge: { fontSize: 17 },
-  btnSub: {
-    fontSize: 11,
+  heroPanel: {
+    paddingVertical: 28,
+    paddingHorizontal: 24,
+  },
+  heroInner: {
+    alignItems: 'center',
+    gap: 10,
+  },
+  logoMark: {
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: palette.glassBorder,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    padding: 10,
+    gap: 6,
+    alignContent: 'center',
+    justifyContent: 'center',
+  },
+  logoDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+  },
+  brand: {
+    fontSize: 28,
+    color: palette.text,
+    letterSpacing: -0.8,
+  },
+  tagline: {
+    fontSize: 13,
     color: palette.mutedText,
     textAlign: 'center',
+    lineHeight: 20,
+    maxWidth: 280,
   },
-  btnAccent: {
+  playSection: {
+    flex: 1,
+    gap: 12,
+    justifyContent: 'center',
+  },
+  sectionLabel: {
+    fontSize: 11,
+    color: palette.dimText,
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+    marginLeft: 4,
+    marginBottom: 2,
+  },
+  row: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  tileLarge: { width: '100%' },
+  tileSmall: { flex: 1 },
+  tile: {
+    borderRadius: 22,
+    minHeight: 88,
+  },
+  tileHero: {
+    minHeight: 108,
+  },
+  tileAccent: {
     position: 'absolute',
-    bottom: 0, left: 0, right: 0,
-    height: 3,
-    opacity: 0.65,
+    left: 0,
+    top: 18,
+    bottom: 18,
+    width: 3,
+    borderRadius: 2,
   },
-
-  buildTag: {
+  tileRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: 18,
+    paddingHorizontal: 18,
+    paddingLeft: 20,
+  },
+  iconBubble: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tileText: {
+    flex: 1,
+    gap: 4,
+  },
+  tileLabel: {
+    fontSize: 15,
+    color: palette.text,
+  },
+  tileLabelHero: {
+    fontSize: 18,
+  },
+  tileSub: {
+    fontSize: 12,
+    color: palette.mutedText,
+    lineHeight: 16,
+  },
+  footer: {
     textAlign: 'center',
     fontSize: 11,
     color: palette.dimText,

@@ -143,7 +143,7 @@ export default function CreateRoomScreen() {
     };
 
     return (
-        <RNView style={[styles.screen, { backgroundColor: palette.background }]}>
+        <RNView style={styles.screen}>
 
             {/* Ambient blobs */}
             <RNView style={[styles.blob, { top: -50, right: -50, backgroundColor: '#2DAA5C' }]} />
@@ -317,7 +317,7 @@ export default function CreateRoomScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-    screen: { flex: 1 },
+    screen: { flex: 1, backgroundColor: 'transparent' },
     blob: {
         position: 'absolute',
         width: 180, height: 180,
@@ -520,7 +520,7 @@ const styles = StyleSheet.create({
         bottom: 0, left: 0, right: 0,
         paddingHorizontal: 16,
         paddingTop: 12,
-        backgroundColor: palette.background,
+        backgroundColor: palette.glass,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: palette.border,
     },
