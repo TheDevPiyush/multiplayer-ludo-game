@@ -14,10 +14,11 @@ type Props = {
     accent?: string;
 };
 
+// Tuned for the vivid blue background: deep indigo tints keep white text readable.
 const BG: Record<NonNullable<Props['intensity']>, string> = {
-    light: 'rgba(255, 255, 255, 0.08)',
-    medium: 'rgba(28, 20, 58, 0.55)',
-    heavy: 'rgba(20, 14, 48, 0.78)',
+    light: 'rgba(255, 255, 255, 0.12)',
+    medium: 'rgba(12, 10, 70, 0.30)',
+    heavy: 'rgba(12, 10, 70, 0.42)',
 };
 
 export function GlassPanel({ children, style, intensity = 'medium', accent }: Props) {

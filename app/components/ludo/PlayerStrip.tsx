@@ -59,8 +59,7 @@ export function PlayerStrip(p: PlayerStripProps) {
     return (
         <GlassPanel
             intensity="medium"
-            accent={p.isActive ? color : undefined}
-            style={[styles.strip, p.isActive && { borderColor: color + '55' }]}
+            style={[styles.strip, p.isActive && { borderColor: color, borderWidth: 2, backgroundColor: 'rgba(255,255,255,0.16)' }]}
         >
             <RNView style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center' }}>
                 <Animated.View style={[StyleSheet.absoluteFill, { borderRadius: 18, borderWidth: 2, borderColor: color }, ringStyle]} />

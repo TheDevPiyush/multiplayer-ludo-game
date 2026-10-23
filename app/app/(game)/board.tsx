@@ -6,19 +6,11 @@ import {
     TouchableOpacity,
     View as RNView,
 } from 'react-native';
-import Animated, {
-    Easing,
-    useAnimatedStyle,
-    useSharedValue,
-    withSequence,
-    withSpring,
-    withTiming,
-} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { leaveRoom } from '@/apis/game-api';
 import AppDialog from '@/components/Dialog';
-import { DiceFace } from '@/components/ludo/DiceFace';
+import { RollingDice } from '@/components/ludo/Dice';
 import { BOARD_SIZE, COLOR_HEX, layoutTokens } from '@/components/ludo/geometry';
 import { LudoBoard } from '@/components/ludo/LudoBoard';
 import { PlayerStrip, type PlayerStripProps } from '@/components/ludo/PlayerStrip';
@@ -64,7 +56,6 @@ export default function GameBoardScreen() {
     const [rolling, setRolling] = useState(false);
     /** Last rolled value — kept visible after turn changes until the next roll. */
     const [lastShownDice, setLastShownDice] = useState<number | null>(null);
-    const [rollingFace, setRollingFace] = useState(6);
     /** Color of the player whose roll is animating (for opponent rolls). */
     const [rollingColor, setRollingColor] = useState<string | null>(null);
     const [disconnectingIds, setDisconnectingIds] = useState<Set<string>>(new Set());
@@ -184,15 +175,6 @@ export default function GameBoardScreen() {
     }, [diceValue]);
 
     // ── Dice animation ──
-    const diceRotate = useSharedValue(0);
-    const diceScale = useSharedValue(1);
-    const diceStyle = useAnimatedStyle(() => ({
-        transform: [
-            { rotate: `${diceRotate.value}deg` },
-            { scale: diceScale.value },
-        ],
-    }));
-
     const runRollAnimation = useCallback(async (finalValue: number, rollerColor: string) => {
         if (rollingRef.current) return;
 
@@ -200,27 +182,13 @@ export default function GameBoardScreen() {
         setRollingColor(rollerColor);
         rollingRef.current = true;
 
-        diceRotate.value = withTiming(diceRotate.value + 720, {
-            duration: ROLL_ANIM_MS,
-            easing: Easing.out(Easing.exp),
-        });
-        diceScale.value = withSequence(
-            withTiming(1.22, { duration: 160 }),
-            withSpring(1),
-        );
-
-        const fakeInterval = setInterval(() => {
-            setRollingFace(Math.floor(Math.random() * 6) + 1);
-        }, 80);
-
         await sleep(ROLL_ANIM_MS);
-        clearInterval(fakeInterval);
 
         setLastShownDice(finalValue);
         setRolling(false);
         setRollingColor(null);
         rollingRef.current = false;
-    }, [diceRotate, diceScale]);
+    }, []);
 
     runRollAnimationRef.current = runRollAnimation;
 
@@ -230,24 +198,9 @@ export default function GameBoardScreen() {
         setRolling(true);
         setRollingColor(selfPlayer.color);
         rollingRef.current = true;
-        let fakeInterval: ReturnType<typeof setInterval> | null = null;
 
         try {
-            diceRotate.value = withTiming(diceRotate.value + 720, {
-                duration: ROLL_ANIM_MS,
-                easing: Easing.out(Easing.exp),
-            });
-            diceScale.value = withSequence(
-                withTiming(1.22, { duration: 160 }),
-                withSpring(1),
-            );
-
-            fakeInterval = setInterval(() => {
-                setRollingFace(Math.floor(Math.random() * 6) + 1);
-            }, 80);
-
             const [result] = await Promise.all([rollDice(), sleep(ROLL_ANIM_MS)]);
-            if (fakeInterval) clearInterval(fakeInterval);
 
             if (!result.ok) {
                 console.warn('[board] rollDice failed:', result.error);
@@ -260,8 +213,6 @@ export default function GameBoardScreen() {
                 return;
             }
             setLastShownDice(result.data?.diceValue ?? null);
-        } catch (e) {
-            if (fakeInterval) clearInterval(fakeInterval);
         } finally {
             setRolling(false);
             setRollingColor(null);
@@ -270,11 +221,6 @@ export default function GameBoardScreen() {
     };
 
     const visibleDice = diceValue ?? lastShownDice;
-    const diceFaceColor = rolling
-        ? COLOR_HEX[rollingColor ?? currentColor] ?? palette.mutedText
-        : diceValue !== null
-            ? COLOR_HEX[currentColor] ?? palette.mutedText
-            : palette.mutedText;
     const canRoll = isMyTurn && diceValue === null && !rolling && isRealtimeReady;
 
     // No-move passes and single-option moves are played by the server
@@ -410,6 +356,8 @@ export default function GameBoardScreen() {
             </RNView>
 
             {/* TOP STRIP */}
+            {/* Strips + board, centred in the space between the top and bottom bars */}
+            <RNView style={styles.arena}>
             <RNView style={styles.stripRow}>
                 {topPlayers.map(p => <PlayerStrip key={p.id} {...p} />)}
             </RNView>
@@ -423,6 +371,7 @@ export default function GameBoardScreen() {
                         key={t.key}
                         color={t.color}
                         coord={t.coord}
+                        pos={t.pos}
                         tokenIndex={t.tokenIndex}
                         canMove={t.canMove}
                         captured={t.captured}
@@ -434,6 +383,7 @@ export default function GameBoardScreen() {
             {/* BOTTOM STRIP */}
             <RNView style={styles.stripRow}>
                 {bottomPlayers.map(p => <PlayerStrip key={p.id} {...p} />)}
+            </RNView>
             </RNView>
 
             {/* DICE / ACTIONS */}
@@ -452,21 +402,14 @@ export default function GameBoardScreen() {
                 </RNView>
 
                 <RNView style={styles.diceWrap}>
-                    <TouchableOpacity
-                        activeOpacity={canRoll ? 0.85 : 1}
-                        style={[styles.rollBtn, !canRoll && styles.rollBtnDisabled]}
+                    <RollingDice
+                        value={visibleDice ?? 6}
+                        rolling={rolling}
+                        color={COLOR_HEX[rolling ? rollingColor ?? currentColor : currentColor] ?? '#888'}
+                        waiting={canRoll}
                         disabled={!canRoll}
                         onPress={handleRollDice}
-                    >
-                        <Animated.View style={diceStyle}>
-                            <DiceFace
-                                value={rolling ? rollingFace : (visibleDice ?? 1)}
-                                size={64}
-                                color={diceFaceColor}
-                                glow={rolling || diceValue !== null}
-                            />
-                        </Animated.View>
-                    </TouchableOpacity>
+                    />
                     <Text weight="medium" style={styles.diceHint}>
                         {!isMyTurn
                             ? rolling
@@ -578,12 +521,13 @@ const styles = StyleSheet.create({
         position: 'absolute',
         width: BOARD_SIZE,
         height: BOARD_SIZE,
-        borderRadius: 18,
-        backgroundColor: 'rgba(0,0,0,0.35)',
-        top: 5,
-        left: 3,
+        borderRadius: 20,
+        backgroundColor: 'rgba(10, 6, 60, 0.45)',
+        top: 7,
+        left: 0,
         zIndex: -1,
     },
+    arena: { flex: 1, justifyContent: 'center' },
 
 
     bottomBar: {
@@ -606,11 +550,6 @@ const styles = StyleSheet.create({
     voiceBar: { width: '100%', paddingHorizontal: 20, marginBottom: 8 },
     diceWrap: { alignItems: 'center', gap: 6 },
     diceHint: { fontSize: 11, color: palette.mutedText },
-    rollBtn: {
-        padding: 4,
-        borderRadius: 14,
-    },
-    rollBtnDisabled: { opacity: 0.45 },
     bottomActions: { width: 80, height: 1 },
 
     banner: {

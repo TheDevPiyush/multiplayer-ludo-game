@@ -12,6 +12,8 @@ import {
     type GameState,
 } from '@ludo/engine';
 
+import { CAPTURE_RETURN_DELAY_MS, CAPTURE_RETURN_MS, HOP_MS } from '@/components/ludo/geometry';
+
 export type SeatKind = 'human' | 'bot';
 
 export type LocalSeat = {
@@ -50,6 +52,8 @@ export function useLocalGame(config: LocalGameConfig, onEvents?: (events: GameEv
     const stateRef = useRef(state);
     const rollingRef = useRef(false);
     const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
+    /** When the last move's hop / capture animation finishes. */
+    const animatingUntil = useRef(0);
     const onEventsRef = useRef(onEvents);
     onEventsRef.current = onEvents;
 
@@ -76,6 +80,12 @@ export function useLocalGame(config: LocalGameConfig, onEvents?: (events: GameEv
     const commit = useCallback((action: Action): boolean => {
         const r = reduce(stateRef.current, action);
         if (!r.ok) return false;
+        let animMs = 0;
+        for (const e of r.events) {
+            if (e.type === 'MOVED') animMs = Math.max(animMs, e.path.length * HOP_MS);
+            if (e.type === 'CAPTURED') animMs = Math.max(animMs, CAPTURE_RETURN_DELAY_MS + CAPTURE_RETURN_MS);
+        }
+        animatingUntil.current = Date.now() + animMs;
         stateRef.current = r.state;
         setState(r.state);
         onEventsRef.current?.(r.events, r.state);
@@ -122,7 +132,9 @@ export function useLocalGame(config: LocalGameConfig, onEvents?: (events: GameEv
             delay = BOT_MOVE_DELAY_MS;
         }
         if (!step) return;
-        const t = setTimeout(step, delay);
+        // Let the previous move finish hopping before the next action starts.
+        const wait = Math.max(delay, animatingUntil.current - Date.now() + 120);
+        const t = setTimeout(step, wait);
         return () => clearTimeout(t);
     }, [state, rolling, seatOf, commit, doRoll]);
 

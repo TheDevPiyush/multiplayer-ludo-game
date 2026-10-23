@@ -3,13 +3,14 @@ import { seatColors, type BotLevel, type Color } from '@ludo/engine';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
+    Pressable,
     ScrollView,
     StyleSheet,
-    Switch,
     TextInput,
     TouchableOpacity,
     View as RNView,
 } from 'react-native';
+import { Menu } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { GlassPanel } from '@/components/GlassPanel';
@@ -27,6 +28,13 @@ const LEVELS: BotLevel[] = ['easy', 'medium', 'hard'];
 const LEVEL_LABEL: Record<BotLevel, string> = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
 
 const titleCase = (c: string) => c[0] + c.slice(1).toLowerCase();
+
+/** "Dice Luck" is the player-facing name for dynamic dice: Easy = on, Hard = off. */
+type DiceLuck = 'easy' | 'hard';
+const DICE_LUCK: Record<DiceLuck, { label: string; hint: string; icon: React.ComponentProps<typeof FontAwesome>['name'] }> = {
+    easy: { label: 'Easy', hint: 'Lucky breaks when you fall behind. Great for casual games.', icon: 'smile-o' },
+    hard: { label: 'Hard', hint: 'Pure chance. Every roll is completely fair.', icon: 'bolt' },
+};
 
 function defaultSeat(mode: Mode, index: number): SeatDraft {
     if (mode === 'bots') return { kind: index === 0 ? 'human' : 'bot', name: null, level: 'medium' };
@@ -47,7 +55,8 @@ export default function LocalSetupScreen() {
 
     const [count, setCount] = useState(mode === 'bots' ? 4 : 2);
     const [seats, setSeats] = useState<SeatDraft[]>(() => [0, 1, 2, 3].map(i => defaultSeat(mode, i)));
-    const [dynamicDice, setDynamicDice] = useState(true);
+    const [diceLuck, setDiceLuck] = useState<DiceLuck>('easy');
+    const [luckMenuOpen, setLuckMenuOpen] = useState(false);
 
     const colors = useMemo(() => seatColors(count), [count]);
     const active = seats.slice(0, count);
@@ -58,7 +67,7 @@ export default function LocalSetupScreen() {
 
     const start = () => {
         const config: LocalGameConfig = {
-            dynamicDice,
+            dynamicDice: diceLuck === 'easy',
             seats: active.map((s, i) => ({
                 color: colors[i]!,
                 kind: s.kind,
@@ -149,17 +158,39 @@ export default function LocalSetupScreen() {
 
                 <GlassPanel intensity="heavy" style={[styles.panel, styles.switchRow]}>
                     <RNView style={{ flex: 1, gap: 4 }}>
-                        <Text weight="bold" style={styles.switchTitle}>Dynamic dice</Text>
-                        <Text weight="regular" style={styles.hint}>
-                            Gives whoever is behind a better shot at catching up. Turn off for pure luck.
-                        </Text>
+                        <Text weight="bold" style={styles.switchTitle}>Dice Luck</Text>
+                        <Text weight="regular" style={styles.hint}>{DICE_LUCK[diceLuck].hint}</Text>
                     </RNView>
-                    <Switch
-                        value={dynamicDice}
-                        onValueChange={setDynamicDice}
-                        trackColor={{ true: COLOR_HEX.GREEN, false: 'rgba(255,255,255,0.15)' }}
-                        thumbColor="#fff"
-                    />
+                    <Menu
+                        visible={luckMenuOpen}
+                        onDismiss={() => setLuckMenuOpen(false)}
+                        anchorPosition="bottom"
+                        contentStyle={styles.menu}
+                        anchor={
+                            <Pressable onPress={() => setLuckMenuOpen(true)} style={styles.select}>
+                                <FontAwesome name={DICE_LUCK[diceLuck].icon} size={13} color="#1A1048" />
+                                <Text weight="bold" style={styles.selectText}>{DICE_LUCK[diceLuck].label}</Text>
+                                <FontAwesome name="chevron-down" size={10} color="#1A1048" />
+                            </Pressable>
+                        }
+                    >
+                        {(Object.keys(DICE_LUCK) as DiceLuck[]).map(key => (
+                            <Pressable
+                                key={key}
+                                onPress={() => { setDiceLuck(key); setLuckMenuOpen(false); }}
+                                style={[styles.menuItem, diceLuck === key && styles.menuItemActive]}
+                            >
+                                <RNView style={styles.menuIcon}>
+                                    <FontAwesome name={DICE_LUCK[key].icon} size={15} color={diceLuck === key ? '#3B3BE8' : '#6B6F8E'} />
+                                </RNView>
+                                <RNView style={{ flex: 1 }}>
+                                    <Text weight="bold" style={styles.menuTitle}>{DICE_LUCK[key].label}</Text>
+                                    <Text weight="medium" style={styles.menuHint}>{DICE_LUCK[key].hint}</Text>
+                                </RNView>
+                                {diceLuck === key && <FontAwesome name="check" size={13} color="#3B3BE8" />}
+                            </Pressable>
+                        ))}
+                    </Menu>
                 </GlassPanel>
             </ScrollView>
 
@@ -263,6 +294,22 @@ const styles = StyleSheet.create({
     hint: { fontSize: 12, color: palette.mutedText, lineHeight: 17 },
     switchRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
     switchTitle: { fontSize: 14, color: palette.text },
+    select: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingHorizontal: 14,
+        height: 40,
+        borderRadius: 12,
+        backgroundColor: '#FFFFFF',
+    },
+    selectText: { fontSize: 14, color: '#1A1048' },
+    menu: { backgroundColor: '#FFFFFF', borderRadius: 16, paddingVertical: 6, width: 260 },
+    menuItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 10 },
+    menuItemActive: { backgroundColor: '#EEF0FF' },
+    menuIcon: { width: 18, alignItems: 'center' },
+    menuTitle: { fontSize: 14, color: '#1A1048' },
+    menuHint: { fontSize: 11, color: '#6B6F8E', lineHeight: 15, marginTop: 1 },
     startBtn: {
         flexDirection: 'row',
         gap: 10,

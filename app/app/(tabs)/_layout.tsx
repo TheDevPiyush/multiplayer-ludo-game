@@ -7,9 +7,9 @@ import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
 
 const TAB_COLORS: Record<string, string> = {
-  index: '#E04848',
-  history: '#F0B530',
-  profile: '#4488E8',
+  index: '#FF3B4E',
+  history: '#F59E0B',
+  profile: '#2E86FF',
 };
 
 export default function TabLayout() {
@@ -26,13 +26,11 @@ export default function TabLayout() {
         <BottomNavigation.Bar
           navigationState={state}
           safeAreaInsets={insets}
-          style={{
-            backgroundColor: 'rgba(20, 14, 48, 0.88)',
-            borderTopWidth: StyleSheet.hairlineWidth,
-            borderTopColor: palette.glassBorder,
-          }}
+          style={styles.bar}
           activeColor={TAB_COLORS[state.routes[state.index].name] ?? palette.tabIconSelected}
-          inactiveColor={palette.tabIconDefault}
+          inactiveColor="#9097B8"
+          activeIndicatorStyle={{ backgroundColor: (TAB_COLORS[state.routes[state.index].name] ?? '#2E86FF') + '1F' }}
+          theme={{ colors: { onSurface: '#1B1A4A', onSurfaceVariant: '#9097B8', onSecondaryContainer: '#1B1A4A' } }}
           onTabPress={({ route, preventDefault }) => {
             const event = navigation.emit({
               type: 'tabPress',
@@ -89,3 +87,11 @@ export default function TabLayout() {
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  bar: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+  },
+});

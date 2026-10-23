@@ -1,8 +1,6 @@
 import { type ReactNode } from 'react';
 import { Dimensions, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
-import Svg, { Circle, Defs, RadialGradient, Stop } from 'react-native-svg';
-
-import { LUDO } from '@/constants/LudoColors';
+import Svg, { Circle, Defs, G, LinearGradient, RadialGradient, Rect, Stop } from 'react-native-svg';
 
 const { width: W, height: H } = Dimensions.get('window');
 
@@ -12,68 +10,69 @@ type Props = {
     variant?: 'default' | 'subtle';
 };
 
-type BloomSpec = {
-    id: string;
-    cx: number;
-    cy: number;
-    r: number;
-    color: string;
-    peak: number;
-};
+export const BG_TOP = '#2F5BFF';
+export const BG_MID = '#4B3BF2';
+export const BG_BOTTOM = '#6A2BD8';
 
-const BLOOMS: BloomSpec[] = [];
+/** Faint dice-pip texture so the gradient doesn't read as a flat template. */
+const PIPS: { x: number; y: number; s: number; r: number }[] = (() => {
+    const out: { x: number; y: number; s: number; r: number }[] = [];
+    const cols = 5;
+    const rows = Math.ceil(H / (W / cols)) + 1;
+    const step = W / cols;
+    for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols + 1; col++) {
+            const x = col * step + (row % 2 ? step / 2 : 0);
+            const y = row * step;
+            // Deterministic variety without randomness between renders.
+            const s = step * (0.22 + ((row * 7 + col * 3) % 5) * 0.03);
+            const r = ((row * 31 + col * 17) % 40) - 20;
+            out.push({ x, y, s, r });
+        }
+    }
+    return out;
+})();
 
-function bloom(id: string, cx: number, cy: number, r: number, color: string, peak: number): BloomSpec {
-    return { id, cx, cy, r, color, peak };
-}
-
-/**
- * Liquid-flow background: soft radial blooms + frosted scrim for readability.
- */
+/** Vivid royal-blue → violet backdrop shared by every screen. */
 export function LudoBackground({ children, style, variant = 'default' }: Props) {
-    const peak = variant === 'subtle' ? 0.22 : 0.32;
-    const scale = variant === 'subtle' ? 0.85 : 1;
-
-    const blooms: BloomSpec[] = [
-        bloom('bR', -W * 0.05, H * 0.02, W * 0.72 * scale, LUDO.red, peak),
-        bloom('bB', W * 1.05, H * 0.12, W * 0.65 * scale, LUDO.blue, peak * 0.9),
-        bloom('bG', -W * 0.08, H * 0.88, W * 0.7 * scale, LUDO.green, peak * 0.85),
-        bloom('bY', W * 0.95, H * 0.92, W * 0.6 * scale, LUDO.yellow, peak * 0.75),
-        bloom('bM', W * 0.5, H * 0.48, W * 0.55 * scale, '#7B5CF0', peak * 0.4),
-    ];
+    const texture = variant === 'subtle' ? 0.035 : 0.05;
 
     return (
         <View style={[styles.root, style]}>
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: '#1A1048' }]} />
-
             <Svg width={W} height={H} style={StyleSheet.absoluteFill} pointerEvents="none">
                 <Defs>
-                    {blooms.map(b => (
-                        <RadialGradient
-                            key={b.id}
-                            id={b.id}
-                            cx="50%"
-                            cy="50%"
-                            rx="50%"
-                            ry="50%"
-                        >
-                            <Stop offset="0%" stopColor={b.color} stopOpacity={b.peak} />
-                            <Stop offset="55%" stopColor={b.color} stopOpacity={b.peak * 0.35} />
-                            <Stop offset="100%" stopColor={b.color} stopOpacity={0} />
-                        </RadialGradient>
-                    ))}
+                    <LinearGradient id="bgGrad" x1="0" y1="0" x2="0.35" y2="1">
+                        <Stop offset="0" stopColor={BG_TOP} />
+                        <Stop offset="0.55" stopColor={BG_MID} />
+                        <Stop offset="1" stopColor={BG_BOTTOM} />
+                    </LinearGradient>
+                    <RadialGradient id="glowTop" cx="50%" cy="50%" r="50%">
+                        <Stop offset="0" stopColor="#7FD3FF" stopOpacity={0.45} />
+                        <Stop offset="1" stopColor="#7FD3FF" stopOpacity={0} />
+                    </RadialGradient>
+                    <RadialGradient id="glowBottom" cx="50%" cy="50%" r="50%">
+                        <Stop offset="0" stopColor="#FF5FD2" stopOpacity={0.3} />
+                        <Stop offset="1" stopColor="#FF5FD2" stopOpacity={0} />
+                    </RadialGradient>
                 </Defs>
-                {blooms.map(b => (
-                    <Circle key={`c-${b.id}`} cx={b.cx} cy={b.cy} r={b.r} fill={`url(#${b.id})`} />
-                ))}
+                <Rect width={W} height={H} fill="url(#bgGrad)" />
+                <Circle cx={W * 0.15} cy={-H * 0.02} r={W * 0.85} fill="url(#glowTop)" />
+                <Circle cx={W * 1.05} cy={H * 0.95} r={W * 0.9} fill="url(#glowBottom)" />
+                <G opacity={texture}>
+                    {PIPS.map((p, i) => (
+                        <Rect
+                            key={i}
+                            x={p.x - p.s / 2}
+                            y={p.y - p.s / 2}
+                            width={p.s}
+                            height={p.s}
+                            rx={p.s * 0.28}
+                            fill="#FFFFFF"
+                            transform={`rotate(${p.r} ${p.x} ${p.y})`}
+                        />
+                    ))}
+                </G>
             </Svg>
-
-            <View
-                pointerEvents="none"
-                style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(45, 28, 90, 0.35)' }]}
-            />
-            <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.frostScrim]} />
-
             {children}
         </View>
     );
@@ -82,10 +81,7 @@ export function LudoBackground({ children, style, variant = 'default' }: Props) 
 const styles = StyleSheet.create({
     root: {
         flex: 1,
-        backgroundColor: '#1A1048',
+        backgroundColor: BG_MID,
         overflow: 'hidden',
-    },
-    frostScrim: {
-        backgroundColor: 'rgba(12, 8, 32, 0.48)',
     },
 });

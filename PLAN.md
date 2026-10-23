@@ -22,8 +22,15 @@ at room lifecycle moments, not on every dice roll.
       Remaining: bots filling online seats (needs bot users in the DB), guest
       sign-in, playing offline without logging in, resume an interrupted local game.
 - [ ] 3. Voice (LiveKit)
-- [ ] 4. Visual overhaul (turn-timer ring can use `room.turnEndsAt`; hop animation
-      can use the `MOVED.path` event field)
+- [~] 4. Visual overhaul — done: vivid blue theme, chunky game tiles, new home
+      screen, white tab bar, light dialogs, redrawn board, 3D pawns + 3D dice,
+      cell-by-cell hop movement, capture slide-back, bold move highlight,
+      "Dice Luck" (Easy/Hard) select. Next: restyle create/join/lobby/history/
+      profile/login in the new style, turn-timer ring (`room.turnEndsAt`),
+      capture/finish celebrations, replace Hellix font.
+- [ ] Sound & haptics (future): dice roll, hop tick, capture, reach home, win
+      fanfare, turn alert; `expo-audio` + `expo-haptics`, mute toggle in profile.
+      CC0 sources: Kenney.nl (UI/board-game packs), freesound.org (CC0 filter).
 - [ ] 6. Launch & monetization
 
 Measured (simulation, 2,000 games per setting, 2 players):

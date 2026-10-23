@@ -1,8 +1,8 @@
 const basePalette = {
   /** Screens use LudoBackground — keep transparent so gradient shows through. */
   background:            'transparent',
-  card:                  'rgba(255, 255, 255, 0.12)',
-  elevated:              'rgba(28, 20, 58, 0.55)',
+  card:                  'rgba(12, 10, 70, 0.34)',
+  elevated:              'rgba(12, 10, 70, 0.30)',
   border:                'rgba(255, 255, 255, 0.14)',
 
   text:                  'rgba(255, 255, 255, 0.96)',

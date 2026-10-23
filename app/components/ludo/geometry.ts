@@ -4,29 +4,44 @@ import { Dimensions } from 'react-native';
 const { width: W } = Dimensions.get('window');
 
 export const BOARD_SIZE = Math.min(W - 16, 460);
-export const BOARD_PAD = 7;
+export const BOARD_PAD = 8;
 export const CELL = (BOARD_SIZE - BOARD_PAD * 2) / 15;
 
+/** Vivid player colours (board, tokens, dice pips, UI accents). */
 export const COLOR_HEX: Record<string, string> = {
-    RED: '#E04848',
-    BLUE: '#4488E8',
-    GREEN: '#37BD6A',
-    YELLOW: '#F0B530',
+    RED: '#FF3B4E',
+    BLUE: '#2E86FF',
+    GREEN: '#14C46B',
+    YELLOW: '#FFC21A',
 };
 
 export const COLOR_BRIGHT: Record<string, string> = {
-    RED: '#FF7B6E',
-    BLUE: '#7FB1FF',
-    GREEN: '#6FE39A',
-    YELLOW: '#FFD76A',
+    RED: '#FF8A94',
+    BLUE: '#8CC2FF',
+    GREEN: '#6FF0A8',
+    YELLOW: '#FFE27A',
 };
 
 export const COLOR_DARK: Record<string, string> = {
-    RED: '#9A2828',
-    BLUE: '#2A5BAA',
-    GREEN: '#1F7A41',
-    YELLOW: '#A87510',
+    RED: '#B0122A',
+    BLUE: '#1450C8',
+    GREEN: '#07824A',
+    YELLOW: '#D08A00',
 };
+
+/** Very light tint of each colour for home-base panels. */
+export const COLOR_TINT: Record<string, string> = {
+    RED: '#FFE3E6',
+    BLUE: '#E0EDFF',
+    GREEN: '#DDF8EA',
+    YELLOW: '#FFF4D1',
+};
+
+/** Duration of one cell-to-cell token hop. Drivers wait `steps * HOP_MS` after a move. */
+export const HOP_MS = 135;
+/** A captured token waits for the attacker to land, then slides home for this long. */
+export const CAPTURE_RETURN_DELAY_MS = 520;
+export const CAPTURE_RETURN_MS = 420;
 
 export const SAFE_POSITIONS = [1, 9, 14, 22, 27, 35, 40, 48];
 
@@ -70,11 +85,12 @@ export const HOME_BASE_BOX: Record<string, [number, number]> = {
 };
 
 // Four token slots inside each home base (in cell coords, board-relative)
+/** Four token slots per home base, centred on the base's 6×6 square (centre = corner + 3). */
 export const HOME_TOKEN_SLOTS: Record<string, [number, number][]> = {
-    RED:    [[1.5, 1.5], [3.5, 1.5], [1.5, 3.5], [3.5, 3.5]].map(p => [p[0], p[1]] as [number, number]) as [number, number][],
-    BLUE:   [[10.5, 1.5], [12.5, 1.5], [10.5, 3.5], [12.5, 3.5]] as [number, number][],
-    GREEN:  [[10.5, 10.5], [12.5, 10.5], [10.5, 12.5], [12.5, 12.5]] as [number, number][],
-    YELLOW: [[1.5, 10.5], [3.5, 10.5], [1.5, 12.5], [3.5, 12.5]] as [number, number][],
+    RED:    [[2, 2], [4, 2], [2, 4], [4, 4]],
+    BLUE:   [[11, 2], [13, 2], [11, 4], [13, 4]],
+    GREEN:  [[11, 11], [13, 11], [11, 13], [13, 13]],
+    YELLOW: [[2, 11], [4, 11], [2, 13], [4, 13]],
 };
 
 export function posToCoord(pos: number, color: string): [number, number] {

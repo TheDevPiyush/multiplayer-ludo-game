@@ -3,25 +3,17 @@ import { getPlayer, type GameEvent } from '@ludo/engine';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
-import Animated, {
-    Easing,
-    useAnimatedStyle,
-    useSharedValue,
-    withSequence,
-    withSpring,
-    withTiming,
-} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import AppDialog from '@/components/Dialog';
-import { DiceFace } from '@/components/ludo/DiceFace';
+import { RollingDice } from '@/components/ludo/Dice';
 import { BOARD_SIZE, COLOR_HEX, layoutTokens } from '@/components/ludo/geometry';
 import { LudoBoard } from '@/components/ludo/LudoBoard';
 import { PlayerStrip, type PlayerStripProps } from '@/components/ludo/PlayerStrip';
 import { Token } from '@/components/ludo/Token';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
-import { ROLL_ANIM_MS, useLocalGame, type LocalGameConfig } from '@/hooks/useLocalGame';
+import { useLocalGame, type LocalGameConfig } from '@/hooks/useLocalGame';
 
 const palette = Colors.dark;
 
@@ -67,22 +59,7 @@ export default function LocalBoardScreen() {
     const turnHex = COLOR_HEX[state.turn] ?? '#fff';
     const humanCount = config.seats.filter(s => s.kind === 'human').length;
 
-    // ── Dice animation (same feel as the online board) ──
-    const [rollingFace, setRollingFace] = useState(6);
     const [lastDice, setLastDice] = useState<number | null>(null);
-    const diceRotate = useSharedValue(0);
-    const diceScale = useSharedValue(1);
-    const diceStyle = useAnimatedStyle(() => ({
-        transform: [{ rotate: `${diceRotate.value}deg` }, { scale: diceScale.value }],
-    }));
-
-    useEffect(() => {
-        if (!rolling) return;
-        diceRotate.value = withTiming(diceRotate.value + 720, { duration: ROLL_ANIM_MS, easing: Easing.out(Easing.exp) });
-        diceScale.value = withSequence(withTiming(1.22, { duration: 160 }), withSpring(1));
-        const t = setInterval(() => setRollingFace(Math.floor(Math.random() * 6) + 1), 80);
-        return () => clearInterval(t);
-    }, [rolling]);
 
     useEffect(() => {
         if (state.dice !== null) setLastDice(state.dice);
@@ -149,8 +126,6 @@ export default function LocalBoardScreen() {
                     ? 'Tap a token to move'
                     : 'No moves…';
 
-    const visibleDice = rolling ? rollingFace : (state.dice ?? lastDice ?? 1);
-    const diceColor = rolling || state.dice !== null ? turnHex : palette.mutedText;
 
     const ranking = isOver
         ? state.ranking.map(color => ({ color, seat: game.seatOf(color), rank: getPlayer(state, color)?.rank ?? 0 }))
@@ -167,7 +142,7 @@ export default function LocalBoardScreen() {
                     <FontAwesome name={humanCount > 1 ? 'users' : 'laptop'} size={11} color={palette.mutedText} />
                     <Text weight="medium" style={styles.chipText}>
                         {humanCount > 1 ? 'Pass & Play' : humanCount === 1 ? 'Vs Computer' : 'Bots only'}
-                        {config.dynamicDice ? ' · dynamic dice' : ''}
+                        {config.dynamicDice ? ' · Easy dice' : ' · Hard dice'}
                     </Text>
                 </RNView>
                 <TouchableOpacity onPress={game.restart} style={styles.iconBtn}>
@@ -175,6 +150,8 @@ export default function LocalBoardScreen() {
                 </TouchableOpacity>
             </RNView>
 
+            {/* Strips + board, centred in the space between the top and bottom bars */}
+            <RNView style={styles.arena}>
             <RNView style={styles.stripRow}>
                 {topStrips.map(({ key, ...s }) => <PlayerStrip key={key} {...s} />)}
             </RNView>
@@ -187,6 +164,7 @@ export default function LocalBoardScreen() {
                         key={t.key}
                         color={t.color}
                         coord={t.coord}
+                        pos={t.pos}
                         tokenIndex={t.tokenIndex}
                         canMove={t.canMove}
                         captured={t.captured}
@@ -198,6 +176,7 @@ export default function LocalBoardScreen() {
             <RNView style={styles.stripRow}>
                 {bottomStrips.map(({ key, ...s }) => <PlayerStrip key={key} {...s} />)}
             </RNView>
+            </RNView>
 
             <RNView style={[styles.bottomBar, { paddingBottom: insets.bottom + 10 }]}>
                 <RNView style={styles.turnPill}>
@@ -206,16 +185,14 @@ export default function LocalBoardScreen() {
                 </RNView>
 
                 <RNView style={styles.diceWrap}>
-                    <TouchableOpacity
-                        activeOpacity={canRoll ? 0.85 : 1}
-                        style={[styles.rollBtn, !canRoll && !rolling && styles.rollBtnDisabled]}
+                    <RollingDice
+                        value={state.dice ?? lastDice ?? 6}
+                        rolling={rolling}
+                        color={turnHex}
+                        waiting={canRoll}
                         disabled={!canRoll}
                         onPress={game.roll}
-                    >
-                        <Animated.View style={diceStyle}>
-                            <DiceFace value={visibleDice} size={64} color={diceColor} glow={rolling || state.dice !== null} />
-                        </Animated.View>
-                    </TouchableOpacity>
+                    />
                     <Text weight="medium" style={styles.diceHint}>{isOver ? ' ' : hint}</Text>
                 </RNView>
 
@@ -301,12 +278,13 @@ const styles = StyleSheet.create({
         position: 'absolute',
         width: BOARD_SIZE,
         height: BOARD_SIZE,
-        borderRadius: 18,
-        backgroundColor: 'rgba(0,0,0,0.35)',
-        top: 5,
-        left: 3,
+        borderRadius: 20,
+        backgroundColor: 'rgba(10, 6, 60, 0.45)',
+        top: 7,
+        left: 0,
         zIndex: -1,
     },
+    arena: { flex: 1, justifyContent: 'center' },
     bottomBar: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -327,8 +305,6 @@ const styles = StyleSheet.create({
     turnText: { fontSize: 12, color: palette.text, flexShrink: 1 },
     diceWrap: { alignItems: 'center', gap: 6 },
     diceHint: { fontSize: 11, color: palette.mutedText },
-    rollBtn: { padding: 4, borderRadius: 14 },
-    rollBtnDisabled: { opacity: 0.45 },
     winOverlay: {
         position: 'absolute',
         top: 0, left: 0, right: 0, bottom: 0,
