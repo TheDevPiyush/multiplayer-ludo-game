@@ -96,7 +96,7 @@ export default function AuthIndex() {
     const palette = Colors[scheme];
 
 
-    const { signInWithGithub, signInWithGoogle, loading, dialog, hideDialog } = useAuth();
+    const { signInWithGoogle, loading, dialog, hideDialog } = useAuth();
 
 
     // Token float anims
@@ -238,7 +238,7 @@ export default function AuthIndex() {
                             style={styles.btnGoogle}
                             activeOpacity={0.85}
                             onPress={signInWithGoogle}
-                            disabled={loading.githubLoading || loading.googleLoading}
+                            disabled={loading.googleLoading}
                         >
                             <FontAwesome name="google" size={16} color="#EA4335" />
                             <Text weight="bold" style={styles.btnGoogleText}>
@@ -252,23 +252,15 @@ export default function AuthIndex() {
                             </Text>
                         </TouchableOpacity>
 
-                        {/* GitHub */}
+                        {/* Email OTP */}
                         <TouchableOpacity
-                            style={styles.btnGithub}
+                            style={styles.btnOtp}
                             activeOpacity={0.85}
-                            onPress={signInWithGithub}
-                            disabled={loading.githubLoading || loading.googleLoading}
+                            onPress={() => router.push('/(login)/otp')}
+                            disabled={loading.googleLoading}
                         >
-                            <FontAwesome name="github" size={16} color="#C0C0D8" />
-                            <Text weight="bold" style={styles.btnGithubText}>
-                                {
-                                    loading.githubLoading
-                                        ?
-                                        <ActivityIndicator color={"blue"} />
-                                        :
-                                        "Continue with GitHub"
-                                }
-                            </Text>
+                            <FontAwesome name="envelope" size={15} color="#C0C0D8" />
+                            <Text weight="bold" style={styles.btnOtpText}>Continue with OTP</Text>
                         </TouchableOpacity>
                     </View>
 
@@ -423,7 +415,7 @@ const styles = StyleSheet.create({
         color: '#111120',
         letterSpacing: 0.2,
     },
-    btnGithub: {
+    btnOtp: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
@@ -434,7 +426,7 @@ const styles = StyleSheet.create({
         borderWidth: 1.5,
         borderColor: 'rgba(255, 255, 255, 0.18)',
     },
-    btnGithubText: {
+    btnOtpText: {
         fontSize: 14,
         color: 'rgba(255, 255, 255, 0.82)',
         letterSpacing: 0.2,

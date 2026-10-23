@@ -20,7 +20,7 @@ type DialogState = {
 
 export function useAuth() {
 
-    const [loading, setLoading] = useState({ googleLoading: false, githubLoading: false });
+    const [loading, setLoading] = useState({ googleLoading: false, otpLoading: false });
     const [dialog, setDialog] = useState<DialogState>({
         visible: false,
         title: '',
@@ -37,7 +37,7 @@ export function useAuth() {
     // sign in with google via supabase
     const signInWithGoogle = async () => {
         try {
-            setLoading(prev => ({ ...prev, googleLoading: true, githubLoading: false }))
+            setLoading(prev => ({ ...prev, googleLoading: true }))
 
             const { data, error } = await supabase.auth.signInWithOAuth({
                 provider: 'google',
@@ -91,64 +91,54 @@ export function useAuth() {
             }
 
         } finally {
-            setLoading(prev => ({ ...prev, googleLoading: false, githubLoading: false }))
+            setLoading(prev => ({ ...prev, googleLoading: false }))
         }
     }
 
 
 
-    // sign in with github via supabase
-    const signInWithGithub = async () => {
-
-        setLoading(prev => ({ ...prev, googleLoading: false, githubLoading: true }))
-
-        const { data, error } = await supabase.auth.signInWithOAuth({
-            provider: 'github',
-            options: {
-                redirectTo,
-                skipBrowserRedirect: true,
-            },
-        })
-
-        if (error || !data.url) return
-
-        const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo)
-        if (result.type === 'success') {
-
-            const url = new URL(result.url);
-            const code = url.searchParams.get('code');
-
-            if (code) {
-                const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
-                if (exchangeError) {
-                    showDialog('GitHub sign-in failed', exchangeError.message);
-                }
-
-                else {
-
-                    const { data: sessionData } = await supabase.auth.getSession();
-                    const accessToken = sessionData.session?.access_token;
-
-                    let message = 'You are now signed in.';
-                    if (accessToken) {
-                        const reg = await registerUserAfterOAuth(accessToken);
-                        if (!reg.ok) {
-                            message = `${message}\n\nCould not sync your profile with the game server: ${reg.error}`;
-                        }
-                        else {
-                            await AsyncStorage.setItem('user', JSON.stringify(reg.data))
-                        }
-                    }
-                    showDialog('Login successful', message);
-                }
+    // email OTP via supabase — no browser redirect / OAuth app needed
+    const sendEmailOtp = async (email: string): Promise<boolean> => {
+        setLoading(prev => ({ ...prev, otpLoading: true }));
+        try {
+            const { error } = await supabase.auth.signInWithOtp({
+                email: email.trim().toLowerCase(),
+                options: { shouldCreateUser: true },
+            });
+            if (error) {
+                showDialog('Could not send code', error.message);
+                return false;
             }
+            return true;
+        } finally {
+            setLoading(prev => ({ ...prev, otpLoading: false }));
         }
-        setLoading(prev => ({ ...prev, googleLoading: false, githubLoading: false }))
-    }
+    };
+
+    /** On success the auth listener in app/_layout.tsx navigates into the app. */
+    const verifyEmailOtp = async (email: string, token: string): Promise<boolean> => {
+        setLoading(prev => ({ ...prev, otpLoading: true }));
+        try {
+            const { data, error } = await supabase.auth.verifyOtp({
+                email: email.trim().toLowerCase(),
+                token,
+                type: 'email',
+            });
+            if (error || !data.session) {
+                showDialog('Invalid code', error?.message ?? 'That code did not work. Check it and try again.');
+                return false;
+            }
+            const reg = await registerUserAfterOAuth(data.session.access_token);
+            if (reg.ok) await AsyncStorage.setItem('user', JSON.stringify(reg.data));
+            return true;
+        } finally {
+            setLoading(prev => ({ ...prev, otpLoading: false }));
+        }
+    };
 
     const signOut = async () => {
         await supabase.auth.signOut()
         await AsyncStorage.setItem('user', 'null');
     }
-    return { signInWithGoogle, signInWithGithub, signOut, loading, dialog, hideDialog }
+    return { signInWithGoogle, sendEmailOtp, verifyEmailOtp, signOut, loading, dialog, hideDialog }
 }
