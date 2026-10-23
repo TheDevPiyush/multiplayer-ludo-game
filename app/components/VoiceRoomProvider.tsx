@@ -362,10 +362,10 @@ export function VoiceRoomProvider({ children }: { children: React.ReactNode }) {
     // Resolve my user id once + pre-warm TURN credentials for faster voice join
     useEffect(() => {
         (async () => {
-            const { data } = await supabase.auth.getUser();
-            myUserIdRef.current = data.user?.id ?? null;
+            const { data } = await supabase.auth.getSession();
+            myUserIdRef.current = data.session?.user.id ?? null;
             log('myUserId =', myUserIdRef.current);
-            if (data.user) {
+            if (data.session) {
                 iceServersRef.current = await getIceServers();
             }
         })();

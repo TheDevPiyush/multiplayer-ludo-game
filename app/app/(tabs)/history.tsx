@@ -1,6 +1,7 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useCallback, useEffect, useState } from 'react';
 import {
     ActivityIndicator,
     FlatList,
@@ -16,6 +17,7 @@ import type { GameHistoryEntry } from '@/apis/user-api';
 import { fetchGameHistory } from '@/apis/user-api';
 import Colors from '@/constants/Colors';
 import { LUDO } from '@/constants/LudoColors';
+import { historyFetchedAt, markHistoryFetched } from '@/util/history-cache';
 import { supabase } from '@/util/supabase-client';
 
 const palette = Colors.dark;
@@ -106,6 +108,10 @@ function HistoryCard({ item }: { item: GameHistoryEntry }) {
     );
 }
 
+const HISTORY_KEY = 'simpleludo:history';
+/** Re-fetch on tab focus at most this often; pull-to-refresh always fetches. */
+const HISTORY_STALE_MS = 60_000;
+
 export default function HistoryTabScreen() {
     const insets = useSafeAreaInsets();
     const [items, setItems] = useState<GameHistoryEntry[]>([]);
@@ -113,9 +119,23 @@ export default function HistoryTabScreen() {
     const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
+    // Show the last known history instantly, then revalidate.
+    useEffect(() => {
+        AsyncStorage.getItem(HISTORY_KEY)
+            .then(raw => {
+                if (!raw) return;
+                setItems(prev => (prev.length ? prev : (JSON.parse(raw) as GameHistoryEntry[])));
+                setLoading(false);
+            })
+            .catch(() => {});
+    }, []);
+
     const load = useCallback(async (isRefresh = false) => {
+        if (!isRefresh && Date.now() - historyFetchedAt() < HISTORY_STALE_MS) {
+            setLoading(false);
+            return;
+        }
         if (isRefresh) setRefreshing(true);
-        else setLoading(true);
         setError(null);
         try {
             const { data } = await supabase.auth.getSession();
@@ -129,7 +149,9 @@ export default function HistoryTabScreen() {
                 setError(result.error);
                 return;
             }
+            markHistoryFetched();
             setItems(result.data.data);
+            void AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(result.data.data)).catch(() => {});
         } finally {
             setLoading(false);
             setRefreshing(false);

@@ -105,7 +105,6 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         if (existing?.connected) return;
 
         if (existing) {
-            existing.auth = { token };
             existing.connect();
             setStatus('connecting');
             return;
@@ -115,7 +114,13 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
 
         const s = io(base, {
             transports: ['websocket'],
-            auth: { token },
+            // Called on every (re)connect attempt, so auto-reconnects never reuse an
+            // expired access token (supabase-js refreshes the session in the background).
+            auth: (cb) => {
+                void supabase.auth.getSession().then(({ data: d }) => {
+                    cb({ token: d.session?.access_token ?? '' });
+                });
+            },
             reconnection: true,
             reconnectionAttempts: Infinity,
             reconnectionDelay: 800,
@@ -131,7 +136,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         s.on('disconnect', (reason) => {
             setStatus(reason === 'io client disconnect' ? 'disconnected' : 'reconnecting');
         });
-        s.on('reconnect_attempt', () => setStatus('reconnecting'));
+        s.io.on('reconnect_attempt', () => setStatus('reconnecting'));
         s.on('connect_error', (err) => {
             setLastError(err?.message ?? 'connect_error');
             if (!networkOnlineRef.current) {

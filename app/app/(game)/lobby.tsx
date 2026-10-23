@@ -258,7 +258,7 @@ export default function LobbyScreen() {
     }, []);
 
     useEffect(() => {
-        supabase.auth.getUser().then(({ data }) => setCurrentUserId(data.user?.id ?? null));
+        supabase.auth.getSession().then(({ data }) => setCurrentUserId(data.session?.user.id ?? null));
     }, []);
 
     useEffect(() => {
