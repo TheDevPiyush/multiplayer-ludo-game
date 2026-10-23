@@ -5,6 +5,7 @@ import { ServiceError } from './game-service';
 import { games } from './services';
 import { historyCache } from './user-cache';
 import { log } from '../lib/logger';
+import { afterCursor, pageParams, toPage } from '../lib/paging';
 
 /** Maps service errors to HTTP responses. */
 function handle(name: string, fn: (req: Request, res: Response) => Promise<unknown>) {
@@ -51,20 +52,22 @@ export const getRoom = handle('getRoom', async (req, res) => {
     res.status(200).json({ data: games.dto(room) });
 });
 
+/** Newest first, paged. The first page is cached per user until their next game ends. */
 export const getHistory = handle('getHistory', async (req, res) => {
     const userId = req.user!.id;
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 40));
-    const cacheKey = userId;
-    const cached = historyCache.get(cacheKey) as { limit: number; data: unknown[] } | undefined;
-    if (cached && cached.limit >= limit) {
-        return res.status(200).json({ data: cached.data.slice(0, limit) });
+    const { limit, cursor } = pageParams(req);
+    const firstPage = !cursor;
+    if (firstPage) {
+        const cached = historyCache.get(userId) as { limit: number; body: unknown } | undefined;
+        if (cached && cached.limit === limit) return res.status(200).json(cached.body);
     }
 
-    const rows = await prisma.gamePlayer.findMany({
+    const found = await prisma.gamePlayer.findMany({
         where: { userId, gameRoom: { status: { in: ['FINISHED', 'CANCELLED'] } } },
-        orderBy: { joinedAt: 'desc' },
-        take: limit,
+        orderBy: [{ joinedAt: 'desc' }, { id: 'desc' }],
+        ...afterCursor(cursor, limit),
         select: {
+            id: true,
             color: true,
             rank: true,
             gameRoom: {
@@ -84,6 +87,7 @@ export const getHistory = handle('getHistory', async (req, res) => {
             },
         },
     });
+    const { rows, nextCursor } = toPage(found, limit);
 
     const data = rows.map(r => {
         const g = r.gameRoom;
@@ -102,6 +106,7 @@ export const getHistory = handle('getHistory', async (req, res) => {
             players: g.players.map(p => ({ userId: p.userId, username: p.user.username, color: p.color, rank: p.rank })),
         };
     });
-    historyCache.set(cacheKey, { limit, data });
-    res.status(200).json({ data });
+    const body = { data, nextCursor };
+    if (firstPage) historyCache.set(userId, { limit, body });
+    res.status(200).json(body);
 });

@@ -14,6 +14,9 @@ import { SocketProvider } from '@/components/SocketProvider';
 import { VoiceRoomProvider } from '@/components/VoiceRoomProvider';
 import { LudoBackground } from '@/components/LudoBackground';
 import { getActiveRoom } from '@/util/active-room';
+import { SocialProvider } from '@/components/SocialProvider';
+import { InviteBanner } from '@/components/InviteBanner';
+import { friendsHref, takePendingLink } from '@/util/links';
 
 export {
   ErrorBoundary,
@@ -54,6 +57,17 @@ export default function RootLayout() {
     const resume = async (loggedIn: boolean) => {
       if (!loggedIn) {
         router.replace('/(login)');
+        return;
+      }
+      // A link opened the app (or arrived while signed out): go there now.
+      const link = takePendingLink();
+      if (link?.kind === 'join') {
+        router.replace({ pathname: '/join/[code]', params: { code: link.code } });
+        return;
+      }
+      if (link?.kind === 'friends') {
+        router.replace('/(tabs)');
+        router.push(friendsHref(link.tab));
         return;
       }
       const active = await getActiveRoom();
@@ -126,25 +140,33 @@ function RootLayoutNav() {
     <PaperProvider theme={theme}>
       <StatusBar style="light" />
       <SocketProvider>
-        <VoiceRoomProvider>
-          <ThemeProvider value={navigationTheme(colorScheme)}>
-            <LudoBackground style={{ flex: 1 }}>
-              <Stack
-                initialRouteName={"(login)"}
-                screenOptions={{
-                  contentStyle: { backgroundColor: 'transparent' },
-                  animation: 'fade',
-                }}
-              >
-                <Stack.Screen name="(login)" options={{ headerShown: false }} />
-                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                <Stack.Screen name="(game)" options={{ headerShown: false }} />
-                <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
-                <Stack.Screen name="edit-username" options={{ headerShown: false, presentation: 'modal' }} />
-              </Stack>
-            </LudoBackground>
-          </ThemeProvider>
-        </VoiceRoomProvider>
+        <SocialProvider>
+          <VoiceRoomProvider>
+            <ThemeProvider value={navigationTheme(colorScheme)}>
+              <LudoBackground style={{ flex: 1 }}>
+                <Stack
+                  initialRouteName={"(login)"}
+                  screenOptions={{
+                    contentStyle: { backgroundColor: 'transparent' },
+                    animation: 'fade',
+                  }}
+                >
+                  <Stack.Screen name="(login)" options={{ headerShown: false }} />
+                  <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                  <Stack.Screen name="(game)" options={{ headerShown: false }} />
+                  <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
+                  <Stack.Screen name="edit-username" options={{ headerShown: false, presentation: 'modal' }} />
+                  <Stack.Screen
+                    name="friends"
+                    options={{ headerShown: false, presentation: 'transparentModal', animation: 'fade', contentStyle: { backgroundColor: 'transparent' } }}
+                  />
+                  <Stack.Screen name="join/[code]" options={{ headerShown: false, gestureEnabled: false }} />
+                </Stack>
+                <InviteBanner />
+              </LudoBackground>
+            </ThemeProvider>
+          </VoiceRoomProvider>
+        </SocialProvider>
       </SocketProvider>
     </PaperProvider>
   );

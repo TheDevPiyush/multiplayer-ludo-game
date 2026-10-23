@@ -59,7 +59,7 @@ export type GameMoveDto = {
 
 type Ok<T> = { ok: true; data: T };
 type Fail = { ok: false; error: string; status?: number };
-type Result<T> = Ok<T> | Fail;
+export type Result<T> = Ok<T> | Fail;
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -81,7 +81,7 @@ function parseError(body: unknown, fallback: string): string {
     return fallback;
 }
 
-async function apiFetch<T>(
+export async function apiFetch<T>(
     accessToken: string,
     path: string,
     options: RequestInit = {},

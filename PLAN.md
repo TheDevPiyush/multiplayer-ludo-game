@@ -28,6 +28,16 @@ at room lifecycle moments, not on every dice roll.
       "Dice Luck" (Easy/Hard) select. Next: restyle create/join/lobby/history/
       profile/login in the new style, turn-timer ring (`room.turnEndsAt`),
       capture/finish celebrations, replace Hellix font.
+- [x] Social: invite links (`https://<EXPO_PUBLIC_LINK_URL>/join/CODE` — App Links /
+      universal links + landing page fallback, `simpleludo://join/CODE`), friends
+      (search, requests, accept/decline/remove, online status) and a notifications
+      tab, live over the user's socket channel. The friends modal is the route
+      `/friends?tab=friends|requests`. Room invites: host taps an open seat → friend
+      picker → notification + live in-app banner; invites show whether the room is
+      still open. Lists are cursor-paged. Next: push notifications
+      (expo-notifications) so invites reach closed apps, block/report.
+      Before launch: add the Play signing + upload key SHA-256s to
+      `ANDROID_CERT_SHA256` and set `IOS_APP_ID`.
 - [ ] Sound & haptics (future): dice roll, hop tick, capture, reach home, win
       fanfare, turn alert; `expo-audio` + `expo-haptics`, mute toggle in profile.
       CC0 sources: Kenney.nl (UI/board-game packs), freesound.org (CC0 filter).

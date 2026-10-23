@@ -14,11 +14,15 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { GameTile } from '@/components/GameTile';
+import { useSocial } from '@/components/SocialProvider';
+import { useSocket } from '@/components/SocketProvider';
+import { UserAvatar } from '@/components/UserAvatar';
 import { Dice3D } from '@/components/ludo/Dice';
 import { COLOR_HEX } from '@/components/ludo/geometry';
 import { Pawn } from '@/components/ludo/Token';
 import { Text } from '@/components/Themed';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
+import { friendsHref } from '@/util/links';
 
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 
@@ -55,14 +59,21 @@ function HeroArt() {
 }
 
 function HeroButton({ label, icon, primary, onPress }: { label: string; icon: IconName; primary?: boolean; onPress: () => void }) {
+    const fg = primary ? '#E2364A' : '#FFFFFF';
     return (
-        <Pressable
+        <GameTile
+            // Create: white on a warm edge. Join: solid indigo so it stands out on the orange card.
+            colors={primary ? ['#FFFFFF', '#FFF1EC'] : ['#4F46F0', '#3730D6']}
+            edge={primary ? '#E2A895' : '#241C9E'}
+            radius={16}
+            depth={5}
             onPress={onPress}
-            style={({ pressed }) => [styles.heroBtn, primary ? styles.heroBtnPrimary : styles.heroBtnGhost, pressed && { opacity: 0.85, transform: [{ scale: 0.97 }] }]}
+            style={{ flex: primary ? 1.4 : 1 }}
+            contentStyle={styles.heroBtn}
         >
-            <MaterialCommunityIcons name={icon} size={18} color={primary ? '#E2364A' : '#FFFFFF'} />
-            <Text weight="bold" style={[styles.heroBtnText, primary && { color: '#E2364A' }]}>{label}</Text>
-        </Pressable>
+            <MaterialCommunityIcons name={icon} size={18} color={fg} />
+            <Text weight="bold" style={[styles.heroBtnText, { color: fg }]}>{label}</Text>
+        </GameTile>
     );
 }
 
@@ -83,11 +94,10 @@ function ModeTile({
 }) {
     return (
         <GameTile colors={colors} edge={edge} onPress={onPress} style={{ flex: 1 }} contentStyle={styles.modeTile}>
-            <MaterialCommunityIcons name={icon} size={92} color="#FFFFFF" style={styles.modeWatermark} />
             <RNView style={styles.modeIcon}>
-                <MaterialCommunityIcons name={icon} size={24} color="#FFFFFF" />
+                <MaterialCommunityIcons name={icon} size={28} color="#FFFFFF" />
             </RNView>
-            <RNView style={{ gap: 2 }}>
+            <RNView style={{ gap: 3, alignItems: 'center' }}>
                 <Text weight="bold" style={styles.modeTitle}>{title}</Text>
                 <Text weight="medium" style={styles.modeSub}>{subtitle}</Text>
             </RNView>
@@ -99,6 +109,10 @@ export default function HomeTabScreen() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
     const { user } = useCurrentUser();
+    const { summary } = useSocial();
+    const { connectionPhase } = useSocket();
+    const connected = connectionPhase === 'connected';
+    const requests = summary.incomingRequests;
 
     const username = user?.username ?? 'player';
     const games = user?.totalGames ?? 0;
@@ -113,17 +127,32 @@ export default function HomeTabScreen() {
         >
             {/* Header */}
             <Animated.View entering={FadeInDown.duration(400)} style={styles.header}>
-                <RNView style={styles.avatar}>
-                    <Text weight="bold" style={styles.avatarText}>{username.slice(0, 2).toUpperCase()}</Text>
+                <RNView style={styles.avatar} accessibilityLabel={connected ? 'Online' : 'Offline'}>
+                    {user ? (
+                        <UserAvatar user={user} size={40} />
+                    ) : (
+                        <Text weight="bold" style={styles.avatarText}>{username.slice(0, 2).toUpperCase()}</Text>
+                    )}
+                    {/* Live connection to the game server */}
+                    <RNView style={[styles.connDot, { backgroundColor: connected ? '#22C55E' : '#FF3B4E' }]} />
                 </RNView>
                 <RNView style={{ flex: 1 }}>
                     <Text weight="medium" style={styles.hello}>Ready to roll?</Text>
                     <Text weight="bold" style={styles.name} numberOfLines={1}>@{username}</Text>
                 </RNView>
-                <RNView style={styles.trophyChip}>
-                    <MaterialCommunityIcons name="trophy" size={16} color="#FFD54A" />
-                    <Text weight="bold" style={styles.trophyText}>{wins}</Text>
-                </RNView>
+                <Pressable
+                    onPress={() => router.push(friendsHref(requests > 0 ? 'requests' : 'friends'))}
+                    style={({ pressed }) => [styles.friendsBtn, pressed && { transform: [{ scale: 0.94 }] }]}
+                    hitSlop={6}
+                    accessibilityLabel="Friends"
+                >
+                    <MaterialCommunityIcons name="account-multiple-plus" size={22} color="#FFFFFF" />
+                    {requests > 0 && (
+                        <RNView style={styles.friendsBadge}>
+                            <Text weight="bold" style={styles.friendsBadgeText}>{requests > 9 ? '9+' : requests}</Text>
+                        </RNView>
+                    )}
+                </Pressable>
             </Animated.View>
 
             {/* Hero: online with friends */}
@@ -203,20 +232,43 @@ const styles = StyleSheet.create({
         borderColor: '#FFD54A',
     },
     avatarText: { fontSize: 16, color: '#3B3BE8' },
+    connDot: {
+        position: 'absolute',
+        right: -2,
+        bottom: -2,
+        width: 14,
+        height: 14,
+        borderRadius: 7,
+        borderWidth: 2.5,
+        borderColor: '#4B3BF2',
+    },
     hello: { fontSize: 13, color: 'rgba(255,255,255,0.75)' },
     name: { fontSize: 18, color: '#FFFFFF' },
-    trophyChip: {
-        flexDirection: 'row',
+    friendsBtn: {
+        width: 46,
+        height: 46,
+        borderRadius: 23,
         alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: 999,
+        justifyContent: 'center',
         backgroundColor: 'rgba(10, 8, 60, 0.28)',
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.18)',
     },
-    trophyText: { fontSize: 15, color: '#FFFFFF' },
+    friendsBadge: {
+        position: 'absolute',
+        top: -3,
+        right: -3,
+        minWidth: 20,
+        height: 20,
+        paddingHorizontal: 5,
+        borderRadius: 10,
+        backgroundColor: '#FF3B4E',
+        borderWidth: 2,
+        borderColor: '#4B3BF2',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    friendsBadgeText: { fontSize: 10, color: '#FFFFFF' },
 
     hero: { padding: 22, paddingBottom: 20, minHeight: 262 },
     heroArt: { position: 'absolute', right: 6, top: 14, width: 140, height: 130 },
@@ -243,26 +295,22 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         gap: 8,
         height: 46,
-        borderRadius: 16,
     },
-    heroBtnPrimary: { flex: 1.4, backgroundColor: '#FFFFFF' },
-    heroBtnGhost: { flex: 1, backgroundColor: 'rgba(255,255,255,0.22)', borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.45)' },
-    heroBtnText: { fontSize: 15, color: '#FFFFFF' },
+    heroBtnText: { fontSize: 15 },
 
     section: { fontSize: 17, color: '#FFFFFF' },
     row: { flexDirection: 'row', gap: 14 },
-    modeTile: { height: 184, padding: 18, justifyContent: 'space-between' },
-    modeWatermark: { position: 'absolute', right: -14, bottom: -16, opacity: 0.16 },
+    modeTile: { height: 184, padding: 18, alignItems: 'center', justifyContent: 'center', gap: 14 },
     modeIcon: {
-        width: 44,
-        height: 44,
-        borderRadius: 14,
+        width: 56,
+        height: 56,
+        borderRadius: 18,
         backgroundColor: 'rgba(255,255,255,0.25)',
         alignItems: 'center',
         justifyContent: 'center',
     },
-    modeTitle: { fontSize: 18, color: '#FFFFFF' },
-    modeSub: { fontSize: 12, color: 'rgba(255,255,255,0.9)' },
+    modeTitle: { fontSize: 18, color: '#FFFFFF', textAlign: 'center' },
+    modeSub: { fontSize: 12, color: 'rgba(255,255,255,0.9)', textAlign: 'center' },
 
     stats: {
         flexDirection: 'row',

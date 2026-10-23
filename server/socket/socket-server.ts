@@ -56,6 +56,9 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
             return;
         }
 
+        // Personal channel: friend requests, notifications, online status.
+        socket.join(`user:${userId}`);
+
         const joinedRooms = new Set<string>();
         log.info('socket connected', { user: userId, socket: socket.id, recovered: socket.recovered || undefined });
 

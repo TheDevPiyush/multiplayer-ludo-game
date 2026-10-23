@@ -88,9 +88,10 @@ export async function updateUsername(
     });
 }
 
+/** One page of match history, newest first; pass `nextCursor` back for the next page. */
 export async function fetchGameHistory(
     accessToken: string,
-    limit = 40,
-): Promise<Result<{ data: GameHistoryEntry[] }>> {
-    return apiFetch(accessToken, `/game/history?limit=${limit}`);
+    cursor?: string,
+): Promise<Result<{ data: GameHistoryEntry[]; nextCursor: string | null }>> {
+    return apiFetch(accessToken, `/game/history${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`);
 }

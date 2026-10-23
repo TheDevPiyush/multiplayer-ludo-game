@@ -6,7 +6,9 @@ import authRouter from './auth/auth.routes.ts';
 import gameRouter from './game/game.routes.ts';
 import { games } from './game/services.ts';
 import { log, requestLogger } from './lib/logger.ts';
+import linksRouter from './links/links.routes.ts';
 import rtcRouter from './rtc/rtc.routes.ts';
+import socialRouter from './social/social.routes.ts';
 import { attachSocketServer } from './socket/socket-server.ts';
 
 const app = express();
@@ -25,6 +27,8 @@ app.get('/health', (_: Request, res: Response) => {
 app.use('/auth', authRouter);
 app.use('/game', gameRouter);
 app.use('/rtc', rtcRouter);
+app.use('/social', socialRouter);
+app.use(linksRouter);
 
 const httpServer = createServer(app);
 attachSocketServer(httpServer, games);

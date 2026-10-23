@@ -31,6 +31,15 @@ export class ServiceError extends Error {
     }
 }
 
+/** Why a room can't be joined, in words players see. */
+function closedMessage(status: LiveRoom['status']): string {
+    switch (status) {
+        case 'FINISHED': return 'This game has already finished.';
+        case 'CANCELLED': return 'This room was closed by the host.';
+        default: return 'This game has already started.';
+    }
+}
+
 export interface Broadcaster {
     toRoom(roomId: string, event: string, payload: unknown): void;
 }
@@ -243,9 +252,11 @@ export class GameService {
 
     async joinRoom(userId: string, gameCode: string): Promise<{ room: LiveRoom; player: LivePlayer }> {
         const room = await this.requireRoom({ gameCode: normalizeCode(gameCode) });
+        // Over for everyone — members included (a finished room can't be reopened).
+        if (room.status === 'FINISHED' || room.status === 'CANCELLED') throw new ServiceError(410, closedMessage(room.status));
         const existing = room.players.find(p => p.userId === userId);
         if (existing) return { room, player: existing };
-        if (room.status !== 'WAITING') throw new ServiceError(400, `Room is already ${room.status}.`);
+        if (room.status !== 'WAITING') throw new ServiceError(400, closedMessage(room.status));
 
         const profile = await this.getProfile(userId);
 
@@ -253,7 +264,7 @@ export class GameService {
         if (room.players.some(p => p.userId === userId)) {
             return { room, player: room.players.find(p => p.userId === userId)! };
         }
-        if (room.status !== 'WAITING') throw new ServiceError(400, `Room is already ${room.status}.`);
+        if (room.status !== 'WAITING') throw new ServiceError(400, closedMessage(room.status));
         if (room.players.length >= room.maxPlayers) throw new ServiceError(400, 'Room is full.');
 
         const takenSeats = new Set(room.players.map(p => p.seatNumber));

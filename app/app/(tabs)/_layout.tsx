@@ -5,16 +5,19 @@ import { CommonActions } from '@react-navigation/native';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
+import { useSocial } from '@/components/SocialProvider';
 
 const TAB_COLORS: Record<string, string> = {
   index: '#FF3B4E',
   history: '#F59E0B',
+  notifications: '#7C3AED',
   profile: '#2E86FF',
 };
 
 export default function TabLayout() {
   const colorScheme = useColorScheme() ?? 'dark';
   const palette = Colors[colorScheme];
+  const { summary } = useSocial();
 
   return (
     <Tabs
@@ -51,6 +54,11 @@ export default function TabLayout() {
               size: 24,
             }) ?? null;
           }}
+          getBadge={({ route }) =>
+            route.name === 'notifications' && summary.unreadNotifications > 0
+              ? Math.min(summary.unreadNotifications, 99)
+              : false
+          }
           getLabelText={({ route }) =>
             descriptors[route.key].options.title ?? route.name
           }
@@ -72,6 +80,15 @@ export default function TabLayout() {
           title: 'History',
           tabBarIcon: ({ color, size }) => (
             <FontAwesome name="history" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="notifications"
+        options={{
+          title: 'Alerts',
+          tabBarIcon: ({ color, size }) => (
+            <FontAwesome name="bell" size={size - 2} color={color} />
           ),
         }}
       />

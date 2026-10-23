@@ -179,7 +179,7 @@ function safe(fn: () => void, label: string) {
 function startAudioSession() {
     // auto:true lets InCallManager route to BT / wired headset when connected
     safe(() => InCallManager.start({ media: 'audio', auto: true }), 'start');
-    safe(() => InCallManager.startProximitySensor(), 'startProximitySensor');
+    // No proximity sensor: this is a game played looking at the screen, not a call held to the ear.
     safe(() => InCallManager.setKeepScreenOn(true), 'setKeepScreenOn');
     if (Platform.OS === 'android') {
         void InCallManager.requestAudioFocus().catch(() => {});
@@ -197,6 +197,13 @@ function stopAudioSession() {
     }
     safe(() => InCallManager.stop(), 'stop');
     log('audio session stopped');
+}
+
+/** Game default: headphones / Bluetooth when connected, otherwise the loudspeaker (never the earpiece). */
+function defaultRoute(available: AudioRoute[]): AudioRoute {
+    if (available.includes('BLUETOOTH')) return 'BLUETOOTH';
+    if (available.includes('WIRED_HEADSET')) return 'WIRED_HEADSET';
+    return 'SPEAKER_PHONE';
 }
 
 async function applyAudioRoute(route: AudioRoute): Promise<AudioRoute> {
@@ -267,6 +274,10 @@ export function VoiceRoomProvider({ children }: { children: React.ReactNode }) {
     const [micPermission, setMicPermission] = useState<'unknown' | 'granted' | 'denied'>('unknown');
     const [audioRoute, setAudioRouteState] = useState<AudioRoute>('SPEAKER_PHONE');
     const [availableRoutes, setAvailableRoutes] = useState<AudioRoute[]>(['SPEAKER_PHONE', 'EARPIECE']);
+    const availableRoutesRef = useRef(availableRoutes);
+    availableRoutesRef.current = availableRoutes;
+    /** The player's pick this session; null = follow the default. */
+    const chosenRouteRef = useRef<AudioRoute | null>(null);
 
     // ── Refs (always-current values for use inside async/event callbacks) ──
     const roomIdRef = useRef<string | null>(null);
@@ -355,8 +366,15 @@ export function VoiceRoomProvider({ children }: { children: React.ReactNode }) {
     }, []);
 
     const setAudioRoute = useCallback(async (route: AudioRoute) => {
+        chosenRouteRef.current = route;
         const applied = await applyAudioRoute(route);
         setAudioRouteState(applied);
+    }, []);
+
+    /** After (re)starting the audio session, which resets routing to the earpiece. */
+    const routeAudio = useCallback(() => {
+        const route = chosenRouteRef.current ?? defaultRoute(availableRoutesRef.current);
+        void applyAudioRoute(route).then(setAudioRouteState);
     }, []);
 
     // Resolve my user id once + pre-warm TURN credentials for faster voice join
@@ -787,8 +805,9 @@ export function VoiceRoomProvider({ children }: { children: React.ReactNode }) {
                 return;
             }
 
-            // 4. start InCallManager session (auto-routes BT / headset)
+            // 4. start InCallManager session (auto-routes BT / headset), loudspeaker otherwise
             startAudioSession();
+            routeAudio();
 
             // 5. register on server (retries until socket room:join has completed)
             roomIdRef.current = newRoomId;
@@ -807,7 +826,7 @@ export function VoiceRoomProvider({ children }: { children: React.ReactNode }) {
             // 6. update UI state
             setRoomId(newRoomId);
         },
-        [closeAllPeers, stopLocalStream, announceVoiceJoin],
+        [closeAllPeers, stopLocalStream, announceVoiceJoin, routeAudio],
     );
 
     // ── resync() — same room, rebuild signaling + WebRTC peers ─────
@@ -821,12 +840,13 @@ export function VoiceRoomProvider({ children }: { children: React.ReactNode }) {
         log('voice resync →', rid);
         closeAllPeers();
         startAudioSession();
+        routeAudio();
         void (async () => {
             iceServersRef.current = await getIceServers();
             const ok = await announceVoiceJoin(rid, 'resync');
             if (!ok) warn('resync: server voice registration failed');
         })();
-    }, [closeAllPeers, announceVoiceJoin]);
+    }, [closeAllPeers, announceVoiceJoin, routeAudio]);
 
     // ── leave() ───────────────────────────────────────────────────
     const leave = useCallback(() => {
@@ -843,6 +863,7 @@ export function VoiceRoomProvider({ children }: { children: React.ReactNode }) {
         setPeers([]);
         setAudioRouteState('SPEAKER_PHONE');
         setAvailableRoutes(['SPEAKER_PHONE', 'EARPIECE']);
+        chosenRouteRef.current = null;
     }, [closeAllPeers, stopLocalStream]);
 
     // ── mute ──────────────────────────────────────────────────────
@@ -884,6 +905,7 @@ export function VoiceRoomProvider({ children }: { children: React.ReactNode }) {
             log('socket reconnected — re-syncing voice room');
             closeAllPeers();
             startAudioSession();
+            routeAudio();
             void (async () => {
                 iceServersRef.current = await getIceServers();
                 const ok = await announceVoiceJoin(rid, 'reconnect');
@@ -896,7 +918,7 @@ export function VoiceRoomProvider({ children }: { children: React.ReactNode }) {
             socket.off('disconnect', onDisconnect);
             socket.off('connect', onConnect);
         };
-    }, [socket, closeAllPeers, announceVoiceJoin]);
+    }, [socket, closeAllPeers, announceVoiceJoin, routeAudio]);
 
     const value = useMemo<VoiceCtxValue>(
         () => ({

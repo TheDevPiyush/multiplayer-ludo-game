@@ -97,6 +97,27 @@ describe('lobby', () => {
         expect(room.players.map(p => p.color)).toEqual(['RED', 'GREEN']);
         await expect(games.joinRoom('c', room.gameCode)).rejects.toThrow(ServiceError);
     });
+
+    test('finished or cancelled rooms cannot be joined, even by their own players', async () => {
+        const { games } = setup();
+        const done = await games.createRoom('a', { maxPlayers: 2 });
+        await games.joinRoom('b', done.gameCode);
+        done.status = 'FINISHED';
+        for (const user of ['a', 'b', 'c']) {
+            await expect(games.joinRoom(user, done.gameCode)).rejects.toThrow('This game has already finished.');
+        }
+
+        const closed = await games.createRoom('a', { maxPlayers: 2 });
+        await games.cancelRoom('a', closed.gameCode);
+        await expect(games.joinRoom('a', closed.gameCode)).rejects.toThrow('This room was closed by the host.');
+
+        const live = await games.createRoom('a', { maxPlayers: 3 });
+        await games.joinRoom('b', live.gameCode);
+        await games.startGame('a', live.gameCode);
+        await expect(games.joinRoom('c', live.gameCode)).rejects.toThrow('This game has already started.');
+        // A player of a running game can still get back in.
+        expect((await games.joinRoom('b', live.gameCode)).player.userId).toBe('b');
+    });
 });
 
 describe('gameplay', () => {

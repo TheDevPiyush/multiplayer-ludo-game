@@ -1,21 +1,27 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect } from 'react';
 import { Pressable, StyleSheet } from 'react-native';
 import Animated, {
     cancelAnimation,
     Easing,
+    useAnimatedProps,
     useAnimatedStyle,
     useSharedValue,
     withRepeat,
     withSequence,
     withSpring,
     withTiming,
+    type SharedValue,
 } from 'react-native-reanimated';
-import Svg, { Circle, Defs, Ellipse, G, Polygon, RadialGradient, Rect, Stop } from 'react-native-svg';
+import Svg, { Circle, Defs, Ellipse, G, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
 
 // ─── Tiny 3D renderer ────────────────────────────────────────────────────────
-// A die is a cube with fixed pips on each face. We rotate it, keep the faces
-// that point at the viewer, and draw each one as an affine-mapped unit square
-// (an orthographic projection of a square is exactly a parallelogram).
+// A die is a cube with fixed pips on each face. We rotate it, hide the faces
+// that point away, and draw each visible face as an affine-mapped unit square
+// (an orthographic projection of a square is exactly a parallelogram). A cube is
+// convex, so visible faces never overlap — no depth sorting needed.
+//
+// All maths is plain worklet code, so the rolling die animates entirely on the
+// UI thread (Reanimated animated props) without any React re-renders.
 
 type Vec = [number, number, number];
 type Mat = [Vec, Vec, Vec]; // rows
@@ -30,11 +36,13 @@ const PIPS: Record<number, [number, number][]> = {
     6: [[0.27, 0.24], [0.73, 0.24], [0.27, 0.5], [0.73, 0.5], [0.27, 0.76], [0.73, 0.76]],
 };
 
+type Face = { value: number; n: Vec; a: Vec; b: Vec };
+
 /**
  * Faces of a standard die (opposites sum to 7). `a` / `b` are the face's
  * right / down directions when that face is turned towards the viewer.
  */
-const FACES: { value: number; n: Vec; a: Vec; b: Vec }[] = [
+const FACES: Face[] = [
     { value: 1, n: [0, 0, 1], a: [1, 0, 0], b: [0, -1, 0] },
     { value: 6, n: [0, 0, -1], a: [-1, 0, 0], b: [0, -1, 0] },
     { value: 3, n: [1, 0, 0], a: [0, 0, -1], b: [0, -1, 0] },
@@ -56,38 +64,40 @@ const FACE_UP: Record<number, Vec> = {
 /** Resting tilt so a face-up die still shows a sliver of its top and side. */
 const REST_TILT: Vec = [-9, 11, 0];
 
-const LIGHT: Vec = (() => {
-    const l: Vec = [-0.45, 0.6, 0.66];
-    const m = Math.hypot(...l);
-    return [l[0] / m, l[1] / m, l[2] / m];
-})();
+const LIGHT: Vec = [-0.4877, 0.6503, 0.5826]; // normalised (-0.45, 0.6, 0.66)
 
-const rad = (d: number) => (d * Math.PI) / 180;
+const CORNERS: Vec[] = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => [x, y, z] as Vec)));
 
-function mul(a: Mat, b: Mat): Mat {
-    const r: Mat = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
-    for (let i = 0; i < 3; i++) {
-        for (let j = 0; j < 3; j++) {
-            r[i]![j] = a[i]![0] * b[0]![j]! + a[i]![1] * b[1]![j]! + a[i]![2] * b[2]![j]!;
+function orientation(ax: number, ay: number, az: number, tilt: Vec): Mat {
+    'worklet';
+    const r = (d: number) => (d * Math.PI) / 180;
+    const mul = (p: Mat, q: Mat): Mat => {
+        const o: Mat = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+        for (let i = 0; i < 3; i++) {
+            for (let j = 0; j < 3; j++) {
+                o[i]![j] = p[i]![0] * q[0]![j]! + p[i]![1] * q[1]![j]! + p[i]![2] * q[2]![j]!;
+            }
         }
-    }
-    return r;
-}
-
-function rotX(d: number): Mat {
-    const c = Math.cos(rad(d)), s = Math.sin(rad(d));
-    return [[1, 0, 0], [0, c, -s], [0, s, c]];
-}
-function rotY(d: number): Mat {
-    const c = Math.cos(rad(d)), s = Math.sin(rad(d));
-    return [[c, 0, s], [0, 1, 0], [-s, 0, c]];
-}
-function rotZ(d: number): Mat {
-    const c = Math.cos(rad(d)), s = Math.sin(rad(d));
-    return [[c, -s, 0], [s, c, 0], [0, 0, 1]];
+        return o;
+    };
+    const rx = (d: number): Mat => {
+        const c = Math.cos(r(d)), s = Math.sin(r(d));
+        return [[1, 0, 0], [0, c, -s], [0, s, c]];
+    };
+    const ry = (d: number): Mat => {
+        const c = Math.cos(r(d)), s = Math.sin(r(d));
+        return [[c, 0, s], [0, 1, 0], [-s, 0, c]];
+    };
+    const rz = (d: number): Mat => {
+        const c = Math.cos(r(d)), s = Math.sin(r(d));
+        return [[c, -s, 0], [s, c, 0], [0, 0, 1]];
+    };
+    const own = mul(rz(az), mul(ry(ay), rx(ax)));
+    return mul(mul(ry(tilt[1]), rx(tilt[0])), own);
 }
 
 function apply(m: Mat, v: Vec): Vec {
+    'worklet';
     return [
         m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
         m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
@@ -95,116 +105,144 @@ function apply(m: Mat, v: Vec): Vec {
     ];
 }
 
-/** Full orientation: rest tilt applied on top of the die's own rotation. */
-function orientation(angles: Vec, tilt: Vec): Mat {
-    const own = mul(rotZ(angles[2]), mul(rotY(angles[1]), rotX(angles[0])));
-    return mul(mul(rotY(tilt[1]), rotX(tilt[0])), own);
-}
-
-/** Convex hull (monotone chain) — the die's silhouette, drawn as its bevel. */
-function hull(points: [number, number][]): [number, number][] {
-    const p = [...points].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-    const cross = (o: [number, number], a: [number, number], b: [number, number]) =>
-        (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-    const build = (pts: [number, number][]) => {
-        const out: [number, number][] = [];
-        for (const pt of pts) {
-            while (out.length >= 2 && cross(out[out.length - 2]!, out[out.length - 1]!, pt) <= 0) out.pop();
-            out.push(pt);
-        }
-        return out;
+/** Screen-space matrix, visibility and shading for one face. */
+function faceProps(m: Mat, face: Face, half: number, c: number) {
+    'worklet';
+    const n = apply(m, face.n);
+    const a = apply(m, face.a);
+    const b = apply(m, face.b);
+    // Unit square (u, w) → screen: centre + (2u−1)·a + (2w−1)·b, with y flipped.
+    const ax = a[0] * half, ay = -a[1] * half;
+    const bx = b[0] * half, by = -b[1] * half;
+    const cx = c + n[0] * half, cy = c - n[1] * half;
+    const light = Math.max(0, n[0] * LIGHT[0] + n[1] * LIGHT[1] + n[2] * LIGHT[2]);
+    return {
+        matrix: [2 * ax, 2 * ay, 2 * bx, 2 * by, cx - ax - bx, cy - ay - by],
+        visible: n[2] > 0.02,
+        shade: 0.32 * (1 - light), // 0 = fully lit
     };
-    const lower = build(p);
-    const upper = build([...p].reverse());
-    return [...lower.slice(0, -1), ...upper.slice(0, -1)];
 }
 
-const CORNERS: Vec[] = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => [x, y, z] as Vec)));
+/** Outline of the rotated cube (convex hull, monotone chain) as an SVG path. */
+function silhouette(m: Mat, half: number, c: number): string {
+    'worklet';
+    const pts: [number, number][] = [];
+    for (let i = 0; i < CORNERS.length; i++) {
+        const p = apply(m, CORNERS[i]!);
+        pts.push([c + p[0] * half, c - p[1] * half]);
+    }
+    pts.sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+    const cross = (o: [number, number], p: [number, number], q: [number, number]) =>
+        (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
+    const lower: [number, number][] = [];
+    for (let i = 0; i < pts.length; i++) {
+        while (lower.length >= 2 && cross(lower[lower.length - 2]!, lower[lower.length - 1]!, pts[i]!) <= 0) lower.pop();
+        lower.push(pts[i]!);
+    }
+    const upper: [number, number][] = [];
+    for (let i = pts.length - 1; i >= 0; i--) {
+        while (upper.length >= 2 && cross(upper[upper.length - 2]!, upper[upper.length - 1]!, pts[i]!) <= 0) upper.pop();
+        upper.push(pts[i]!);
+    }
+    const hull = lower.slice(0, -1).concat(upper.slice(0, -1));
+    let d = '';
+    for (let i = 0; i < hull.length; i++) d += `${i === 0 ? 'M' : 'L'}${hull[i]![0].toFixed(2)} ${hull[i]![1].toFixed(2)}`;
+    return `${d}Z`;
+}
 
-/**
- * A die rendered in true 3D for the given rotation. Without `angles` it rests
- * with `value` facing up (towards the viewer).
- */
+const BODY = '#A9AFC4';
+const SHADE = '#1E2340';
+
+function FaceArt({ value }: { value: number }) {
+    return (
+        <>
+            <Rect x={0.015} y={0.015} width={0.97} height={0.97} rx={0.17} fill="#FFFFFF" />
+            {(PIPS[value] ?? []).map(([x, y], i) => (
+                <G key={i}>
+                    <Circle cx={x} cy={y + 0.012} r={0.092} fill="rgba(0,0,0,0.2)" />
+                    <Circle cx={x} cy={y} r={0.088} fill="url(#pip)" />
+                </G>
+            ))}
+        </>
+    );
+}
+
+function DiceDefs({ color }: { color: string }) {
+    return (
+        <Defs>
+            <RadialGradient id="pip" cx="35%" cy="30%" r="75%">
+                <Stop offset="0" stopColor={color} />
+                <Stop offset="1" stopColor="#0F172A" stopOpacity={0.9} />
+            </RadialGradient>
+        </Defs>
+    );
+}
+
+/** A static die rendered in true 3D (used for decoration, e.g. the home hero). */
 export function Dice3D({
     value,
     size,
     color,
-    angles,
     tilt = REST_TILT,
 }: {
     value: number;
     size: number;
     color: string;
-    angles?: Vec;
     tilt?: Vec;
 }) {
     const v = Math.min(6, Math.max(1, Math.round(value)));
-    const m = orientation(angles ?? FACE_UP[v]!, tilt);
-    const half = size * 0.3; // cube half-edge in px; any rotation still fits the box
+    const [ax, ay, az] = FACE_UP[v]!;
+    const m = orientation(ax, ay, az, tilt);
+    const half = size * 0.3;
     const c = size / 2;
-    const toScreen = (p: Vec): [number, number] => [c + p[0] * half, c - p[1] * half];
-
-    const silhouette = hull(CORNERS.map(p => toScreen(apply(m, p))));
-
-    const faces = FACES.map(f => {
-        const n = apply(m, f.n);
-        if (n[2] <= 0.02) return null; // facing away from the viewer
-        const a = apply(m, f.a);
-        const b = apply(m, f.b);
-        // Unit square (u, w) → screen: centre + (2u−1)·a + (2w−1)·b, with y flipped.
-        const ax = a[0] * half, ay = -a[1] * half;
-        const bx = b[0] * half, by = -b[1] * half;
-        const [cx, cy] = toScreen(n);
-        const matrix = `matrix(${2 * ax} ${2 * ay} ${2 * bx} ${2 * by} ${cx - ax - bx} ${cy - ay - by})`;
-        const light = Math.max(0, n[0] * LIGHT[0] + n[1] * LIGHT[1] + n[2] * LIGHT[2]);
-        const g = Math.round(255 * (0.7 + 0.3 * light));
-        return { value: f.value, matrix, fill: `rgb(${g},${g},${Math.min(255, g + 6)})`, depth: n[2] };
-    })
-        .filter((f): f is NonNullable<typeof f> => f !== null)
-        .sort((x, y) => x.depth - y.depth);
-
     return (
         <Svg width={size} height={size * 1.08}>
-            <Defs>
-                <RadialGradient id="pip" cx="35%" cy="30%" r="75%">
-                    <Stop offset="0" stopColor={color} />
-                    <Stop offset="1" stopColor="#0F172A" stopOpacity={0.9} />
-                </RadialGradient>
-            </Defs>
+            <DiceDefs color={color} />
             <Ellipse cx={c} cy={c + half * 1.55} rx={half * 1.25} ry={half * 0.2} fill="rgba(0,0,0,0.26)" />
-            <Polygon
-                points={silhouette.map(p => p.join(',')).join(' ')}
-                fill="#A9AFC4"
-                stroke="#A9AFC4"
-                strokeWidth={size * 0.06}
-                strokeLinejoin="round"
-            />
-            {faces.map(f => (
-                <G key={f.value} transform={f.matrix}>
-                    <Rect x={0.015} y={0.015} width={0.97} height={0.97} rx={0.17} fill={f.fill} />
-                    {(PIPS[f.value] ?? []).map(([x, y], i) => (
-                        <G key={i}>
-                            <Circle cx={x} cy={y + 0.012} r={0.092} fill="rgba(0,0,0,0.2)" />
-                            <Circle cx={x} cy={y} r={0.088} fill="url(#pip)" />
-                        </G>
-                    ))}
-                </G>
-            ))}
+            <Path d={silhouette(m, half, c)} fill={BODY} stroke={BODY} strokeWidth={size * 0.06} strokeLinejoin="round" />
+            {FACES.map(face => {
+                const f = faceProps(m, face, half, c);
+                if (!f.visible) return null;
+                return (
+                    <G key={face.value} transform={`matrix(${f.matrix.join(' ')})`}>
+                        <FaceArt value={face.value} />
+                        <Rect x={0.015} y={0.015} width={0.97} height={0.97} rx={0.17} fill={SHADE} opacity={f.shade} />
+                    </G>
+                );
+            })}
         </Svg>
     );
 }
 
-// ─── Rolling die ─────────────────────────────────────────────────────────────
+// ─── Rolling die (UI-thread animation) ───────────────────────────────────────
+
+const AnimatedG = Animated.createAnimatedComponent(G);
+const AnimatedRect = Animated.createAnimatedComponent(Rect);
+const AnimatedPath = Animated.createAnimatedComponent(Path);
+
+type Angles = { x: SharedValue<number>; y: SharedValue<number>; z: SharedValue<number> };
+
+function AnimatedFace({ face, angles, half, c }: { face: Face; angles: Angles; half: number; c: number }) {
+    const groupProps = useAnimatedProps(() => {
+        const m = orientation(angles.x.value, angles.y.value, angles.z.value, REST_TILT);
+        const f = faceProps(m, face, half, c);
+        return { matrix: f.matrix, opacity: f.visible ? 1 : 0 };
+    });
+    const shadeProps = useAnimatedProps(() => {
+        const m = orientation(angles.x.value, angles.y.value, angles.z.value, REST_TILT);
+        return { opacity: faceProps(m, face, half, c).shade };
+    });
+    return (
+        <AnimatedG animatedProps={groupProps}>
+            <FaceArt value={face.value} />
+            <AnimatedRect x={0.015} y={0.015} width={0.97} height={0.97} rx={0.17} fill={SHADE} animatedProps={shadeProps} />
+        </AnimatedG>
+    );
+}
 
 /** Degrees per second while tumbling, per axis. */
 const SPIN: Vec = [760, 560, 220];
-const SETTLE_MS = 520;
-
-const easeOutBack = (t: number) => {
-    const c1 = 1.2;
-    const c3 = c1 + 1;
-    return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
-};
+const SETTLE_MS = 560;
 
 /** Smallest angle ≥ `from + minTravel` that is congruent to `target` (mod 360). */
 function forwardTo(from: number, target: number, minTravel: number): number {
@@ -233,65 +271,53 @@ export function RollingDice({
     disabled?: boolean;
     onPress?: () => void;
 }) {
-    const [angles, setAngles] = useState<Vec>(() => FACE_UP[value] ?? [0, 0, 0]);
-    const anglesRef = useRef<Vec>(angles);
-    const tumbled = useRef(false);
-    const frame = useRef<number | null>(null);
+    const start = FACE_UP[value] ?? [0, 0, 0];
+    const x = useSharedValue(start[0]);
+    const y = useSharedValue(start[1]);
+    const z = useSharedValue(start[2]);
+    const tumbled = useSharedValue(false);
     const lift = useSharedValue(0);
     const squash = useSharedValue(1);
     const halo = useSharedValue(0);
 
-    const set = (a: Vec) => {
-        anglesRef.current = a;
-        setAngles(a);
-    };
+    const half = size * 0.3;
+    const c = size / 2;
 
     // Tumble while rolling, then roll on to land on the result.
     useEffect(() => {
-        const cancel = () => {
-            if (frame.current !== null) cancelAnimationFrame(frame.current);
-            frame.current = null;
-        };
-        cancel();
+        const axes = [x, y, z] as const;
         const goal = FACE_UP[value] ?? [0, 0, 0];
+        axes.forEach(a => cancelAnimation(a));
 
         if (rolling) {
-            tumbled.current = true;
-            let last = performance.now();
-            const tick = (now: number) => {
-                const dt = Math.min(48, now - last) / 1000;
-                last = now;
-                const a = anglesRef.current;
-                set([a[0] + SPIN[0] * dt, a[1] + SPIN[1] * dt, a[2] + SPIN[2] * dt]);
-                frame.current = requestAnimationFrame(tick);
-            };
-            frame.current = requestAnimationFrame(tick);
-            return cancel;
+            tumbled.value = true;
+            axes.forEach((a, i) => {
+                const from = a.value;
+                // A full turn returns to the same pose, so restarting each lap is seamless.
+                a.value = withRepeat(
+                    withTiming(from + 360, { duration: (360 / SPIN[i]!) * 1000, easing: Easing.linear }),
+                    -1,
+                    false,
+                );
+            });
+            return;
         }
 
-        if (!tumbled.current) {
-            // Value changed without a roll (e.g. resync): just show it.
-            set(goal);
-            return cancel;
+        if (!tumbled.value) {
+            // Value changed without a roll (e.g. a resync): just show it.
+            axes.forEach((a, i) => { a.value = goal[i]!; });
+            return;
         }
-        tumbled.current = false;
+        tumbled.value = false;
 
-        const from = anglesRef.current;
-        // Keep turning forward (at least a quarter turn) so it lands instead of snapping back.
-        const to: Vec = [forwardTo(from[0], goal[0], 90), forwardTo(from[1], goal[1], 90), forwardTo(from[2], goal[2], 0)];
-        const start = performance.now();
-        const tick = (now: number) => {
-            const t = Math.min(1, (now - start) / SETTLE_MS);
-            const k = easeOutBack(t);
-            if (t < 1) {
-                set([from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k, from[2] + (to[2] - from[2]) * k]);
-                frame.current = requestAnimationFrame(tick);
-            } else {
-                set(goal); // normalised, so angles never grow without bound
-            }
-        };
-        frame.current = requestAnimationFrame(tick);
-        return cancel;
+        axes.forEach((a, i) => {
+            // Keep turning forward (at least a quarter turn on X/Y) so it lands instead of snapping back.
+            const to = forwardTo(a.value, goal[i]!, i < 2 ? 90 : 0);
+            const g = goal[i]!;
+            a.value = withTiming(to, { duration: SETTLE_MS, easing: Easing.out(Easing.back(1.1)) }, finished => {
+                if (finished) a.value = g; // normalise so angles never grow without bound
+            });
+        });
     }, [rolling, value]);
 
     // Hop while tumbling, squash on landing.
@@ -327,6 +353,9 @@ export function RollingDice({
         }
     }, [waiting, rolling]);
 
+    const outlineProps = useAnimatedProps(() => ({
+        d: silhouette(orientation(x.value, y.value, z.value, REST_TILT), half, c),
+    }));
     const diceStyle = useAnimatedStyle(() => ({
         transform: [
             { translateY: -lift.value * size * 0.3 },
@@ -338,6 +367,8 @@ export function RollingDice({
         opacity: halo.value * 0.55,
         transform: [{ scale: 1 + halo.value * 0.18 }],
     }));
+
+    const angles = { x, y, z };
 
     return (
         <Pressable
@@ -351,7 +382,14 @@ export function RollingDice({
                 style={[styles.halo, { width: size * 1.25, height: size * 1.25, borderRadius: size * 0.625, backgroundColor: color }, haloStyle]}
             />
             <Animated.View style={diceStyle}>
-                <Dice3D value={value} size={size} color={color} angles={angles} />
+                <Svg width={size} height={size * 1.08}>
+                    <DiceDefs color={color} />
+                    <Ellipse cx={c} cy={c + half * 1.55} rx={half * 1.25} ry={half * 0.2} fill="rgba(0,0,0,0.26)" />
+                    <AnimatedPath animatedProps={outlineProps} fill={BODY} stroke={BODY} strokeWidth={size * 0.06} strokeLinejoin="round" />
+                    {FACES.map(face => (
+                        <AnimatedFace key={face.value} face={face} angles={angles} half={half} c={c} />
+                    ))}
+                </Svg>
             </Animated.View>
         </Pressable>
     );

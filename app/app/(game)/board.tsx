@@ -16,7 +16,7 @@ import { LudoBoard } from '@/components/ludo/LudoBoard';
 import { PlayerStrip, type PlayerStripProps } from '@/components/ludo/PlayerStrip';
 import { Token } from '@/components/ludo/Token';
 import { Text } from '@/components/Themed';
-import { VoiceControls } from '@/components/VoiceControls';
+import { AudioOutputButton, MicButton } from '@/components/VoiceButtons';
 import Colors from '@/constants/Colors';
 import { useGameActions } from '@/hooks/useGameActions';
 import { useGameRoom } from '@/hooks/useGameRoom';
@@ -353,6 +353,14 @@ export default function GameBoardScreen() {
                          'Connection lost'}
                     </Text>
                 </RNView>
+                {room?.voiceEnabled ? (
+                    <RNView style={styles.voiceRow}>
+                        <MicButton roomId={roomId} />
+                        <AudioOutputButton />
+                    </RNView>
+                ) : (
+                    <RNView style={{ width: 36 }} />
+                )}
             </RNView>
 
             {/* TOP STRIP */}
@@ -388,11 +396,6 @@ export default function GameBoardScreen() {
 
             {/* DICE / ACTIONS */}
             <RNView style={{ paddingBottom: insets.bottom + 10 }}>
-                {room?.voiceEnabled && (
-                    <RNView style={styles.voiceBar}>
-                        <VoiceControls roomId={roomId} compact showLeave={false} />
-                    </RNView>
-                )}
                 <RNView style={styles.bottomBar}>
                 <RNView style={styles.turnPill}>
                     <RNView style={[styles.turnDot, { backgroundColor: COLOR_HEX[currentColor] ?? '#fff' }]} />
@@ -547,7 +550,7 @@ const styles = StyleSheet.create({
     },
     turnDot: { width: 8, height: 8, borderRadius: 4 },
     turnText: { fontSize: 12, color: palette.text },
-    voiceBar: { width: '100%', paddingHorizontal: 20, marginBottom: 8 },
+    voiceRow: { flexDirection: 'row', gap: 8 },
     diceWrap: { alignItems: 'center', gap: 6 },
     diceHint: { fontSize: 11, color: palette.mutedText },
     bottomActions: { width: 80, height: 1 },

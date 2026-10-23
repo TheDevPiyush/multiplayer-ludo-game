@@ -19,7 +19,9 @@ type Props = {
 
 /**
  * Chunky game-style button: gradient face sitting on a darker edge that
- * collapses when pressed. Gradient is SVG, so no extra native module.
+ * collapses when pressed. Without `onPress` it's a static card (no press
+ * feedback), so buttons placed inside it get the touches and the animation.
+ * Gradient is SVG, so no extra native module.
  */
 export function GameTile({ colors, edge, onPress, children, style, contentStyle, radius = 24, depth = 6, disabled }: Props) {
     const press = useSharedValue(0);
@@ -35,12 +37,14 @@ export function GameTile({ colors, edge, onPress, children, style, contentStyle,
         if (width !== size.w || height !== size.h) setSize({ w: width, h: height });
     };
 
+    const interactive = !!onPress && !disabled;
+
     return (
         <Pressable
             onPress={onPress}
-            disabled={disabled}
-            onPressIn={() => { press.value = withTiming(1, { duration: 70 }); }}
-            onPressOut={() => { press.value = withTiming(0, { duration: 120 }); }}
+            disabled={!interactive}
+            onPressIn={interactive ? () => { press.value = withTiming(1, { duration: 70 }); } : undefined}
+            onPressOut={interactive ? () => { press.value = withTiming(0, { duration: 120 }); } : undefined}
             style={[{ paddingBottom: depth }, style]}
         >
             <View style={[StyleSheet.absoluteFill, { top: depth, borderRadius: radius, backgroundColor: edge }]} />
