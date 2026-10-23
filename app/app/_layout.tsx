@@ -78,12 +78,15 @@ export default function RootLayout() {
       }
     };
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      void resume(!!session);
-    });
-
+    // Route only when the signed-in state actually changes. Token refreshes
+    // (e.g. every time the app returns to the foreground) must not navigate,
+    // or they yank players out of whatever screen they're on.
+    let signedIn: boolean | null = null;
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      void resume(!!session);
+      const next = !!session;
+      if (next === signedIn) return;
+      signedIn = next;
+      void resume(next);
     })
 
     return () => listener.subscription.unsubscribe()
@@ -103,7 +106,7 @@ function RootLayoutNav() {
   const colorScheme = useColorScheme();
 
   useEffect(() => {
-    void SystemUI.setBackgroundColorAsync('#1A1048');
+    void SystemUI.setBackgroundColorAsync('#4B3BF2');
   }, []);
 
   const theme = {
