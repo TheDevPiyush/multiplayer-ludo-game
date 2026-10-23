@@ -140,6 +140,23 @@ export default function HomeTabScreen() {
               onPress={() => router.push('/(game)/join-room')}
             />
           </RNView>
+          <Text weight="semiBold" style={[styles.sectionLabel, { marginTop: 6 }]}>Offline</Text>
+          <RNView style={styles.row}>
+            <PlayTile
+              label="Vs Computer"
+              sublabel="Play against bots"
+              icon="laptop"
+              color={LUDO.yellow}
+              onPress={() => router.push({ pathname: '/(game)/local-setup', params: { mode: 'bots' } })}
+            />
+            <PlayTile
+              label="Pass & Play"
+              sublabel="Friends on one phone"
+              icon="users"
+              color={LUDO.blue}
+              onPress={() => router.push({ pathname: '/(game)/local-setup', params: { mode: 'pass' } })}
+            />
+          </RNView>
         </RNView>
 
         <Text weight="regular" style={styles.footer}>Simple Ludo · v1.0.0</Text>
