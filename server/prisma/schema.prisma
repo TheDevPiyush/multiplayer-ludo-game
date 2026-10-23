@@ -71,6 +71,10 @@ model GameRoom {
   currentDice       Int?
   winnerId          String?
 
+  /// Engine snapshot (@ludo/engine GameState) — written in batches, not per move.
+  gameState    Json?
+  stateVersion Int   @default(0)
+
   createdById String
   createdBy   User   @relation("RoomCreator", fields: [createdById], references: [id])
 
@@ -83,6 +87,7 @@ model GameRoom {
 
   @@index([gameCode])
   @@index([status])
+  @@index([status, createdAt])
 }
 
 model GamePlayer {
@@ -105,7 +110,7 @@ model GamePlayer {
   @@unique([gameRoomId, color])
   @@unique([gameRoomId, userId])
   @@index([gameRoomId])
-  @@index([userId])
+  @@index([userId, joinedAt])
 }
 
 model GameMove {

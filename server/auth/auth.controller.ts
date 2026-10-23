@@ -1,96 +1,101 @@
 import type { Request, Response } from 'express';
 
+import type { AuthUser } from '../lib/auth.ts';
 import { prisma } from '../lib/prisma.ts';
+import { games } from '../game/services.ts';
+import { getUserRow, userRows, type UserRow } from '../game/user-cache.ts';
+import { log } from '../lib/logger.ts';
 
-export async function registerUser(
-    req: Request,
-    res: Response
-) {
-    try {
-        const supabaseUser = req.user;
+const USERNAME_RE = /^[a-z0-9_]{3,20}$/;
 
-        if (!supabaseUser) {
-            return res.status(401).json({
-                message: 'Not authenticated',
-            });
-        }
+/**
+ * Returns the player row for an authenticated user, creating it on first sign-in
+ * (works for OAuth and email OTP alike). Safe to call concurrently.
+ */
+async function ensureUser(authUser: AuthUser): Promise<{ user: UserRow; created: boolean }> {
+    const existing = await getUserRow(authUser.id);
+    if (existing) return { user: existing, created: false };
 
-        const existingUser = await prisma.user.findFirst({
-            where: {
-                OR: [
-                    { id: supabaseUser.id },
-                    { providerId: supabaseUser.id },
-                ],
-            },
-        });
+    const meta = authUser.user_metadata;
+    const rawUsername =
+        meta?.user_name ||
+        meta?.preferred_username ||
+        meta?.full_name ||
+        meta?.name ||
+        authUser.email?.split('@')[0] ||
+        'player';
 
-        if (existingUser) {
-            return res.status(200).json({
-                registered: false,
-                user: existingUser,
-            });
-        }
-
-        const meta = supabaseUser.user_metadata as Record<string, unknown>;
-
-        const rawUsername =
-            meta?.user_name ||
-            meta?.preferred_username ||
-            meta?.full_name ||
-            meta?.name ||
-            supabaseUser.email?.split('@')[0] ||
-            'player';
-
-        const baseUsername = String(rawUsername)
+    const baseUsername =
+        String(rawUsername)
             .trim()
             .toLowerCase()
             .replace(/[^a-z0-9_]/g, '_')
             .replace(/_+/g, '_')
             .replace(/^_|_$/g, '')
-            .slice(0, 20);
+            .slice(0, 15) || 'player';
 
-        const generateUsername = async (): Promise<string> => {
-            const suffix = Math.floor(1000 + Math.random() * 9000);
-            const username = `${baseUsername}_${suffix}`;
-            const exists = await prisma.user.findUnique({ where: { username } });
-            if (exists) return generateUsername();
-            return username;
-        };
+    const avatarUrl =
+        (typeof meta?.avatar_url === 'string' && meta.avatar_url) ||
+        (typeof meta?.picture === 'string' && meta.picture) ||
+        null;
+    const provider = (authUser.app_metadata?.provider as string | undefined) ?? 'email';
 
-        let username = await generateUsername();
+    for (let attempt = 0; attempt < 10; attempt++) {
+        const username = `${baseUsername}_${Math.floor(1000 + Math.random() * 9000)}`;
+        try {
+            const user = await prisma.user.create({
+                data: { id: authUser.id, username, provider, providerId: authUser.id, avatarUrl },
+            });
+            userRows.set(user.id, user);
+            return { user, created: true };
+        } catch (e) {
+            if ((e as { code?: string })?.code !== 'P2002') throw e;
+            // Unique clash: either the username is taken, or a parallel request created this user.
+            const raced = await prisma.user.findUnique({ where: { id: authUser.id } });
+            if (raced) {
+                userRows.set(raced.id, raced);
+                return { user: raced, created: false };
+            }
+        }
+    }
+    throw new Error('Could not pick a unique username.');
+}
 
-        const avatarUrl =
-            (typeof meta?.avatar_url === 'string' &&
-                meta.avatar_url) ||
-            (typeof meta?.picture === 'string' &&
-                meta.picture) ||
-            null;
-
-        const provider =
-            supabaseUser.identities?.[0]?.provider ||
-            (supabaseUser.app_metadata as { provider?: string })
-                ?.provider ||
-            'oauth';
-
-        const user = await prisma.user.create({
-            data: {
-                id: supabaseUser.id,
-                username,
-                provider,
-                providerId: supabaseUser.id,
-                avatarUrl,
-            },
-        });
-
-        return res.status(201).json({
-            registered: true,
-            user,
-        });
+export async function registerUser(req: Request, res: Response) {
+    try {
+        const { user, created } = await ensureUser(req.user!);
+        return res.status(created ? 201 : 200).json({ registered: created, user });
     } catch (error) {
-        console.error('registerUser:', error);
+        log.error('registerUser failed', { user: req.user?.id, error: (error as Error)?.message });
+        return res.status(500).json({ message: 'Failed to register user' });
+    }
+}
 
-        return res.status(500).json({
-            message: 'Failed to register user',
-        });
+export async function getMe(req: Request, res: Response) {
+    try {
+        const { user } = await ensureUser(req.user!);
+        return res.status(200).json({ user });
+    } catch (error) {
+        log.error('getMe failed', { user: req.user?.id, error: (error as Error)?.message });
+        return res.status(500).json({ message: 'Failed to load profile' });
+    }
+}
+
+export async function updateUsername(req: Request, res: Response) {
+    try {
+        const username = String(req.body?.username ?? '').trim().toLowerCase();
+        if (!USERNAME_RE.test(username)) {
+            return res.status(400).json({ message: 'Username must be 3–20 characters: a–z, 0–9 or _.' });
+        }
+        const taken = await prisma.user.findUnique({ where: { username }, select: { id: true } });
+        if (taken && taken.id !== req.user!.id) return res.status(409).json({ message: 'That username is taken.' });
+
+        const user = await prisma.user.update({ where: { id: req.user!.id }, data: { username } });
+        userRows.set(user.id, user);
+        games.invalidateProfile(user.id, { username: user.username, avatarUrl: user.avatarUrl });
+        return res.status(200).json({ user, message: 'Username updated.' });
+    } catch (error) {
+        log.error('updateUsername failed', { user: req.user?.id, error: (error as Error)?.message });
+        return res.status(500).json({ message: 'Failed to update username' });
     }
 }

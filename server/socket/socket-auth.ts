@@ -1,13 +1,7 @@
 import type { Socket } from 'socket.io';
-import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-const supabase =
-    supabaseUrl && supabaseServiceRoleKey
-        ? createClient(supabaseUrl, supabaseServiceRoleKey)
-        : null;
+import { verifyAccessToken } from '../lib/auth';
+import { log } from '../lib/logger';
 
 export interface SocketUser {
     id: string;
@@ -20,23 +14,22 @@ declare module 'socket.io' {
     }
 }
 
-export async function socketAuth(
-    socket: Socket,
-    next: (err?: Error) => void
-): Promise<void> {
-    if (!supabase) {
-        return next(new Error('Supabase not configured on server.'));
-    }
-
+export async function socketAuth(socket: Socket, next: (err?: Error) => void): Promise<void> {
     const token =
         (socket.handshake.auth?.token as string | undefined) ||
-        (socket.handshake.headers?.authorization?.replace(/^Bearer\s+/i, ''));
+        socket.handshake.headers?.authorization?.replace(/^Bearer\s+/i, '');
 
-    if (!token) return next(new Error('Missing auth token.'));
+    if (!token) {
+        log.warn('socket auth rejected: no token', { ip: socket.handshake.address });
+        return next(new Error('Missing auth token.'));
+    }
 
-    const { data, error } = await supabase.auth.getUser(token);
-    if (error || !data.user) return next(new Error('Invalid or expired token.'));
+    const user = await verifyAccessToken(token);
+    if (!user) {
+        log.warn('socket auth rejected: invalid token', { ip: socket.handshake.address });
+        return next(new Error('Invalid or expired token.'));
+    }
 
-    socket.user = { id: data.user.id, email: data.user.email };
+    socket.user = { id: user.id, email: user.email };
     next();
 }
