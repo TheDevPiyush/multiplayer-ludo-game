@@ -3,7 +3,7 @@ import { Server, type Socket } from 'socket.io';
 
 import { ServiceError, type GameService } from '../game/game-service';
 import { log } from '../lib/logger';
-import { socketAuth } from './socket-auth';
+import { socketAuth, socketUser } from './socket-auth';
 import {
     addSocket,
     getRoomPresence,
@@ -49,8 +49,9 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
     io.use(socketAuth);
 
     io.on('connection', (socket: Socket) => {
-        const userId = socket.user?.id;
+        const userId = socketUser(socket)?.id;
         if (!userId) {
+            log.warn('socket without user, disconnecting', { socket: socket.id, recovered: socket.recovered });
             socket.disconnect(true);
             return;
         }
@@ -192,7 +193,7 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
                 if (!targets) return;
                 for (const sid of targets) {
                     const s = io!.sockets.sockets.get(sid);
-                    if (s?.user?.id === targetUserId) s.emit(eventName, { ...payload, fromUserId: userId });
+                    if (s && socketUser(s)?.id === targetUserId) s.emit(eventName, { ...payload, fromUserId: userId });
                 }
             };
         socket.on('voice:offer', relaySignal('voice:offer'));

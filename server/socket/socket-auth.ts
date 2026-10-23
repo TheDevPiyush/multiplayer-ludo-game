@@ -8,10 +8,12 @@ export interface SocketUser {
     email?: string;
 }
 
-declare module 'socket.io' {
-    interface Socket {
-        user?: SocketUser;
-    }
+/**
+ * The user lives in `socket.data`: Socket.IO connection-state recovery restores
+ * `data` (and skips this middleware), whereas ad-hoc socket properties are lost.
+ */
+export function socketUser(socket: Socket): SocketUser | undefined {
+    return (socket.data as { user?: SocketUser }).user;
 }
 
 export async function socketAuth(socket: Socket, next: (err?: Error) => void): Promise<void> {
@@ -30,6 +32,6 @@ export async function socketAuth(socket: Socket, next: (err?: Error) => void): P
         return next(new Error('Invalid or expired token.'));
     }
 
-    socket.user = { id: user.id, email: user.email };
+    socket.data.user = { id: user.id, email: user.email } satisfies SocketUser;
     next();
 }

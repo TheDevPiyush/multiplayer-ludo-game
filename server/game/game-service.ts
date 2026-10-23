@@ -50,8 +50,11 @@ export interface GameServiceOptions {
     rng: Rng;
 }
 
-/** Crypto-backed uniform float in [0, 1). */
-export const cryptoRng: Rng = () => randomInt(0, 2 ** 48) / 2 ** 48;
+/** Crypto-backed uniform float in [0, 1) with 53 bits of precision. */
+export const cryptoRng: Rng = () => {
+    const [hi, lo] = crypto.getRandomValues(new Uint32Array(2)) as unknown as [number, number];
+    return ((hi >>> 5) * 67108864 + (lo >>> 6)) / 9007199254740992;
+};
 
 export const DEFAULT_OPTIONS: GameServiceOptions = {
     turnMs: Number(process.env.TURN_MS ?? 15_000),

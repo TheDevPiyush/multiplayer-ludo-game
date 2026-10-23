@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { GameService, ServiceError, type GameServiceOptions } from '../game/game-service';
+import { cryptoRng, GameService, ServiceError, type GameServiceOptions } from '../game/game-service';
 import type { LiveRoom, RoomSync } from '../game/live-room';
 import type { Persistence } from '../game/persistence';
 
@@ -47,6 +47,33 @@ function setup(opts = fast) {
     }, opts);
     return { games, syncs, ...f };
 }
+
+describe('cryptoRng', () => {
+    test('returns floats in [0, 1) and spreads across the range', () => {
+        let min = 1;
+        let max = 0;
+        for (let i = 0; i < 20_000; i++) {
+            const x = cryptoRng();
+            expect(x).toBeGreaterThanOrEqual(0);
+            expect(x).toBeLessThan(1);
+            min = Math.min(min, x);
+            max = Math.max(max, x);
+        }
+        expect(min).toBeLessThan(0.01);
+        expect(max).toBeGreaterThan(0.99);
+    });
+
+    test('drives real dice rolls', async () => {
+        const { games } = setup({ ...fast, turnMs: 60_000, rng: cryptoRng });
+        const room = await games.createRoom('a', { maxPlayers: 2 });
+        await games.joinRoom('b', room.gameCode);
+        await games.startGame('a', room.gameCode);
+        const r = await games.act('a', room.gameCode, { kind: 'ROLL' });
+        expect(r.diceValue).toBeGreaterThanOrEqual(1);
+        expect(r.diceValue).toBeLessThanOrEqual(6);
+        await games.stop();
+    });
+});
 
 describe('lobby', () => {
     test('seat freed by a leaver is reused without collisions', async () => {

@@ -97,3 +97,24 @@ test('two players: join, start, roll — both receive the same versioned state',
     expect(rolled!.room.status).toBe('PLAYING');
     for (let i = 1; i < syncsB.length; i++) expect(syncsB[i]!.version).toBeGreaterThan(syncsB[i - 1]!.version);
 });
+
+test('a briefly dropped connection is recovered and stays usable (app minimised)', async () => {
+    const room = await games.createRoom('carol', { maxPlayers: 2 });
+    const s = await client('carol');
+    expect((await ask(s, 'room:join', { roomId: room.id, gameCode: room.gameCode })).ok).toBe(true);
+    // Recovery needs at least one received broadcast (it resumes from that offset).
+    const synced = new Promise<void>(res => s.once('room:sync', () => res()));
+    await games.joinRoom('dave', room.gameCode);
+    await synced;
+
+    // Simulate the OS killing the socket while the app is in the background.
+    const reconnected = new Promise<void>(res => s.once('connect', () => res()));
+    s.io.engine.close();
+    await reconnected;
+
+    expect(s.recovered).toBe(true);
+    await Bun.sleep(100);
+    expect(s.connected).toBe(true); // used to be kicked: recovered sockets had no user
+    const state = await ask(s, 'room:state', { roomId: room.id });
+    expect(state.ok).toBe(true);
+});
