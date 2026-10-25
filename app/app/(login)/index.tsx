@@ -10,10 +10,19 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import Reanimated, {
+    Easing as REasing,
+    useAnimatedStyle,
+    useSharedValue,
+    withDelay,
+    withRepeat,
+    withTiming,
+} from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Text } from '@/components/Themed';
 import AppDialog from '@/components/Dialog';
+import { FloatingDiceArt } from '@/components/ludo/FloatingDiceArt';
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
 import { useAuth } from '@/hooks/useAuth';
@@ -31,24 +40,35 @@ const TOKENS = [
     { color: '#E8A520', size: 24, top: 0.72, left: 0.18 },
 ];
 
-function Token({
-    color, size, top, left, anim,
-}: { color: string; size: number; top: number; left: number; anim: Animated.Value }) {
+/**
+ * A background token drifting up and down. It bounces back and forth with no
+ * reset between loops (so it never jumps), each at its own pace and phase so
+ * they don't move in lockstep.
+ */
+function Token({ color, size, top, left, index }: { color: string; size: number; top: number; left: number; index: number }) {
+    const v = useSharedValue(0);
+    const amp = 8 + (index % 3) * 3;
+    useEffect(() => {
+        v.value = withDelay(
+            index * 230,
+            withRepeat(withTiming(1, { duration: 1700 + index * 190, easing: REasing.inOut(REasing.sin) }), -1, true),
+        );
+    }, [v, index]);
+    const style = useAnimatedStyle(() => ({
+        transform: [{ translateY: (v.value * 2 - 1) * amp }],
+        opacity: 0.55 + 0.2 * Math.sin(v.value * Math.PI),
+    }));
     return (
-        <Animated.View
+        <Reanimated.View
+            pointerEvents="none"
             style={[
                 styles.token,
-                {
-                    width: size, height: size, borderRadius: size / 2,
-                    backgroundColor: color,
-                    top: top * H, left: left * W,
-                    transform: [{ translateY: anim }],
-                    opacity: anim.interpolate({ inputRange: [-12, 0, 12], outputRange: [0.55, 0.75, 0.55] }),
-                },
+                { width: size, height: size, borderRadius: size / 2, backgroundColor: color, top: top * H, left: left * W },
+                style,
             ]}
         >
             <View style={[styles.tokenInner, { width: size * 0.38, height: size * 0.38, borderRadius: size * 0.19 }]} />
-        </Animated.View>
+        </Reanimated.View>
     );
 }
 
@@ -100,9 +120,6 @@ export default function AuthIndex() {
     const busy = loading.googleLoading || loading.guestLoading;
 
 
-    // Token float anims
-    const tokenAnims = useRef(TOKENS.map(() => new Animated.Value(0))).current;
-
     // Staggered fade/slide for UI sections
     const fadeGrid = useRef(new Animated.Value(0)).current;
     const fadeDice = useRef(new Animated.Value(0)).current;
@@ -114,30 +131,7 @@ export default function AuthIndex() {
     const fadeCard = useRef(new Animated.Value(0)).current;
     const slideCard = useRef(new Animated.Value(40)).current;
 
-    // Dice pulse
-    const pulseDice = useRef(new Animated.Value(1)).current;
-
     useEffect(() => {
-        // Float tokens
-        tokenAnims.forEach((anim, i) => {
-            const amp = 8 + (i % 3) * 3;
-            const dur = 1600 + i * 200;
-            Animated.loop(
-                Animated.sequence([
-                    Animated.timing(anim, { toValue: -amp, duration: dur, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-                    Animated.timing(anim, { toValue: amp, duration: dur, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-                ])
-            ).start();
-        });
-
-        // Dice pulse
-        Animated.loop(
-            Animated.sequence([
-                Animated.timing(pulseDice, { toValue: 1.08, duration: 1200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-                Animated.timing(pulseDice, { toValue: 1, duration: 1200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-            ])
-        ).start();
-
         // Staggered entrance
         const entrance = (fade: Animated.Value, slide?: Animated.Value, delay = 0) => {
             const anims: Animated.CompositeAnimation[] = [
@@ -169,20 +163,14 @@ export default function AuthIndex() {
 
                 {/* Floating tokens */}
                 {TOKENS.map((t, i) => (
-                    <Token key={i} {...t} anim={tokenAnims[i]} />
+                    <Token key={i} {...t} index={i} />
                 ))}
 
                 {/* ── CENTER LOGO AREA ── */}
                 <View style={styles.logoArea}>
-                    {/* Dice */}
-                    <Animated.View style={{ opacity: fadeDice, transform: [{ translateY: slideDice }, { scale: pulseDice }], marginBottom: 20 }}>
-                        <View style={styles.dice}>
-                            <View style={[styles.dot, { top: 10, left: 10, backgroundColor: '#D94444' }]} />
-                            <View style={[styles.dot, { top: 10, right: 10, backgroundColor: '#3B7DD8' }]} />
-                            <View style={[styles.dot, { top: 21, left: 21, backgroundColor: 'rgba(255,255,255,0.6)' }]} />
-                            <View style={[styles.dot, { bottom: 10, left: 10, backgroundColor: '#2DAA5C' }]} />
-                            <View style={[styles.dot, { bottom: 10, right: 10, backgroundColor: '#E8A520' }]} />
-                        </View>
+                    {/* The same floating dice and pawns as the Home screen */}
+                    <Animated.View style={{ opacity: fadeDice, transform: [{ translateY: slideDice }], marginBottom: 14 }}>
+                        <FloatingDiceArt size="large" />
                     </Animated.View>
 
                     {/* Logo */}
@@ -328,23 +316,9 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         paddingHorizontal: 24,
     },
-    dice: {
-        width: 50,
-        height: 50,
-        borderRadius: 12,
-        backgroundColor: 'rgba(255, 255, 255, 0.12)',
-        borderWidth: 1.5,
-        borderColor: 'rgba(255, 255, 255, 0.22)',
-    },
-    dot: {
-        position: 'absolute',
-        width: 9,
-        height: 9,
-        borderRadius: 4.5,
-    },
     logo: {
-        fontSize: 38,
-        letterSpacing: 6,
+        fontSize: 40,
+        letterSpacing: 2,
         color: '#FFFFFF',
         textAlign: 'center',
     },
