@@ -1,52 +1,55 @@
 import { Router, type Request, type Response } from 'express';
+import { AccessToken, TrackSource } from 'livekit-server-sdk';
 
-import { verifySupabaseToken } from '../middleware/tokenVerify.middleware';
+import { games } from '../game/services';
 import { log } from '../lib/logger';
+import { rateLimit } from '../lib/rate-limit';
+import { verifySupabaseToken } from '../middleware/tokenVerify.middleware';
+import { voiceRoomName } from './livekit';
 
-type IceServer = { urls: string | string[]; username?: string; credential?: string };
+const TOKEN_TTL = '6h';
 
-const STUN_ONLY: IceServer[] = [
-    { urls: 'stun:stun.cloudflare.com:3478' },
-    { urls: 'stun:stun.l.google.com:19302' },
-];
-
-const TTL_S = 24 * 60 * 60;
-type IceConfig = { iceServers: IceServer[]; expiresAt: number };
-
-let cached: IceConfig | null = null;
-let inflight: Promise<IceConfig | null> | null = null;
-
-/** Cloudflare TURN credentials, shared by all users and refreshed before expiry. */
-async function fetchCloudflare(): Promise<IceConfig | null> {
-    const keyId = process.env.CLOUDFLARE_TURN_KEY_ID;
-    const token = process.env.CLOUDFLARE_TURN_API_TOKEN;
-    if (!keyId || !token) return null;
-
-    const res = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${keyId}/credentials/generate-ice-servers`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ttl: TTL_S }),
-    });
-    if (!res.ok) throw new Error(`Cloudflare TURN ${res.status}`);
-    const body = (await res.json()) as { iceServers?: IceServer | IceServer[] };
-    const list = Array.isArray(body.iceServers) ? body.iceServers : body.iceServers ? [body.iceServers] : [];
-    // Refresh an hour early so clients never receive nearly-expired credentials.
-    return { iceServers: [...list, ...STUN_ONLY], expiresAt: Date.now() + (TTL_S - 3600) * 1000 };
-}
-
-async function iceServers(_req: Request, res: Response) {
-    try {
-        if (!cached || cached.expiresAt <= Date.now()) {
-            inflight ??= fetchCloudflare().finally(() => { inflight = null; });
-            cached = (await inflight) ?? { iceServers: STUN_ONLY, expiresAt: Date.now() + 60 * 60 * 1000 };
-        }
-        res.status(200).json({ data: cached });
-    } catch (e) {
-        log.error('ice-servers failed, serving STUN only', { error: (e as Error)?.message });
-        res.status(200).json({ data: { iceServers: STUN_ONLY, expiresAt: Date.now() + 5 * 60 * 1000 } });
+/**
+ * POST /rtc/voice-token { roomId } → { url, token }
+ * Only members of an open voice-enabled room get a token, and it can publish the microphone only.
+ */
+async function voiceToken(req: Request, res: Response) {
+    const url = process.env.LIVEKIT_URL;
+    const apiKey = process.env.LIVEKIT_API_KEY;
+    const apiSecret = process.env.LIVEKIT_API_SECRET;
+    if (!url || !apiKey || !apiSecret) {
+        log.error('voice-token: LIVEKIT_* env not set');
+        return res.status(503).json({ message: 'Voice chat is not available right now.' });
     }
+
+    const userId = req.user!.id;
+    const roomId = String(req.body?.roomId ?? '');
+    const room = roomId ? await games.getRoom({ id: roomId }) : null;
+    if (!room || !games.isMember(room, userId)) return res.status(404).json({ message: 'Room not found.' });
+    if (!room.voiceEnabled) return res.status(403).json({ message: 'Voice chat is off for this room.' });
+    if (room.status === 'FINISHED' || room.status === 'CANCELLED') {
+        return res.status(410).json({ message: 'This room is closed.' });
+    }
+
+    const player = room.players.find(p => p.userId === userId);
+    const at = new AccessToken(apiKey, apiSecret, { identity: userId, name: player?.username ?? undefined, ttl: TOKEN_TTL });
+    at.addGrant({
+        room: voiceRoomName(room.id),
+        roomJoin: true,
+        canPublish: true,
+        canSubscribe: true,
+        canPublishData: false,
+        canPublishSources: [TrackSource.MICROPHONE],
+    });
+
+    res.status(200).json({ data: { url, token: await at.toJwt() } });
 }
 
 const rtcRouter = Router();
-rtcRouter.get('/ice-servers', verifySupabaseToken, iceServers);
+rtcRouter.post('/voice-token', verifySupabaseToken, rateLimit('voice-token', 10, 0.5), (req, res) => {
+    voiceToken(req, res).catch(e => {
+        log.error('voice-token failed', { user: req.user?.id, error: (e as Error)?.message });
+        res.status(500).json({ message: 'Could not start voice chat.' });
+    });
+});
 export default rtcRouter;

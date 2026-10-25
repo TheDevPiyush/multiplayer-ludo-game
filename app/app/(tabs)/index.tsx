@@ -58,21 +58,28 @@ function HeroArt() {
     );
 }
 
-function HeroButton({ label, icon, primary, onPress }: { label: string; icon: IconName; primary?: boolean; onPress: () => void }) {
-    const fg = primary ? '#E2364A' : '#FFFFFF';
+const HERO_BUTTONS = {
+    /** Create: white with a warm edge — the main action, full width. */
+    create: { colors: ['#FFFFFF', '#FFF1EC'] as [string, string], edge: '#E2A895', fg: '#E2364A' },
+    /** The two joins are colour-inverted twins: white-on-blue and blue-on-white. */
+    public: { colors: ['#4F46F0', '#3730D6'] as [string, string], edge: '#241C9E', fg: '#FFFFFF' },
+    private: { colors: ['#FFFFFF', '#F0EFFF'] as [string, string], edge: '#B9B4F2', fg: '#3730D6' },
+};
+
+function HeroButton({ label, icon, kind, onPress }: { label: string; icon: IconName; kind: keyof typeof HERO_BUTTONS; onPress: () => void }) {
+    const look = HERO_BUTTONS[kind];
     return (
         <GameTile
-            // Create: white on a warm edge. Join: solid indigo so it stands out on the orange card.
-            colors={primary ? ['#FFFFFF', '#FFF1EC'] : ['#4F46F0', '#3730D6']}
-            edge={primary ? '#E2A895' : '#241C9E'}
+            colors={look.colors}
+            edge={look.edge}
             radius={16}
             depth={5}
             onPress={onPress}
-            style={{ flex: primary ? 1.4 : 1 }}
+            style={kind === 'create' ? undefined : { flex: 1 }}
             contentStyle={styles.heroBtn}
         >
-            <MaterialCommunityIcons name={icon} size={18} color={fg} />
-            <Text weight="bold" style={[styles.heroBtnText, { color: fg }]}>{label}</Text>
+            <MaterialCommunityIcons name={icon} size={18} color={look.fg} />
+            <Text weight="bold" style={[styles.heroBtnText, { color: look.fg }]}>{label}</Text>
         </GameTile>
     );
 }
@@ -95,7 +102,7 @@ function ModeTile({
     return (
         <GameTile colors={colors} edge={edge} onPress={onPress} style={{ flex: 1 }} contentStyle={styles.modeTile}>
             <RNView style={styles.modeIcon}>
-                <MaterialCommunityIcons name={icon} size={28} color="#FFFFFF" />
+                <MaterialCommunityIcons name={icon} size={24} color="#FFFFFF" />
             </RNView>
             <RNView style={{ gap: 3, alignItems: 'center' }}>
                 <Text weight="bold" style={styles.modeTitle}>{title}</Text>
@@ -164,10 +171,13 @@ export default function HomeTabScreen() {
                         <Text weight="bold" style={styles.heroChipText}>ONLINE · VOICE CHAT</Text>
                     </RNView>
                     <Text weight="bold" style={styles.heroTitle}>Play with{'\n'}Friends</Text>
-                    <Text weight="medium" style={styles.heroSub}>Private rooms for 2–4 players</Text>
-                    <RNView style={styles.heroBtnRow}>
-                        <HeroButton label="Create room" icon="plus-circle" primary onPress={() => router.push('/(game)/create-room')} />
-                        <HeroButton label="Join" icon="login-variant" onPress={() => router.push('/(game)/join-room')} />
+                    <Text weight="medium" style={styles.heroSub}>Public or private rooms for 2–4 players</Text>
+                    <RNView style={styles.heroBtns}>
+                        <RNView style={styles.heroBtnRow}>
+                            <HeroButton label="Join Public" icon="earth" kind="public" onPress={() => router.push('/(game)/public-rooms')} />
+                            <HeroButton label="Join Private" icon="lock" kind="private" onPress={() => router.push('/(game)/join-room')} />
+                        </RNView>
+                        <HeroButton label="Create room" icon="plus-circle" kind="create" onPress={() => router.push('/(game)/create-room')} />
                     </RNView>
                 </GameTile>
             </Animated.View>
@@ -217,7 +227,7 @@ const styles = StyleSheet.create({
     screen: {
         paddingHorizontal: 20,
         paddingBottom: 24,
-        gap: 22,
+        gap: 18,
     },
 
     header: { flexDirection: 'row', alignItems: 'center', gap: 12 },
@@ -270,8 +280,8 @@ const styles = StyleSheet.create({
     },
     friendsBadgeText: { fontSize: 10, color: '#FFFFFF' },
 
-    hero: { padding: 22, paddingBottom: 20, minHeight: 262 },
-    heroArt: { position: 'absolute', right: 6, top: 14, width: 140, height: 130 },
+    hero: { padding: 18, paddingBottom: 16 },
+    heroArt: { position: 'absolute', right: 4, top: 6, width: 140, height: 130 },
     heroDice: { position: 'absolute', right: 26, top: 6 },
     heroPawnBack: { position: 'absolute', right: 6, top: 52 },
     heroPawnFront: { position: 'absolute', right: 70, top: 62 },
@@ -286,24 +296,25 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(255,255,255,0.22)',
     },
     heroChipText: { fontSize: 10, color: '#FFFFFF', letterSpacing: 1 },
-    heroTitle: { fontSize: 32, lineHeight: 36, color: '#FFFFFF', marginTop: 14, letterSpacing: -0.5 },
-    heroSub: { fontSize: 13, color: 'rgba(255,255,255,0.88)', marginTop: 6 },
-    heroBtnRow: { flexDirection: 'row', gap: 10, marginTop: 22 },
+    heroTitle: { fontSize: 30, lineHeight: 34, color: '#FFFFFF', marginTop: 10, letterSpacing: -0.5 },
+    heroSub: { fontSize: 13, color: 'rgba(255,255,255,0.88)', marginTop: 4 },
+    heroBtns: { gap: 10, marginTop: 16 },
+    heroBtnRow: { flexDirection: 'row', gap: 10 },
     heroBtn: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         gap: 8,
-        height: 46,
+        height: 44,
     },
     heroBtnText: { fontSize: 15 },
 
     section: { fontSize: 17, color: '#FFFFFF' },
     row: { flexDirection: 'row', gap: 14 },
-    modeTile: { height: 184, padding: 18, alignItems: 'center', justifyContent: 'center', gap: 14 },
+    modeTile: { height: 132, padding: 14, alignItems: 'center', justifyContent: 'center', gap: 10 },
     modeIcon: {
-        width: 56,
-        height: 56,
+        width: 48,
+        height: 48,
         borderRadius: 18,
         backgroundColor: 'rgba(255,255,255,0.25)',
         alignItems: 'center',
@@ -315,7 +326,7 @@ const styles = StyleSheet.create({
     stats: {
         flexDirection: 'row',
         borderRadius: 22,
-        paddingVertical: 18,
+        paddingVertical: 14,
         backgroundColor: 'rgba(10, 8, 60, 0.24)',
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.16)',

@@ -56,7 +56,7 @@ export function MicButton({ roomId }: { roomId: string }) {
     if (!voice.inRoom) {
         return (
             <RoundButton
-                icon="microphone-off"
+                icon="headset"
                 label="Join voice"
                 busy={joining}
                 onPress={async () => {
@@ -94,8 +94,11 @@ export function AudioOutputButton() {
     const routes = voice.availableRoutes.length > 0 ? voice.availableRoutes : (['SPEAKER_PHONE', 'EARPIECE'] as AudioRoute[]);
     const current = ROUTES[voice.audioRoute] ?? ROUTES.SPEAKER_PHONE;
 
-    const open = () =>
+    const open = () => {
+        if (voice.showSystemRoutePicker) return voice.showSystemRoutePicker();
+        void voice.refreshRoutes();
         anchor.current?.measureInWindow((x, y, w, h) => setMenu({ top: y + h + 8, right: Math.max(12, width - (x + w)) }));
+    };
 
     return (
         <RNView ref={anchor} collapsable={false}>

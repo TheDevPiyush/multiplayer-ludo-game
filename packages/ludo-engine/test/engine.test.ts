@@ -262,3 +262,53 @@ describe('simulation', () => {
         expect(spread(true)).toBeGreaterThan(spread(false));
     });
 });
+
+describe('seating', async () => {
+    const { nextColor, pickColor, applyColorChanges, isColor } = await import('../src');
+    const seat = (id: string, color: Color) => ({ id, color });
+
+    test('joiners get the opposite corner in 2-player games, the first free color otherwise', () => {
+        expect(nextColor(2, [])).toBe('RED');
+        expect(nextColor(2, [seat('a', 'BLUE')])).toBe('YELLOW');
+        expect(nextColor(3, [seat('a', 'YELLOW')])).toBe('RED');
+        expect(nextColor(4, [seat('a', 'RED'), seat('b', 'BLUE'), seat('c', 'GREEN')])).toBe('YELLOW');
+        expect(nextColor(4, [seat('a', 'RED'), seat('b', 'BLUE'), seat('c', 'GREEN'), seat('d', 'YELLOW')])).toBeNull();
+    });
+
+    test('a color held by someone else cannot be picked; a free one moves only you', () => {
+        const seats = [seat('a', 'RED'), seat('b', 'BLUE'), seat('c', 'GREEN')];
+        expect(pickColor(4, seats, 'a', 'BLUE')).toBeNull();
+        expect(pickColor(4, seats, 'a', 'RED')).toEqual([]);
+        expect(pickColor(4, seats, 'a', 'YELLOW')).toEqual([{ id: 'a', from: 'RED', to: 'YELLOW' }]);
+        expect(pickColor(4, seats, 'nobody', 'YELLOW')).toBeNull();
+    });
+
+    test('2-player games stay in opposite corners: the other player follows', () => {
+        const seats = [seat('a', 'RED'), seat('b', 'GREEN')];
+        expect(pickColor(2, seats, 'a', 'GREEN')).toBeNull();
+        const changes = pickColor(2, seats, 'a', 'BLUE')!;
+        const after = applyColorChanges(seats, changes);
+        expect(after).toEqual([seat('a', 'BLUE'), seat('b', 'YELLOW')]);
+        // Alone in the room, any corner is fine.
+        expect(pickColor(2, [seat('a', 'RED')], 'a', 'YELLOW')).toEqual([{ id: 'a', from: 'RED', to: 'YELLOW' }]);
+    });
+
+    test('changes come in an order that never puts two seats on one color', () => {
+        // A drifted 2-player room (adjacent corners): a leaves RED for GREEN, b follows into RED.
+        const start = [seat('a', 'RED'), seat('b', 'BLUE')];
+        const changes = pickColor(2, start, 'a', 'GREEN')!;
+        expect(changes.map(c => c.id)).toEqual(['a', 'b']);
+        let state = start;
+        for (const c of changes) {
+            state = applyColorChanges(state, [c]);
+            expect(new Set(state.map(s => s.color)).size).toBe(state.length);
+        }
+        expect(state).toEqual([seat('a', 'GREEN'), seat('b', 'RED')]);
+    });
+
+    test('isColor only accepts the four colors', () => {
+        expect(isColor('RED')).toBe(true);
+        expect(isColor('red')).toBe(false);
+        expect(isColor(undefined)).toBe(false);
+    });
+});

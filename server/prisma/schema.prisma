@@ -59,6 +59,8 @@ model User {
   providerId String?
   totalWins  Int      @default(0)
   totalGames Int      @default(0)
+  /// Last username change; changes are limited to one a week (the first is free).
+  usernameChangedAt DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -92,6 +94,8 @@ model GameRoom {
   /// Engine snapshot (@ludo/engine GameState) — written in batches, not per move.
   gameState    Json?
   stateVersion Int   @default(0)
+  /// Every move of a finished game, compact ([color, token, dice, from, to, tenths of s]) — see MoveEntry.
+  moveLog      Json?
 
   createdById String
   createdBy   User   @relation("RoomCreator", fields: [createdById], references: [id])
@@ -131,6 +135,7 @@ model GamePlayer {
   @@index([userId, joinedAt])
 }
 
+/// Legacy: one row per move, no longer written (finished games keep `GameRoom.moveLog`).
 model GameMove {
   id           String     @id @default(uuid())
   gameRoomId   String

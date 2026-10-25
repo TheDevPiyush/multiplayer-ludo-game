@@ -6,14 +6,20 @@ import authRouter from './auth/auth.routes.ts';
 import gameRouter from './game/game.routes.ts';
 import { games } from './game/services.ts';
 import { log, requestLogger } from './lib/logger.ts';
+import { rateLimit } from './lib/rate-limit.ts';
 import linksRouter from './links/links.routes.ts';
 import rtcRouter from './rtc/rtc.routes.ts';
+import { startNotificationCleanup } from './social/social.controller.ts';
 import socialRouter from './social/social.routes.ts';
 import { attachSocketServer } from './socket/socket-server.ts';
 
 const app = express();
+// One proxy hop (tunnel / load balancer) in front, so req.ip is the client's address.
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS ?? 1));
 
 app.use(requestLogger);
+// Per IP and generous: many mobile users can share one carrier IP. Per-user limits sit behind auth.
+app.use(rateLimit('ip', 300, 50));
 app.use(express.json({ limit: '16kb' }));
 
 app.get('/', (_: Request, res: Response) => {
@@ -37,6 +43,7 @@ const PORT = process.env.PORT || 8080;
 httpServer.listen(PORT, () => {
     log.info(`HTTP + Socket.io server running at :${PORT}`);
 });
+startNotificationCleanup();
 
 // Write buffered game state before the process exits (deploys, restarts).
 let shuttingDown = false;

@@ -18,7 +18,10 @@
       "bundleIdentifier": "com.thedevpiyush.simpleludo",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Simple Ludo uses your microphone for in-game voice chat with other players.",
-        "UIBackgroundModes": ["voip"]
+        "UIBackgroundModes": [
+          "audio"
+        ],
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -44,10 +47,25 @@
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "@livekit/react-native-expo-plugin",
+        {
+          "android": {
+            "audioType": "communication"
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "cd174431-c439-4211-8ddf-be4ac384ce9b"
+      }
+    },
+    "owner": "shadow-developer"
   }
 }

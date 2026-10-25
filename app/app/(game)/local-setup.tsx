@@ -1,7 +1,7 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { seatColors, type BotLevel, type Color } from '@ludo/engine';
+import { applyColorChanges, COLORS, pickColor, seatColors, type BotLevel, type Color } from '@ludo/engine';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import {
     Pressable,
     ScrollView,
@@ -14,6 +14,7 @@ import { Menu } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { GlassPanel } from '@/components/GlassPanel';
+import { ColorPicker, type ColorOption } from '@/components/ludo/ColorPicker';
 import { COLOR_HEX } from '@/components/ludo/geometry';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
@@ -58,8 +59,34 @@ export default function LocalSetupScreen() {
     const [diceLuck, setDiceLuck] = useState<DiceLuck>('easy');
     const [luckMenuOpen, setLuckMenuOpen] = useState(false);
 
-    const colors = useMemo(() => seatColors(count), [count]);
+    /** Seat i plays colors[i]. A new player count starts from the standard seating again. */
+    const [colors, setColors] = useState<Color[]>(() => seatColors(count));
     const active = seats.slice(0, count);
+
+    const changeCount = (n: number) => {
+        setCount(n);
+        setColors(seatColors(n));
+    };
+
+    /**
+     * Same rules as online lobbies (2-player games stay in opposite corners), except
+     * that every seat is on this device, so a color held by another seat is swapped.
+     */
+    const pickSeatColor = (index: number, color: Color) =>
+        setColors(prev => {
+            const seated = prev.map((c, i) => ({ id: String(i), color: c }));
+            const changes = pickColor(count, seated, String(index), color);
+            if (changes) return applyColorChanges(seated, changes).map(s => s.color);
+            const other = prev.indexOf(color);
+            return prev.map((c, i) => (i === index ? color : i === other ? prev[index]! : c));
+        });
+
+    const seatColorOptions = (index: number): ColorOption[] =>
+        COLORS.map(color => {
+            const holder = colors.indexOf(color);
+            if (holder === index) return { color, status: 'mine' };
+            return { color, status: holder === -1 ? 'free' : 'swap' };
+        });
     const humans = active.filter(s => s.kind === 'human').length;
 
     const updateSeat = (index: number, patch: Partial<SeatDraft>) =>
@@ -95,7 +122,7 @@ export default function LocalSetupScreen() {
                         {[2, 3, 4].map(n => (
                             <TouchableOpacity
                                 key={n}
-                                onPress={() => setCount(n)}
+                                onPress={() => changeCount(n)}
                                 activeOpacity={0.85}
                                 style={[styles.chip, count === n && styles.chipActive]}
                             >
@@ -111,43 +138,51 @@ export default function LocalSetupScreen() {
                         const color = colors[i]!;
                         const hex = COLOR_HEX[color];
                         return (
-                            <RNView key={color} style={styles.seatRow}>
-                                <RNView style={[styles.seatAvatar, { backgroundColor: hex }]}>
-                                    <FontAwesome name={seat.kind === 'bot' ? 'laptop' : 'user'} size={13} color="#fff" />
-                                </RNView>
-                                <TextInput
-                                    value={seat.name ?? ''}
-                                    onChangeText={t => updateSeat(i, { name: t })}
-                                    placeholder={defaultName(mode, seat, color, i)}
-                                    placeholderTextColor={palette.mutedText}
-                                    maxLength={14}
-                                    style={styles.seatName}
-                                />
-                                {seat.kind === 'bot' && (
-                                    <TouchableOpacity
-                                        onPress={() => updateSeat(i, { level: LEVELS[(LEVELS.indexOf(seat.level) + 1) % LEVELS.length]! })}
-                                        style={styles.levelChip}
-                                        activeOpacity={0.8}
-                                    >
-                                        <Text weight="semiBold" style={styles.levelText}>{LEVEL_LABEL[seat.level]}</Text>
-                                    </TouchableOpacity>
-                                )}
-                                <RNView style={styles.toggle}>
-                                    {(['human', 'bot'] as const).map(kind => (
+                            <RNView key={`seat-${i}`} style={styles.seatBlock}>
+                                <RNView style={styles.seatRow}>
+                                    <RNView style={[styles.seatAvatar, { backgroundColor: hex }]}>
+                                        <FontAwesome name={seat.kind === 'bot' ? 'laptop' : 'user'} size={13} color="#fff" />
+                                    </RNView>
+                                    <TextInput
+                                        value={seat.name ?? ''}
+                                        onChangeText={t => updateSeat(i, { name: t })}
+                                        placeholder={defaultName(mode, seat, color, i)}
+                                        placeholderTextColor={palette.mutedText}
+                                        maxLength={14}
+                                        style={styles.seatName}
+                                    />
+                                    {seat.kind === 'bot' && (
                                         <TouchableOpacity
-                                            key={kind}
-                                            onPress={() => updateSeat(i, { kind, name: null })}
-                                            style={[styles.toggleOpt, seat.kind === kind && { backgroundColor: hex }]}
-                                            activeOpacity={0.85}
+                                            onPress={() => updateSeat(i, { level: LEVELS[(LEVELS.indexOf(seat.level) + 1) % LEVELS.length]! })}
+                                            style={styles.levelChip}
+                                            activeOpacity={0.8}
                                         >
-                                            <FontAwesome
-                                                name={kind === 'bot' ? 'laptop' : 'user'}
-                                                size={12}
-                                                color={seat.kind === kind ? '#fff' : palette.mutedText}
-                                            />
+                                            <Text weight="semiBold" style={styles.levelText}>{LEVEL_LABEL[seat.level]}</Text>
                                         </TouchableOpacity>
-                                    ))}
+                                    )}
+                                    <RNView style={styles.toggle}>
+                                        {(['human', 'bot'] as const).map(kind => (
+                                            <TouchableOpacity
+                                                key={kind}
+                                                onPress={() => updateSeat(i, { kind, name: null })}
+                                                style={[styles.toggleOpt, seat.kind === kind && { backgroundColor: hex }]}
+                                                activeOpacity={0.85}
+                                            >
+                                                <FontAwesome
+                                                    name={kind === 'bot' ? 'laptop' : 'user'}
+                                                    size={12}
+                                                    color={seat.kind === kind ? '#fff' : palette.mutedText}
+                                                />
+                                            </TouchableOpacity>
+                                        ))}
+                                    </RNView>
                                 </RNView>
+                                <ColorPicker
+                                    options={seatColorOptions(i)}
+                                    onPick={c => pickSeatColor(i, c)}
+                                    size={24}
+                                    showLabels={false}
+                                />
                             </RNView>
                         );
                     })}
@@ -250,6 +285,7 @@ const styles = StyleSheet.create({
     chipActive: { backgroundColor: 'rgba(255,255,255,0.95)', borderColor: 'transparent' },
     chipText: { fontSize: 17, color: palette.mutedText },
     chipTextActive: { color: '#1A1048' },
+    seatBlock: { gap: 10 },
     seatRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     seatAvatar: {
         width: 34,

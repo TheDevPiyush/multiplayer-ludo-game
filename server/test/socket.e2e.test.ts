@@ -14,7 +14,7 @@ const { GameService } = await import('../game/game-service');
 const { attachSocketServer, getIO } = await import('../socket/socket-server');
 
 const db: Persistence = {
-    async createRoom() {}, async addPlayer() {}, async removePlayer() {},
+    async createRoom() {}, async addPlayer() {}, async removePlayer() {}, async setPlayerColors() {},
     async saveRoom() {}, async finishGame() {},
     async loadRoom() { return null; }, async codeExists() { return false; },
     async getProfile(id) { return { username: id, avatarUrl: null }; },
@@ -117,4 +117,22 @@ test('a briefly dropped connection is recovered and stays usable (app minimised)
     expect(s.connected).toBe(true); // used to be kicked: recovered sockets had no user
     const state = await ask(s, 'room:state', { roomId: room.id });
     expect(state.ok).toBe(true);
+});
+
+test('lobby color picks reach everyone live; a taken color is refused', async () => {
+    const room = await games.createRoom('carl', { maxPlayers: 4 });
+    await games.joinRoom('dina', room.gameCode);
+    const [c, d] = await Promise.all([client('carl'), client('dina')]);
+    for (const s of [c, d]) expect((await ask(s, 'room:join', { roomId: room.id, gameCode: room.gameCode })).ok).toBe(true);
+
+    const seenByCarl: RoomSync[] = [];
+    c.on('room:sync', (s: RoomSync) => seenByCarl.push(s));
+
+    const pick = await ask(d, 'room:color', { gameCode: room.gameCode, color: 'YELLOW' });
+    expect(pick).toEqual({ ok: true, data: { color: 'YELLOW' } });
+    expect((await ask(c, 'room:color', { gameCode: room.gameCode, color: 'YELLOW' })).error).toBe('That color is taken.');
+
+    await Bun.sleep(50);
+    const change = seenByCarl.find(s => s.events.some(e => e.type === 'COLORS_CHANGED'));
+    expect(change?.room.players.find(p => p.userId === 'dina')?.color).toBe('YELLOW');
 });

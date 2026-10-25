@@ -1,4 +1,5 @@
 import type { BackendUser } from '@/apis/auth-api';
+import { apiFetch, type Result } from './http';
 
 export type { BackendUser };
 
@@ -21,58 +22,6 @@ export type GameHistoryEntry = {
         rank: number | null;
     }[];
 };
-
-type Result<T> =
-    | { ok: true; data: T }
-    | { ok: false; error: string; status?: number };
-
-function apiBaseUrl(): string | null {
-    const url = process.env.EXPO_PUBLIC_API_URL?.trim();
-    if (!url) return null;
-    return url.replace(/\/$/, '');
-}
-
-async function apiFetch<T>(
-    accessToken: string,
-    path: string,
-    init?: RequestInit,
-): Promise<Result<T>> {
-    const base = apiBaseUrl();
-    if (!base) return { ok: false, error: 'EXPO_PUBLIC_API_URL is not set.' };
-
-    try {
-        const res = await fetch(`${base}${path}`, {
-            ...init,
-            headers: {
-                Authorization: `Bearer ${accessToken}`,
-                Accept: 'application/json',
-                'Content-Type': 'application/json',
-                ...(init?.headers ?? {}),
-            },
-        });
-
-        const text = await res.text();
-        let body: unknown;
-        try {
-            body = text ? JSON.parse(text) : null;
-        } catch {
-            body = null;
-        }
-
-        if (!res.ok) {
-            const message =
-                typeof body === 'object' && body !== null && 'message' in body &&
-                typeof (body as { message: unknown }).message === 'string'
-                    ? (body as { message: string }).message
-                    : text || `HTTP ${res.status}`;
-            return { ok: false, error: message, status: res.status };
-        }
-
-        return { ok: true, data: body as T };
-    } catch (e) {
-        return { ok: false, error: e instanceof Error ? e.message : 'Network error.' };
-    }
-}
 
 export async function fetchMe(accessToken: string): Promise<Result<{ user: BackendUser }>> {
     return apiFetch(accessToken, '/auth/me');

@@ -12,6 +12,8 @@ if (Platform.OS === 'web') {
 
 const redirectTo = makeRedirectUri({ scheme: 'simpleludo', path: 'auth/callback' })
 
+const errorMessage = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong. Please try again.');
+
 type DialogState = {
     visible: boolean;
     title: string;
@@ -90,6 +92,8 @@ export function useAuth() {
                 }
             }
 
+        } catch (e) {
+            showDialog('Google sign-in failed', errorMessage(e));
         } finally {
             setLoading(prev => ({ ...prev, googleLoading: false }))
         }
@@ -110,6 +114,9 @@ export function useAuth() {
                 return false;
             }
             return true;
+        } catch (e) {
+            showDialog('Could not send code', errorMessage(e));
+            return false;
         } finally {
             setLoading(prev => ({ ...prev, otpLoading: false }));
         }
@@ -131,6 +138,9 @@ export function useAuth() {
             const reg = await registerUserAfterOAuth(data.session.access_token);
             if (reg.ok) await AsyncStorage.setItem('user', JSON.stringify(reg.data));
             return true;
+        } catch (e) {
+            showDialog('Could not verify code', errorMessage(e));
+            return false;
         } finally {
             setLoading(prev => ({ ...prev, otpLoading: false }));
         }

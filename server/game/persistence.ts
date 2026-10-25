@@ -2,7 +2,7 @@ import { createGame, type Color, type GameState } from '@ludo/engine';
 
 import { prisma } from '../lib/prisma';
 import { redis } from '../lib/redis';
-import type { LivePlayer, LiveRoom, RoomStatus } from './live-room';
+import type { LivePlayer, LiveRoom, MoveEntry, RoomStatus } from './live-room';
 
 export interface Profile {
     username: string;
@@ -17,7 +17,9 @@ export interface Persistence {
     createRoom(room: LiveRoom): Promise<void>;
     addPlayer(room: LiveRoom, player: LivePlayer): Promise<void>;
     removePlayer(room: LiveRoom, player: LivePlayer): Promise<void>;
-    /** Status / timestamps / game snapshot + any buffered moves. */
+    /** Lobby color changes, applied in the given order (each step keeps colors unique). */
+    setPlayerColors(room: LiveRoom, changes: { playerId: string; color: Color }[]): Promise<void>;
+    /** Status / timestamps / game snapshot. */
     saveRoom(room: LiveRoom): Promise<void>;
     /** One transaction: final state, ranks, move log, user stats. */
     finishGame(room: LiveRoom): Promise<void>;
@@ -29,6 +31,8 @@ export interface Persistence {
 /** Fast restart-safe copy of live rooms. Optional (REDIS_URL). */
 export interface SnapshotStore {
     save(room: LiveRoom): Promise<void>;
+    /** Lets `load({ gameCode })` find the room; written once, when the game starts. */
+    index(room: LiveRoom): Promise<void>;
     load(key: { id?: string; gameCode?: string }): Promise<LiveRoom | null>;
     delete(room: LiveRoom): Promise<void>;
 }
@@ -93,7 +97,8 @@ function fromDb(db: DbRoom): LiveRoom {
         version: db.stateVersion,
         turnEndsAt: null,
         timeouts: {},
-        pendingMoves: [],
+        // Only written at the end of a game: after a restart without Redis the log starts over.
+        moveLog: (db.moveLog as MoveEntry[] | null) ?? [],
     };
 }
 
@@ -109,17 +114,6 @@ function roomColumns(room: LiveRoom) {
         gameState: (g ?? undefined) as object | undefined,
         stateVersion: room.version,
     };
-}
-
-function takeMoves(room: LiveRoom) {
-    const moves = room.pendingMoves;
-    room.pendingMoves = [];
-    return moves.map(m => ({ ...m, gameRoomId: room.id, createdAt: new Date(m.createdAt) }));
-}
-
-/** Put moves back for the next flush after a failed write. */
-function restoreMoves(room: LiveRoom, moves: ReturnType<typeof takeMoves>) {
-    room.pendingMoves = [...moves.map(({ gameRoomId: _, ...m }) => ({ ...m, createdAt: m.createdAt.toISOString() })), ...room.pendingMoves];
 }
 
 export const prismaPersistence: Persistence = {
@@ -164,22 +158,19 @@ export const prismaPersistence: Persistence = {
         await prisma.gamePlayer.deleteMany({ where: { id: player.id } });
     },
 
+    async setPlayerColors(_room, changes) {
+        // A transaction runs its statements in order, so the per-step uniqueness holds.
+        await prisma.$transaction(
+            changes.map(c => prisma.gamePlayer.update({ where: { id: c.playerId }, data: { color: c.color } })),
+        );
+    },
+
     async saveRoom(room) {
-        const moves = takeMoves(room);
-        try {
-            await prisma.$transaction([
-                prisma.gameRoom.update({ where: { id: room.id }, data: roomColumns(room) }),
-                ...(moves.length ? [prisma.gameMove.createMany({ data: moves })] : []),
-            ]);
-        } catch (e) {
-            restoreMoves(room, moves);
-            throw e;
-        }
+        await prisma.gameRoom.update({ where: { id: room.id }, data: roomColumns(room) });
     },
 
     async finishGame(room) {
         const g = room.game!;
-        const moves = takeMoves(room);
         const playerUpdates = room.players.map(p => {
             const ps = g.players.find(x => x.color === p.color);
             return prisma.gamePlayer.update({
@@ -196,17 +187,11 @@ export const prismaPersistence: Persistence = {
                 },
             }),
         );
-        try {
-            await prisma.$transaction([
-                prisma.gameRoom.update({ where: { id: room.id }, data: roomColumns(room) }),
-                ...playerUpdates,
-                ...(moves.length ? [prisma.gameMove.createMany({ data: moves })] : []),
-                ...statUpdates,
-            ]);
-        } catch (e) {
-            restoreMoves(room, moves);
-            throw e;
-        }
+        await prisma.$transaction([
+            prisma.gameRoom.update({ where: { id: room.id }, data: { ...roomColumns(room), moveLog: room.moveLog } }),
+            ...playerUpdates,
+            ...statUpdates,
+        ]);
     },
 
     async loadRoom(key) {
@@ -234,6 +219,8 @@ export const redisSnapshots: SnapshotStore | null = redis
     ? {
         async save(room) {
             await redis!.set(`ludo:room:${room.id}`, JSON.stringify(room), 'EX', SNAPSHOT_TTL_S);
+        },
+        async index(room) {
             await redis!.set(`ludo:code:${room.gameCode}`, room.id, 'EX', SNAPSHOT_TTL_S);
         },
         async load(key) {

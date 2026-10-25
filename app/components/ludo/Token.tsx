@@ -90,15 +90,7 @@ function pathPoints(color: string, from: number, to: number, final: Point): Poin
     return pts;
 }
 
-export function Token({
-    color,
-    coord,
-    pos,
-    tokenIndex,
-    onPress,
-    canMove,
-    captured,
-}: {
+type TokenProps = {
     color: string;
     /** Target pixel position (cell centre plus any stack offset). */
     coord: Point;
@@ -108,7 +100,23 @@ export function Token({
     onPress?: (i: number) => void;
     canMove: boolean;
     captured: boolean;
-}) {
+};
+
+/** Re-render only when something visible changed (`coord` is a new object on every room update). */
+function sameToken(a: TokenProps, b: TokenProps): boolean {
+    return a.coord.x === b.coord.x && a.coord.y === b.coord.y && a.pos === b.pos && a.color === b.color
+        && a.tokenIndex === b.tokenIndex && a.canMove === b.canMove && a.captured === b.captured && a.onPress === b.onPress;
+}
+
+export const Token = memo(function Token({
+    color,
+    coord,
+    pos,
+    tokenIndex,
+    onPress,
+    canMove,
+    captured,
+}: TokenProps) {
     const x = useSharedValue(coord.x);
     const y = useSharedValue(coord.y);
     const lift = useSharedValue(0);
@@ -218,7 +226,7 @@ export function Token({
             </Animated.View>
         </>
     );
-}
+}, sameToken);
 
 const styles = StyleSheet.create({
     pawn: {

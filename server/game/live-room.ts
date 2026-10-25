@@ -2,7 +2,6 @@ import { getPlayer, legalMoves, type Color, type GameEvent, type GameState } fro
 
 export type RoomStatus = 'WAITING' | 'PLAYING' | 'FINISHED' | 'CANCELLED';
 export type PresenceStatus = 'CONNECTED' | 'DISCONNECTED' | 'LEFT';
-export type MoveActionType = 'MOVE' | 'CAPTURE' | 'ENTER_HOME' | 'SAFE' | 'WIN';
 
 export interface LivePlayer {
     id: string;
@@ -16,15 +15,11 @@ export interface LivePlayer {
     avatarUrl: string | null;
 }
 
-export interface MoveRecord {
-    userId: string;
-    tokenIndex: number;
-    diceValue: number;
-    fromPosition: number;
-    toPosition: number;
-    actionType: MoveActionType;
-    createdAt: string;
-}
+/**
+ * One move, compact (a full game is a few hundred of these):
+ * [color, token, dice, from, to, tenths of a second since the game started].
+ */
+export type MoveEntry = [color: Color, token: number, dice: number, from: number, to: number, at: number];
 
 /** Everything about a room that is live in memory. JSON-serializable (Redis snapshot). */
 export interface LiveRoom {
@@ -47,8 +42,8 @@ export interface LiveRoom {
     turnEndsAt: number | null;
     /** Consecutive timed-out turns per user — 3+ switches them to autopilot. */
     timeouts: Record<string, number>;
-    /** Moves not yet written to Postgres. */
-    pendingMoves: MoveRecord[];
+    /** Every move this game, written to Postgres with the final result. */
+    moveLog: MoveEntry[];
 }
 
 /** Shape the app renders (kept compatible with the previous REST payload). */
@@ -72,6 +67,8 @@ export function toRoomDto(room: LiveRoom) {
         phase: g?.phase ?? null,
         movableTokens: g ? legalMoves(g) : [],
         turnEndsAt: room.turnEndsAt,
+        /** Time left on the turn when this snapshot was made; clients time from this, not their own clock. */
+        turnMsLeft: room.turnEndsAt === null ? null : Math.max(0, room.turnEndsAt - Date.now()),
         players: room.players.map(p => {
             const ps = g ? getPlayer(g, p.color) : undefined;
             return {
@@ -97,6 +94,8 @@ export type RoomDto = ReturnType<typeof toRoomDto>;
 /** Non-engine events the lobby cares about. */
 export type RoomEvent =
     | { type: 'PLAYER_JOINED'; userId: string }
+    /** Lobby colors moved; `byUserId` picked, anyone else in `changes` followed (2-player corners). */
+    | { type: 'COLORS_CHANGED'; byUserId: string; changes: { userId: string; from: Color; to: Color }[] }
     | { type: 'PLAYER_LEFT'; userId: string }
     | { type: 'STARTED' }
     | { type: 'CANCELLED'; reason: string };

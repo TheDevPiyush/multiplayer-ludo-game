@@ -8,28 +8,25 @@ function fakeDb() {
     const writes: string[] = [];
     const rooms = new Map<string, LiveRoom>();
     let movesWritten = 0;
+    let loads = 0;
     const db: Persistence = {
         async createRoom(room) { writes.push('createRoom'); rooms.set(room.id, structuredClone(room)); },
         async addPlayer() { writes.push('addPlayer'); },
         async removePlayer() { writes.push('removePlayer'); },
-        async saveRoom(room) {
-            writes.push('saveRoom');
-            movesWritten += room.pendingMoves.length;
-            room.pendingMoves = [];
-        },
+        async setPlayerColors() { writes.push('setPlayerColors'); },
+        async saveRoom() { writes.push('saveRoom'); },
         async finishGame(room) {
             writes.push('finishGame');
-            movesWritten += room.pendingMoves.length;
-            room.pendingMoves = [];
+            movesWritten = room.moveLog.length;
         },
-        async loadRoom() { return null; },
+        async loadRoom() { loads++; return null; },
         async codeExists() { return false; },
         async getProfile(userId) { return { username: `user_${userId}`, avatarUrl: null }; },
     };
-    return { db, writes, moves: () => movesWritten };
+    return { db, writes, moves: () => movesWritten, loads: () => loads };
 }
 
-const fast: GameServiceOptions = {
+const fast: Partial<GameServiceOptions> = {
     turnMs: 5,
     afkTurnMs: 2,
     autoDelayMs: 1,
@@ -98,6 +95,20 @@ describe('lobby', () => {
         await expect(games.joinRoom('c', room.gameCode)).rejects.toThrow(ServiceError);
     });
 
+    test('public room list: only public, waiting rooms with a free seat', async () => {
+        const { games } = setup();
+        const open = await games.createRoom('a', { maxPlayers: 2, isPrivate: false });
+        const priv = await games.createRoom('b', { maxPlayers: 2, isPrivate: true });
+        const full = await games.createRoom('c', { maxPlayers: 2, isPrivate: false });
+        await games.joinRoom('d', full.gameCode);
+        const started = await games.createRoom('e', { maxPlayers: 3, isPrivate: false });
+        await games.joinRoom('f', started.gameCode);
+        await games.startGame('e', started.gameCode);
+
+        expect(games.openPublicRooms().map(r => r.gameCode)).toEqual([open.gameCode]);
+        expect(priv.isPrivate).toBe(true);
+    });
+
     test('finished or cancelled rooms cannot be joined, even by their own players', async () => {
         const { games } = setup();
         const done = await games.createRoom('a', { maxPlayers: 2 });
@@ -163,6 +174,166 @@ describe('gameplay', () => {
         // create + 3 joins + start + one final transaction.
         expect(writes).toEqual(['createRoom', 'addPlayer', 'addPlayer', 'addPlayer', 'saveRoom', 'finishGame']);
         expect(moves()).toBeGreaterThan(20);
+        // Compact entries: [color, token, dice, from, to, at].
+        const [color, token, dice, from, to] = room.moveLog[0]!;
+        expect(['RED', 'BLUE', 'GREEN', 'YELLOW']).toContain(color);
+        expect(token).toBeGreaterThanOrEqual(0);
+        expect(dice).toBeGreaterThanOrEqual(1);
+        expect(to).toBeGreaterThan(from);
         await games.stop();
     }, 30_000);
+});
+
+describe('nobody watching', () => {
+    async function twoPlayerGame(online: { count: number }) {
+        const t = setup({ ...fast, unwatchedPauseMs: 30, abandonMs: 150 });
+        t.games.start(() => online.count);
+        const room = await t.games.createRoom('a', { maxPlayers: 2 });
+        await t.games.joinRoom('b', room.gameCode);
+        await t.games.startGame('a', room.gameCode);
+        return { ...t, room };
+    }
+
+    test('autopilot stops once everyone has been gone a while, and a returning player resumes it', async () => {
+        const online = { count: 0 };
+        const { games, room } = await twoPlayerGame(online);
+
+        await Bun.sleep(80);
+        expect(games.stats().paused).toBe(1);
+        expect(room.turnEndsAt).toBeNull();
+        const frozenAt = room.version;
+        await Bun.sleep(40);
+        expect(room.version).toBe(frozenAt);
+
+        online.count = 1;
+        games.setPresence(room, 'a', 'CONNECTED');
+        expect(games.stats().paused).toBe(0);
+        expect(room.version).toBeGreaterThan(frozenAt);
+        await Bun.sleep(20);
+        expect(room.status).toBe('PLAYING');
+        await games.stop();
+    });
+
+    test('an abandoned game ends as cancelled without a final result or stats', async () => {
+        const online = { count: 0 };
+        const { games, room, writes, syncs } = await twoPlayerGame(online);
+        const closed: string[] = [];
+        games.onRoomClosed = r => closed.push(r.status);
+
+        await Bun.sleep(200);
+        await games.flush();
+        await Bun.sleep(5);
+
+        expect(room.status).toBe('CANCELLED');
+        expect(room.endedAt).not.toBeNull();
+        expect(writes).not.toContain('finishGame');
+        expect(writes.at(-1)).toBe('saveRoom');
+        expect(closed).toEqual(['CANCELLED']);
+        expect(syncs.at(-1)!.events).toEqual([{ type: 'CANCELLED', reason: 'abandoned' }]);
+        await games.stop();
+    });
+});
+
+describe('lookups', () => {
+    test('a room that does not exist is only looked up once in a while', async () => {
+        const { games, loads } = setup();
+        expect(await games.getRoom({ gameCode: 'NOPE23' })).toBeNull();
+        expect(await games.getRoom({ gameCode: 'NOPE23' })).toBeNull();
+        expect(await games.getRoom({ id: 'missing-id' })).toBeNull();
+        expect(loads()).toBe(2);
+    });
+});
+
+describe('RateLimiter', () => {
+    test('allows a burst, then refills over time', async () => {
+        const { RateLimiter } = await import('../lib/rate-limit');
+        const limiter = new RateLimiter(2, 20);
+        expect(limiter.take('u')).toBe(true);
+        expect(limiter.take('u')).toBe(true);
+        expect(limiter.take('u')).toBe(false);
+        expect(limiter.take('other')).toBe(true);
+        await Bun.sleep(60);
+        expect(limiter.take('u')).toBe(true);
+    });
+});
+
+describe('lobby colors', () => {
+    const colorOf = (room: LiveRoom, user: string) => room.players.find(p => p.userId === user)?.color;
+    const unique = (room: LiveRoom) => new Set(room.players.map(p => p.color)).size === room.players.length;
+
+    test('a picked color is locked for everyone else and freed when its holder moves or leaves', async () => {
+        const { games, syncs } = setup();
+        const room = await games.createRoom('a', { maxPlayers: 4 });
+        for (const u of ['b', 'c']) await games.joinRoom(u, room.gameCode);
+        expect(room.players.map(p => p.color)).toEqual(['RED', 'BLUE', 'GREEN']);
+
+        await games.chooseColor('b', room.gameCode, 'YELLOW');
+        expect(colorOf(room, 'b')).toBe('YELLOW');
+        expect(syncs.at(-1)!.events).toEqual([{
+            type: 'COLORS_CHANGED', byUserId: 'b', changes: [{ userId: 'b', from: 'BLUE', to: 'YELLOW' }],
+        }]);
+        expect(syncs.at(-1)!.room.players.find(p => p.userId === 'b')!.color).toBe('YELLOW');
+
+        // Taken → refused; the color b just released → fine.
+        await expect(games.chooseColor('c', room.gameCode, 'YELLOW')).rejects.toMatchObject({ status: 409 });
+        await games.chooseColor('c', room.gameCode, 'BLUE');
+        expect(colorOf(room, 'c')).toBe('BLUE');
+
+        // Leaving releases the color; the next joiner can have it.
+        await games.leaveRoom('b', room.gameCode);
+        await games.chooseColor('c', room.gameCode, 'YELLOW');
+        await games.joinRoom('d', room.gameCode);
+        expect(unique(room)).toBe(true);
+        expect(room.players).toHaveLength(3);
+        await games.stop();
+    });
+
+    test('two players racing for the same color: exactly one gets it', async () => {
+        const { games } = setup();
+        const room = await games.createRoom('a', { maxPlayers: 4 });
+        await games.joinRoom('b', room.gameCode);
+        const results = await Promise.allSettled([
+            games.chooseColor('a', room.gameCode, 'YELLOW'),
+            games.chooseColor('b', room.gameCode, 'YELLOW'),
+        ]);
+        expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+        expect(results.filter(r => r.status === 'rejected')).toHaveLength(1);
+        expect(unique(room)).toBe(true);
+        await games.stop();
+    });
+
+    test('2-player rooms stay in opposite corners', async () => {
+        const { games } = setup();
+        const room = await games.createRoom('a', { maxPlayers: 2 });
+        await games.chooseColor('a', room.gameCode, 'BLUE');
+        await games.joinRoom('b', room.gameCode);
+        expect(colorOf(room, 'b')).toBe('YELLOW');
+
+        await games.chooseColor('b', room.gameCode, 'RED');
+        expect([colorOf(room, 'a'), colorOf(room, 'b')]).toEqual(['GREEN', 'RED']);
+        await expect(games.chooseColor('a', room.gameCode, 'RED')).rejects.toMatchObject({ status: 409 });
+        await games.stop();
+    });
+
+    test('colors are fixed once the game starts, and the game uses the picked ones', async () => {
+        const { games } = setup({ ...fast, turnMs: 60_000 });
+        const room = await games.createRoom('a', { maxPlayers: 3 });
+        await games.joinRoom('b', room.gameCode);
+        await games.chooseColor('b', room.gameCode, 'YELLOW');
+        await games.startGame('a', room.gameCode);
+        expect(room.game!.players.map(p => p.color)).toEqual(['RED', 'YELLOW']);
+        await expect(games.chooseColor('a', room.gameCode, 'GREEN')).rejects.toMatchObject({ status: 400 });
+        await expect(games.chooseColor('a', room.gameCode, 'PINK')).rejects.toMatchObject({ status: 400 });
+        await games.stop();
+    });
+
+    test('a color that could not be saved is given back', async () => {
+        const t = setup();
+        t.db.setPlayerColors = async () => { throw new Error('db down'); };
+        const room = await t.games.createRoom('a', { maxPlayers: 4 });
+        await expect(t.games.chooseColor('a', room.gameCode, 'GREEN')).rejects.toMatchObject({ status: 503 });
+        expect(colorOf(room, 'a')).toBe('RED');
+        expect(t.syncs.at(-1)!.room.players[0]!.color).toBe('RED');
+        await t.games.stop();
+    });
 });

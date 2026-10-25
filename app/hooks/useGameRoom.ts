@@ -32,6 +32,8 @@ export type GameRoom = {
     movableTokens: number[];
     /** Epoch ms when the server auto-plays this turn, null when no timer runs. */
     turnEndsAt: number | null;
+    /** Time left on the turn when the server sent this snapshot (immune to device clock skew). */
+    turnMsLeft?: number | null;
 };
 
 type Color = RoomPlayer['color'];
@@ -47,11 +49,14 @@ type SyncEvent =
     | { type: 'TURN'; color: Color; reason: string }
     | { type: 'OVER'; ranking: Color[] }
     | { type: 'PLAYER_JOINED'; userId: string }
+    | { type: 'COLORS_CHANGED'; byUserId: string; changes: ColorChange[] }
     | { type: 'PLAYER_LEFT'; userId: string }
     | { type: 'STARTED' }
     | { type: 'CANCELLED'; reason: string };
 
 type RoomSync = { version: number; room: GameRoom; events: SyncEvent[] };
+
+export type ColorChange = { userId: string; from: Color; to: Color };
 
 export type RoomEvent =
     | { type: 'dice'; diceValue: number; byUserId: string; color: string }
@@ -61,6 +66,8 @@ export type RoomEvent =
     | { type: 'over'; winnerId: string; winnerColor: string }
     | { type: 'started' }
     | { type: 'cancelled'; reason: string }
+    /** Lobby colors moved: `byUserId` picked; others in `changes` followed (2-player corners). */
+    | { type: 'colors'; byUserId: string; changes: ColorChange[] }
     | { type: 'presence:disconnecting'; userId: string; graceMs: number }
     | { type: 'presence:disconnected'; userId: string }
     | { type: 'presence:connected'; userId: string }
@@ -82,7 +89,6 @@ export function useGameRoom({ roomId, gameCode, onEvent }: UseGameRoomOpts) {
     const { socket, isRealtimeReady, connectionPhase, connectGeneration } = useSocket();
     const [room, setRoom] = useState<GameRoom | null>(null);
     const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
-    const [voicePeers, setVoicePeers] = useState<string[]>([]);
     const [joinError, setJoinError] = useState<string | null>(null);
     const [disconnectingPlayers, setDisconnectingPlayers] = useState<DisconnectingPlayer[]>([]);
     const onEventRef = useRef(onEvent);
@@ -130,7 +136,6 @@ export function useGameRoom({ roomId, gameCode, onEvent }: UseGameRoomOpts) {
         setJoinError(null);
         acceptRoom(res.data.room, true);
         setOnlineUserIds(res.data.onlineUserIds ?? []);
-        setVoicePeers(res.data.voicePeers ?? []);
         hasJoinedRef.current = true;
     }, [acceptRoom]);
 
@@ -141,7 +146,6 @@ export function useGameRoom({ roomId, gameCode, onEvent }: UseGameRoomOpts) {
                 if (res?.ok) {
                     acceptRoom(res.data.room, true);
                     setOnlineUserIds(res.data.onlineUserIds ?? []);
-                    setVoicePeers(res.data.voicePeers ?? []);
                 }
                 resolve();
             });
@@ -257,6 +261,9 @@ export function useGameRoom({ roomId, gameCode, onEvent }: UseGameRoomOpts) {
                     case 'CANCELLED':
                         fire({ type: 'cancelled', reason: e.reason });
                         break;
+                    case 'COLORS_CHANGED':
+                        fire({ type: 'colors', byUserId: e.byUserId, changes: e.changes });
+                        break;
                     case 'PLAYER_LEFT':
                         setOnlineUserIds(prev => prev.filter(u => u !== e.userId));
                         setDisconnectingPlayers(prev => prev.filter(p => p.userId !== e.userId));
@@ -264,18 +271,12 @@ export function useGameRoom({ roomId, gameCode, onEvent }: UseGameRoomOpts) {
                 }
             }
         };
-        const onVoicePeerJoined = ({ userId }: any) =>
-            setVoicePeers(prev => (prev.includes(userId) ? prev : [...prev, userId]));
-        const onVoicePeerLeft = ({ userId }: any) =>
-            setVoicePeers(prev => prev.filter(u => u !== userId));
 
         socket.on('room:sync', onSync);
         socket.on('presence:connected', onConnected);
         socket.on('presence:reconnected', onReconnected);
         socket.on('presence:disconnecting', onDisconnecting);
         socket.on('presence:disconnected', onDisconnected);
-        socket.on('voice:peer-joined', onVoicePeerJoined);
-        socket.on('voice:peer-left', onVoicePeerLeft);
 
         return () => {
             socket.off('room:sync', onSync);
@@ -283,8 +284,6 @@ export function useGameRoom({ roomId, gameCode, onEvent }: UseGameRoomOpts) {
             socket.off('presence:reconnected', onReconnected);
             socket.off('presence:disconnecting', onDisconnecting);
             socket.off('presence:disconnected', onDisconnected);
-            socket.off('voice:peer-joined', onVoicePeerJoined);
-            socket.off('voice:peer-left', onVoicePeerLeft);
         };
     }, [socket, fire, acceptRoom]);
 
@@ -301,7 +300,6 @@ export function useGameRoom({ roomId, gameCode, onEvent }: UseGameRoomOpts) {
     return {
         room,
         onlineUserIds,
-        voicePeers,
         disconnectingPlayers,
         joinError,
         refresh,

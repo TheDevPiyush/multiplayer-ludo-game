@@ -15,6 +15,7 @@ import { BOARD_SIZE, COLOR_HEX, layoutTokens } from '@/components/ludo/geometry'
 import { LudoBoard } from '@/components/ludo/LudoBoard';
 import { PlayerStrip, type PlayerStripProps } from '@/components/ludo/PlayerStrip';
 import { Token } from '@/components/ludo/Token';
+import type { TurnDeadline } from '@/components/ludo/TurnTimer';
 import { Text } from '@/components/Themed';
 import { AudioOutputButton, MicButton } from '@/components/VoiceButtons';
 import Colors from '@/constants/Colors';
@@ -28,6 +29,8 @@ import { supabase } from '@/util/supabase-client';
 
 
 const ROLL_ANIM_MS = 800;
+/** Autopilot turns for offline players (~2.5 s) are too short to be worth a ring. */
+const MIN_TIMER_RING_MS = 4_000;
 
 function sleep(ms: number) {
     return new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -132,6 +135,15 @@ export default function GameBoardScreen() {
 
     const isMyTurn = !!selfPlayer && selfPlayer.color === currentColor && room?.status === 'PLAYING';
 
+    // The server restarts the turn timer whenever `turnEndsAt` changes; time it from
+    // `turnMsLeft` on arrival so a phone with a wrong clock still counts down right.
+    const turnEndsAt = room?.turnEndsAt ?? null;
+    const turnDeadline = useMemo<TurnDeadline | null>(() => {
+        const left = room?.turnMsLeft;
+        if (turnEndsAt === null || left == null || left < MIN_TIMER_RING_MS) return null;
+        return { endsAt: Date.now() + left, totalMs: left };
+    }, [turnEndsAt]);
+
     // Persist active room
     useEffect(() => {
         if (roomId && gameCode && room) {
@@ -151,7 +163,8 @@ export default function GameBoardScreen() {
         });
     }, []);
 
-    // Keep voice alive across lobby → board; resync peers when board loads
+    // Voice carries over from the lobby; it is opt-in (mic button), so only
+    // reconnect it here for a player who was already in it.
     const voiceSyncedRef = useRef(false);
     useEffect(() => {
         voiceSyncedRef.current = false;
@@ -161,13 +174,8 @@ export default function GameBoardScreen() {
         if (!room?.voiceEnabled || !roomId || !isRealtimeReady || room?.status !== 'PLAYING') return;
         if (voiceSyncedRef.current) return;
         voiceSyncedRef.current = true;
-
-        if (voice.inRoom && voice.roomId === roomId) {
-            voice.resync();
-        } else {
-            void voice.join(roomId);
-        }
-    }, [room?.voiceEnabled, roomId, room?.status, isRealtimeReady, voice.inRoom, voice.roomId, voice.join, voice.resync]);
+        if (voice.inRoom && voice.roomId === roomId) voice.resync();
+    }, [room?.voiceEnabled, roomId, room?.status, isRealtimeReady, voice.inRoom, voice.roomId, voice.resync]);
 
     // Remember every rolled value so it stays visible after the turn advances.
     useEffect(() => {
@@ -227,11 +235,15 @@ export default function GameBoardScreen() {
     // (after a short pause so the dice result stays visible).
     const movable = room?.movableTokens ?? [];
 
-    const handleTokenPress = async (tokenIndex: number) => {
-        if (!isMyTurn || diceValue === null || !selfPlayer) return;
-        if (!movable.includes(tokenIndex)) return;
-        await moveToken(tokenIndex);
-    };
+    // Stable identity so memoised tokens don't re-render on every update; reads the latest state from a ref.
+    const pressStateRef = useRef({ isMyTurn, diceValue, selfPlayer, movable, moveToken });
+    pressStateRef.current = { isMyTurn, diceValue, selfPlayer, movable, moveToken };
+    const handleTokenPress = useCallback(async (tokenIndex: number) => {
+        const s = pressStateRef.current;
+        if (!s.isMyTurn || s.diceValue === null || !s.selfPlayer) return;
+        if (!s.movable.includes(tokenIndex)) return;
+        await s.moveToken(tokenIndex);
+    }, []);
 
     // Token coords & stacking
     const tokenItems = useMemo(() => {
@@ -265,10 +277,11 @@ export default function GameBoardScreen() {
                     subtitleColor: !isOnline ? '#E8A520' : p.rank ? '#37BD6A' : undefined,
                     statusIcon: inVoice ? (muted ? 'microphone-slash' : 'microphone') : undefined,
                     statusIconColor: muted ? palette.mutedText : undefined,
+                    turnDeadline: p.color === currentColor ? turnDeadline : null,
                 };
                 return strip;
             }),
-        [players, currentColor, currentUserId, voice.peers, voice.inRoom, voice.isMuted, disconnectingIds, room?.status],
+        [players, currentColor, currentUserId, voice.peers, voice.inRoom, voice.isMuted, disconnectingIds, room?.status, turnDeadline],
     );
 
     const topPlayers = stripPlayers.filter(p => p.color === 'RED' || p.color === 'BLUE');

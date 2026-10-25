@@ -4,12 +4,10 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View as RNView } from 'react-native';
 import Animated, { FadeIn, ZoomIn } from 'react-native-reanimated';
 
-import { joinRoom } from '@/apis/game-api';
 import { GameTile } from '@/components/GameTile';
 import { Text } from '@/components/Themed';
-import { setActiveRoom } from '@/util/active-room';
 import { clearPendingJoin, setPendingLink } from '@/util/links';
-import { supabase } from '@/util/supabase-client';
+import { joinRoomByCode } from '@/util/enter-room';
 
 const CODE_RE = /^[A-Z0-9]{6}$/;
 
@@ -32,33 +30,20 @@ export default function JoinFromLinkScreen() {
         }
 
         (async () => {
-            const { data } = await supabase.auth.getSession();
-            const token = data.session?.access_token;
+            const result = await joinRoomByCode(code);
             if (!mounted.current) return;
-            if (!token) {
+            if (!result.ok && result.signedOut) {
                 // Sign in first; the root layout brings the player back here afterwards.
                 setPendingLink({ kind: 'join', code });
                 router.replace('/(login)');
                 return;
             }
-
-            const result = await joinRoom(token, code);
             clearPendingJoin(code);
-            if (!mounted.current) return;
             if (!result.ok) {
-                setError(result.status === 404 ? "This room doesn't exist anymore." : result.error);
+                setError(result.error);
                 return;
             }
-
-            const { room } = result.data.data;
-            const screen = room.status === 'PLAYING' ? 'board' : 'lobby';
-            await setActiveRoom({ roomId: room.id, gameCode: room.gameCode, maxPlayers: room.maxPlayers, screen });
-            if (!mounted.current) return;
-            router.replace(
-                screen === 'board'
-                    ? { pathname: '/(game)/board', params: { gameCode: room.gameCode, roomId: room.id } }
-                    : { pathname: '/(game)/lobby', params: { gameCode: room.gameCode, roomId: room.id, maxPlayers_: String(room.maxPlayers) } },
-            );
+            router.replace(result.href);
         })();
 
         return () => {

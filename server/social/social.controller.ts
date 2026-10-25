@@ -18,6 +18,8 @@ const userSummary = {
 
 /** Pending requests one user may have out at once. */
 const MAX_OUTGOING = 100;
+/** Re-inviting the same friend to the same room sooner than this doesn't ping them again. */
+const REINVITE_MS = 30_000;
 
 function handle(name: string, fn: (req: Request, res: Response) => Promise<unknown>) {
     return async (req: Request, res: Response) => {
@@ -245,8 +247,11 @@ export const inviteToRoom = handle('inviteToRoom', async (req, res) => {
 
     const existing = await prisma.notification.findFirst({
         where: { userId: friendId, actorId: me, type: 'ROOM_INVITE', gameCode },
-        select: { id: true },
+        select: { id: true, createdAt: true },
     });
+    if (existing && Date.now() - existing.createdAt.getTime() < REINVITE_MS) {
+        return res.status(200).json({ invited: true });
+    }
     if (existing) {
         await prisma.notification.update({ where: { id: existing.id }, data: { createdAt: new Date(), readAt: null } });
     } else {
@@ -317,3 +322,24 @@ export const markNotificationsRead = handle('markNotificationsRead', async (req,
     });
     res.status(200).json({ updated: count });
 });
+
+// ─── Cleanup ─────────────────────────────────────────────────────────────────
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Drops notifications nobody needs any more, so the table doesn't grow forever. */
+export async function pruneNotifications(now = Date.now()) {
+    const [read, invites] = await Promise.all([
+        prisma.notification.deleteMany({ where: { readAt: { lt: new Date(now - 30 * DAY_MS) } } }),
+        // An invite is only useful while its room is waiting for players.
+        prisma.notification.deleteMany({ where: { type: 'ROOM_INVITE', createdAt: { lt: new Date(now - DAY_MS) } } }),
+    ]);
+    log.info('notifications pruned', { read: read.count, invites: invites.count });
+}
+
+/** Runs the cleanup a minute after start, then daily. */
+export function startNotificationCleanup() {
+    const run = () => void pruneNotifications().catch(e => log.error('notification cleanup failed', { error: (e as Error)?.message }));
+    setTimeout(run, 60_000).unref?.();
+    setInterval(run, DAY_MS).unref?.();
+}

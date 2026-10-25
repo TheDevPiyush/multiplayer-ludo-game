@@ -1,6 +1,11 @@
 import type { NextFunction, Request, Response } from 'express';
 
 import { isAuthConfigured, verifyAccessToken } from '../lib/auth';
+import { log } from '../lib/logger';
+import { RateLimiter } from '../lib/rate-limit';
+
+/** Every signed-in request counts here; tighter limits sit on the expensive routes. */
+const perUser = new RateLimiter(60, 10);
 
 export async function verifySupabaseToken(req: Request, res: Response, next: NextFunction) {
     if (!isAuthConfigured()) {
@@ -24,5 +29,10 @@ export async function verifySupabaseToken(req: Request, res: Response, next: Nex
     }
 
     req.user = user;
+    if (!perUser.take(user.id)) {
+        log.warn('rate-limited: user', { user: user.id });
+        res.status(429).json({ message: 'Too many requests. Slow down a little.' });
+        return;
+    }
     next();
 }

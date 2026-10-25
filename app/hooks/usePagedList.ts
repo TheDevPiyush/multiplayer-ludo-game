@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 
-import type { Result } from '@/apis/game-api';
+import type { Result } from '@/apis/http';
 import type { Page } from '@/apis/social-api';
 
 /**

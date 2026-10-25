@@ -1,5 +1,5 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
     Animated,
@@ -62,7 +62,9 @@ export default function CreateRoomScreen() {
     const router = useRouter();
 
     const [maxPlayers, setMaxPlayers] = useState(4);
-    const [isPrivate, setIsPrivate] = useState(true);
+    // ?visibility=public (from the public rooms screen) starts with the room public.
+    const { visibility } = useLocalSearchParams<{ visibility?: string }>();
+    const [isPrivate, setIsPrivate] = useState(visibility !== 'public');
     const [voiceEnable, setVoiceEnable] = useState(true);
     const [loading, setLoading] = useState(false);
     const [dialog, setDialog] = useState({

@@ -13,6 +13,7 @@ import { GlassPanel } from '@/components/GlassPanel';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
 import { COLOR_HEX } from './geometry';
+import { TurnTimer, type TurnDeadline } from './TurnTimer';
 
 const palette = Colors.dark;
 
@@ -30,6 +31,8 @@ export type PlayerStripProps = {
     /** Small icon before the subtitle (e.g. microphone). */
     statusIcon?: React.ComponentProps<typeof FontAwesome>['name'];
     statusIconColor?: string;
+    /** Server turn timer for the active player; shown as a ring that empties. */
+    turnDeadline?: TurnDeadline | null;
 };
 
 export function PlayerStrip(p: PlayerStripProps) {
@@ -62,7 +65,13 @@ export function PlayerStrip(p: PlayerStripProps) {
             style={[styles.strip, p.isActive && { borderColor: color, borderWidth: 2, backgroundColor: 'rgba(255,255,255,0.16)' }]}
         >
             <RNView style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center' }}>
-                <Animated.View style={[StyleSheet.absoluteFill, { borderRadius: 18, borderWidth: 2, borderColor: color }, ringStyle]} />
+                {p.isActive && p.turnDeadline ? (
+                    <RNView style={StyleSheet.absoluteFill}>
+                        <TurnTimer deadline={p.turnDeadline} size={36} color={color} />
+                    </RNView>
+                ) : (
+                    <Animated.View style={[StyleSheet.absoluteFill, { borderRadius: 18, borderWidth: 2, borderColor: color }, ringStyle]} />
+                )}
                 <RNView style={[styles.avatar, { backgroundColor: color, opacity: p.dimmed ? 0.4 : 1 }]}>
                     {p.avatarIcon ? (
                         <FontAwesome name={p.avatarIcon} size={13} color="#fff" />

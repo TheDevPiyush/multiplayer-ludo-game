@@ -3,6 +3,7 @@ import { Server, type Socket } from 'socket.io';
 
 import { ServiceError, type GameService } from '../game/game-service';
 import { log } from '../lib/logger';
+import { RateLimiter } from '../lib/rate-limit';
 import { socketAuth, socketUser } from './socket-auth';
 import {
     addSocket,
@@ -21,14 +22,10 @@ export function getIO(): Server | null {
 
 type Ack = (res: unknown) => void;
 
-interface SignalingPayload {
-    targetUserId: string;
-    roomId: string;
-    [k: string]: unknown;
-}
-
-/** Max game actions per socket per second — taps are ~2/s at most. */
-const ACTIONS_PER_SECOND = 8;
+/** Game actions per socket — taps are ~2/s at most. */
+const actionLimiter = new RateLimiter(8, 8);
+/** room:join / room:state per user — each may load a room from Redis / Postgres. */
+const roomLimiter = new RateLimiter(10, 2);
 
 function corsOrigin(): string | string[] {
     const list = process.env.CORS_ORIGINS?.split(',').map(s => s.trim()).filter(Boolean);
@@ -62,28 +59,16 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
         const joinedRooms = new Set<string>();
         log.info('socket connected', { user: userId, socket: socket.id, recovered: socket.recovered || undefined });
 
-        // Every incoming event at debug level; WebRTC signaling is very chatty.
+        // Every incoming event at debug level.
         socket.onAny((event: string, payload: unknown) => {
-            if (event.startsWith('voice:') && event !== 'voice:join' && event !== 'voice:leave') return;
             log.debug(`⇢ ${event}`, { user: userId, ...summarize(payload) });
         });
 
-        let windowStart = Date.now();
-        let actionsInWindow = 0;
-
-        const rateLimited = () => {
-            const now = Date.now();
-            if (now - windowStart >= 1000) {
-                windowStart = now;
-                actionsInWindow = 0;
-            }
-            return ++actionsInWindow > ACTIONS_PER_SECOND;
-        };
+        const rateLimited = () => !actionLimiter.take(socket.id);
 
         const roomSnapshot = (roomId: string, room: Parameters<GameService['dto']>[0]) => ({
             room: games.dto(room),
             onlineUserIds: getRoomPresence(roomId),
-            voicePeers: Array.from(voiceMembers.get(roomId) ?? []),
         });
 
         // ─── room:join / room:rejoin ───────────────────────────────
@@ -91,6 +76,7 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
             try {
                 const { roomId } = payload || {};
                 if (!roomId) return ack?.({ ok: false, error: 'roomId required' });
+                if (!roomLimiter.take(userId)) return ack?.({ ok: false, error: 'Slow down.' });
 
                 const room = await games.getRoom({ id: roomId });
                 if (!room) return ack?.({ ok: false, error: 'Room not found.' });
@@ -113,6 +99,7 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
         socket.on('room:rejoin', onJoin);
 
         socket.on('room:state', async (payload: { roomId: string }, ack?: Ack) => {
+            if (!roomLimiter.take(userId)) return ack?.({ ok: false, error: 'Slow down.' });
             const room = await games.getRoom({ id: payload?.roomId }).catch(() => null);
             if (!room || !games.isMember(room, userId)) return ack?.({ ok: false, error: 'Room not found.' });
             ack?.({ ok: true, data: roomSnapshot(room.id, room) });
@@ -126,7 +113,6 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
             if (removeSocket(roomId, userId, socket.id)) {
                 io!.to(`room:${roomId}`).emit('presence:disconnected', { userId });
             }
-            if (leaveVoice(roomId, userId)) io!.to(`room:${roomId}`).emit('voice:peer-left', { userId });
             ack?.({ ok: true });
         });
 
@@ -150,6 +136,10 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
                 }
             };
 
+        socket.on('room:color', gameAction('room:color', async p => {
+            const room = await games.chooseColor(userId, p.gameCode, p.color);
+            return { color: room.players.find(x => x.userId === userId)?.color };
+        }));
         socket.on('game:start', gameAction('game:start', async p => {
             await games.startGame(userId, p.gameCode);
         }));
@@ -166,48 +156,10 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
             await games.act(userId, p.gameCode, { kind: 'SKIP' });
         }));
 
-        // ─── Voice membership + WebRTC signaling ───────────────────
-        socket.on('voice:join', (payload: { roomId: string }, ack?: Ack) => {
-            const { roomId } = payload || {};
-            if (!roomId || !joinedRooms.has(roomId)) return ack?.({ ok: false, error: 'Not in room.' });
-            joinVoice(roomId, userId);
-            const peers = Array.from(voiceMembers.get(roomId) ?? []).filter(id => id !== userId);
-            ack?.({ ok: true, data: { peers } });
-            socket.to(`room:${roomId}`).emit('voice:peer-joined', { userId });
-        });
-
-        socket.on('voice:leave', (payload: { roomId: string }) => {
-            const { roomId } = payload || {};
-            if (!roomId) return;
-            if (leaveVoice(roomId, userId)) socket.to(`room:${roomId}`).emit('voice:peer-left', { userId });
-        });
-
-        socket.on('voice:mute', (payload: { roomId: string; muted: boolean }) => {
-            const { roomId, muted } = payload || {};
-            if (!roomId || !joinedRooms.has(roomId)) return;
-            socket.to(`room:${roomId}`).emit('voice:mute', { userId, muted: !!muted });
-        });
-
-        const relaySignal = (eventName: 'voice:offer' | 'voice:answer' | 'voice:ice') =>
-            (payload: SignalingPayload) => {
-                const { targetUserId, roomId } = payload || {};
-                if (!targetUserId || !roomId || !joinedRooms.has(roomId)) return;
-                const targets = io!.sockets.adapter.rooms.get(`room:${roomId}`);
-                if (!targets) return;
-                for (const sid of targets) {
-                    const s = io!.sockets.sockets.get(sid);
-                    if (s && socketUser(s)?.id === targetUserId) s.emit(eventName, { ...payload, fromUserId: userId });
-                }
-            };
-        socket.on('voice:offer', relaySignal('voice:offer'));
-        socket.on('voice:answer', relaySignal('voice:answer'));
-        socket.on('voice:ice', relaySignal('voice:ice'));
-
         // ─── disconnect ────────────────────────────────────────────
         socket.on('disconnect', (reason) => {
             log.info('socket disconnected', { user: userId, socket: socket.id, reason });
             for (const roomId of joinedRooms) {
-                if (leaveVoice(roomId, userId)) io!.to(`room:${roomId}`).emit('voice:peer-left', { userId });
                 if (!removeSocket(roomId, userId, socket.id)) continue;
                 io!.to(`room:${roomId}`).emit('presence:disconnecting', { userId, graceMs: GRACE_MS });
                 scheduleDisconnect(roomId, userId, () => {
@@ -232,22 +184,4 @@ function summarize(payload: unknown): Record<string, unknown> {
         if (typeof v === 'number' || typeof v === 'boolean' || (typeof v === 'string' && v.length <= 64)) out[k] = v;
     }
     return out;
-}
-
-// ─── Voice room membership ──────────────────────────────────────────
-
-const voiceMembers = new Map<string, Set<string>>(); // roomId → userIds
-
-function joinVoice(roomId: string, userId: string) {
-    let set = voiceMembers.get(roomId);
-    if (!set) voiceMembers.set(roomId, (set = new Set()));
-    set.add(userId);
-}
-
-/** Returns true if the user was in voice. */
-function leaveVoice(roomId: string, userId: string): boolean {
-    const set = voiceMembers.get(roomId);
-    if (!set?.delete(userId)) return false;
-    if (set.size === 0) voiceMembers.delete(roomId);
-    return true;
 }

@@ -1,3 +1,7 @@
+// Must stay first: a real crypto.getRandomValues for Supabase PKCE. LiveKit's
+// registerGlobals() otherwise creates a global.crypto that only has randomUUID.
+import 'react-native-get-random-values';
+import { registerGlobals } from '@livekit/react-native';
 import { ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { useRouter, Stack } from 'expo-router';
@@ -25,6 +29,9 @@ export {
 export const unstable_settings = {
   initialRouteName: '(login)',
 };
+
+// WebRTC globals LiveKit needs; must run before any voice code.
+registerGlobals();
 
 SplashScreen.preventAutoHideAsync();
 
@@ -155,12 +162,13 @@ function RootLayoutNav() {
                   <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                   <Stack.Screen name="(game)" options={{ headerShown: false }} />
                   <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
-                  <Stack.Screen name="edit-username" options={{ headerShown: false, presentation: 'modal' }} />
+                  <Stack.Screen name="edit-username" dangerouslySingular options={{ headerShown: false, presentation: 'modal' }} />
                   <Stack.Screen
                     name="friends"
+                    dangerouslySingular
                     options={{ headerShown: false, presentation: 'transparentModal', animation: 'fade', contentStyle: { backgroundColor: 'transparent' } }}
                   />
-                  <Stack.Screen name="join/[code]" options={{ headerShown: false, gestureEnabled: false }} />
+                  <Stack.Screen name="join/[code]" dangerouslySingular options={{ headerShown: false, gestureEnabled: false }} />
                 </Stack>
                 <InviteBanner />
               </LudoBackground>

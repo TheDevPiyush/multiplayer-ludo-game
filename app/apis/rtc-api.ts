@@ -1,39 +1,12 @@
-export type IceServer = {
-    urls: string | string[];
-    username?: string;
-    credential?: string;
-};
+import { apiFetch, type Result } from './http';
 
-type Result<T> =
-    | { ok: true; data: T }
-    | { ok: false; error: string };
+export type VoiceToken = { url: string; token: string };
 
-function apiBaseUrl(): string | null {
-    const url = process.env.EXPO_PUBLIC_API_URL?.trim();
-    if (!url) return null;
-    return url.replace(/\/$/, '');
-}
-
-/** GET /rtc/ice-servers — TURN/STUN config with short-lived credentials */
-export async function fetchIceServers(
-    accessToken: string,
-): Promise<Result<{ iceServers: IceServer[]; expiresAt: number }>> {
-    const base = apiBaseUrl();
-    if (!base) return { ok: false, error: 'EXPO_PUBLIC_API_URL is not set.' };
-
-    try {
-        const res = await fetch(`${base}/rtc/ice-servers`, {
-            headers: {
-                Authorization: `Bearer ${accessToken}`,
-                Accept: 'application/json',
-            },
-        });
-        const body = await res.json().catch(() => null);
-        if (!res.ok) {
-            return { ok: false, error: body?.message ?? `HTTP ${res.status}` };
-        }
-        return { ok: true, data: body.data };
-    } catch (e) {
-        return { ok: false, error: e instanceof Error ? e.message : 'Network request failed.' };
-    }
+/** POST /rtc/voice-token — LiveKit URL + a token for this room's voice channel. */
+export async function fetchVoiceToken(accessToken: string, roomId: string): Promise<Result<VoiceToken>> {
+    const res = await apiFetch<{ data: VoiceToken }>(accessToken, '/rtc/voice-token', {
+        method: 'POST',
+        body: JSON.stringify({ roomId }),
+    });
+    return res.ok ? { ok: true, data: res.data.data } : res;
 }

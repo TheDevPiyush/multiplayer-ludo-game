@@ -1,5 +1,5 @@
 import { supabase } from '@/util/supabase-client';
-import { apiFetch, type Result } from './game-api';
+import { apiFetch, type Result } from './http';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

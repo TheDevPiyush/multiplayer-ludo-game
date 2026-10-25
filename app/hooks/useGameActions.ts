@@ -65,6 +65,16 @@ export function useGameActions(gameCode: string | undefined) {
         return emitWithAck(socket, 'game:skip-turn', { gameCode: code });
     }, [socket, isRealtimeReady]);
 
+    /** Lobby only: take a free color (the server locks it for this player). */
+    const chooseColor = useCallback(async (color: string): Promise<GameActionResult<{ color: string }>> => {
+        const code = gameCodeRef.current?.trim();
+        if (!code) return { ok: false, error: 'No game code.' };
+        if (!isRealtimeReady || !socket?.connected) {
+            return { ok: false, error: 'Waiting for connection…' };
+        }
+        return emitWithAck(socket, 'room:color', { gameCode: code, color }, 8_000);
+    }, [socket, isRealtimeReady]);
+
     const startGame = useCallback(async (): Promise<GameActionResult> => {
         const code = gameCodeRef.current?.trim();
         if (!code) return { ok: false, error: 'No game code.' };
@@ -74,5 +84,5 @@ export function useGameActions(gameCode: string | undefined) {
         return emitWithAck(socket, 'game:start', { gameCode: code });
     }, [socket, isRealtimeReady]);
 
-    return { rollDice, moveToken, skipTurn, startGame, isRealtimeReady };
+    return { rollDice, moveToken, skipTurn, startGame, chooseColor, isRealtimeReady };
 }

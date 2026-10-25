@@ -3,7 +3,9 @@ import {
     autoAction,
     chooseMove,
     createGame,
-    seatColors,
+    isColor,
+    nextColor,
+    pickColor,
     reduce,
     type Action,
     type Color,
@@ -17,7 +19,7 @@ import {
     userIdOf,
     type LivePlayer,
     type LiveRoom,
-    type MoveRecord,
+    type MoveEntry,
     type RoomDto,
     type RoomSync,
     type SyncEvent,
@@ -55,6 +57,10 @@ export interface GameServiceOptions {
     flushMs: number;
     /** How long ended rooms (or rooms nobody is connected to) stay in memory. */
     idleEvictMs: number;
+    /** With nobody connected this long, autopilot stops and the game waits. */
+    unwatchedPauseMs: number;
+    /** With nobody connected this long, the game is ended as abandoned (no stats). */
+    abandonMs: number;
     balanceStrength: number;
     rng: Rng;
 }
@@ -71,11 +77,14 @@ export const DEFAULT_OPTIONS: GameServiceOptions = {
     autoDelayMs: Number(process.env.AUTO_DELAY_MS ?? 900),
     flushMs: Number(process.env.FLUSH_MS ?? 10_000),
     idleEvictMs: Number(process.env.IDLE_EVICT_MS ?? 30 * 60_000),
+    unwatchedPauseMs: Number(process.env.UNWATCHED_PAUSE_MS ?? 60_000),
+    abandonMs: Number(process.env.ABANDON_MS ?? 10 * 60_000),
     balanceStrength: Number(process.env.DICE_BALANCE_STRENGTH ?? 0.6),
     rng: cryptoRng,
 };
 
 const AFK_AFTER_TIMEOUTS = 3;
+const SNAPSHOT_DEBOUNCE_MS = 1_000;
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O, 1/I lookalikes
 
 /**
@@ -88,25 +97,39 @@ export class GameService {
     private rooms = new Map<string, LiveRoom>();
     private codeToId = new Map<string, string>();
     private loading = new Map<string, Promise<LiveRoom | null>>();
+    /** Lobby seat / color writes per room, run one at a time in the order they happened in memory. */
+    private lobbyWrites = new Map<string, Promise<unknown>>();
     private timers = new Map<string, ReturnType<typeof setTimeout>>();
     private snapshotTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private dirty = new Set<string>();
     /** Finished rooms whose final write is in flight. */
     private finishing = new Set<string>();
     private lastActive = new Map<string, number>();
+    /** Last time anyone had a socket in the room (playing rooms only). */
+    private lastWatched = new Map<string, number>();
+    /** Playing rooms whose turn timer is stopped because nobody is connected. */
+    private paused = new Set<string>();
+    /** Ids / codes that weren't found anywhere, so repeat lookups skip Redis and Postgres. */
+    private misses = new TtlCache<string, true>(5_000, 30_000);
     private profiles = new TtlCache<string, Profile>(10_000, 10 * 60_000);
     private flushTimer: ReturnType<typeof setInterval> | null = null;
     private onlineCounter: (roomId: string) => number = () => 0;
 
+    private opts: GameServiceOptions;
+
     /** Called with users whose stats/history changed (to drop their caches). */
     onUsersChanged: (userIds: string[]) => void = () => {};
+    /** Called once when a room finishes or is cancelled (closes its voice channel). */
+    onRoomClosed: (room: LiveRoom) => void = () => {};
 
     constructor(
         private db: Persistence,
         private snapshots: SnapshotStore | null,
         private out: Broadcaster,
-        private opts: GameServiceOptions = DEFAULT_OPTIONS,
-    ) {}
+        opts: Partial<GameServiceOptions> = {},
+    ) {
+        this.opts = { ...DEFAULT_OPTIONS, ...opts };
+    }
 
     start(onlineCounter: (roomId: string) => number) {
         this.onlineCounter = onlineCounter;
@@ -125,7 +148,10 @@ export class GameService {
     private cache(room: LiveRoom) {
         this.rooms.set(room.id, room);
         this.codeToId.set(room.gameCode, room.id);
+        this.misses.delete(room.id);
+        this.misses.delete(`code:${room.gameCode}`);
         this.touch(room.id);
+        if (room.status === 'PLAYING') this.lastWatched.set(room.id, Date.now());
     }
 
     private touch(roomId: string) {
@@ -139,12 +165,18 @@ export class GameService {
         if (hit) return hit;
 
         const loadKey = key.id ?? `code:${key.gameCode}`;
+        if (this.misses.get(loadKey)) return null;
         let pending = this.loading.get(loadKey);
         if (!pending) {
             pending = (async () => {
                 const fromSnapshot = await this.snapshots?.load(key).catch(() => null);
                 const room = fromSnapshot ?? (await this.db.loadRoom(key));
-                if (!room) return null;
+                if (!room) {
+                    this.misses.set(loadKey, true);
+                    return null;
+                }
+                // Snapshots written before the move log existed.
+                room.moveLog ??= [];
                 // Another load may have won the race.
                 const existing = this.rooms.get(room.id);
                 if (existing) return existing;
@@ -233,7 +265,7 @@ export class GameService {
                 id: randomUUID(),
                 userId,
                 seatNumber: 0,
-                color: seatColors(maxPlayers)[0]!,
+                color: nextColor(maxPlayers, [])!,
                 status: 'DISCONNECTED',
                 isReady: true,
                 joinedAt: now,
@@ -243,7 +275,7 @@ export class GameService {
             version: 1,
             turnEndsAt: null,
             timeouts: {},
-            pendingMoves: [],
+            moveLog: [],
         };
         await this.db.createRoom(room);
         this.cache(room);
@@ -268,9 +300,9 @@ export class GameService {
         if (room.players.length >= room.maxPlayers) throw new ServiceError(400, 'Room is full.');
 
         const takenSeats = new Set(room.players.map(p => p.seatNumber));
-        const takenColors = new Set(room.players.map(p => p.color));
         const seatNumber = [0, 1, 2, 3].find(s => !takenSeats.has(s))!;
-        const color = seatColors(room.maxPlayers).find(c => !takenColors.has(c))!;
+        const color = nextColor(room.maxPlayers, room.players);
+        if (!color) throw new ServiceError(400, 'Room is full.');
         const player: LivePlayer = {
             id: randomUUID(),
             userId,
@@ -285,7 +317,7 @@ export class GameService {
         room.players.sort((a, b) => a.seatNumber - b.seatNumber);
 
         try {
-            await this.db.addPlayer(room, player);
+            await this.lobbyWrite(room, () => this.db.addPlayer(room, player));
         } catch (e) {
             room.players = room.players.filter(p => p.id !== player.id);
             throw e;
@@ -310,17 +342,72 @@ export class GameService {
         if (room.status !== 'WAITING') return 'Left room.';
 
         room.players = room.players.filter(p => p.id !== player.id);
-        await this.db.removePlayer(room, player);
+        await this.lobbyWrite(room, () => this.db.removePlayer(room, player));
 
         if (room.createdById === userId) {
             room.status = 'CANCELLED';
             room.endedAt = new Date().toISOString();
             await this.db.saveRoom(room);
             this.commit(room, [{ type: 'PLAYER_LEFT', userId }, { type: 'CANCELLED', reason: 'host-left' }], { persist: false });
+            this.onRoomClosed(room);
             return 'Host left. Room cancelled.';
         }
         this.commit(room, [{ type: 'PLAYER_LEFT', userId }], { persist: false });
         return 'Left room.';
+    }
+
+    /**
+     * Lobby color pick. The color is claimed in memory before any await, so two
+     * players can never get the same one; everyone sees the change at once, and
+     * the release of the old color in the same update.
+     */
+    async chooseColor(userId: string, gameCode: string, color: unknown): Promise<LiveRoom> {
+        if (!isColor(color)) throw new ServiceError(400, 'Unknown color.');
+        const room = await this.requireRoom({ gameCode: normalizeCode(gameCode) });
+        if (room.status !== 'WAITING') throw new ServiceError(400, 'Colors are fixed once the game starts.');
+        const me = room.players.find(p => p.userId === userId);
+        if (!me) throw new ServiceError(403, 'You are not in this room.');
+
+        const changes = pickColor(room.maxPlayers, room.players, me.id, color);
+        if (!changes) throw new ServiceError(409, 'That color is taken.');
+        if (changes.length === 0) return room;
+
+        const byId = (id: string) => room.players.find(p => p.id === id);
+        const event = (list: typeof changes) => ({
+            type: 'COLORS_CHANGED' as const,
+            byUserId: userId,
+            changes: list.map(c => ({ userId: byId(c.id)!.userId, from: c.from, to: c.to })),
+        });
+        for (const c of changes) byId(c.id)!.color = c.to;
+        this.commit(room, [event(changes)], { persist: false });
+
+        try {
+            await this.lobbyWrite(room, () => this.db.setPlayerColors(room, changes.map(c => ({ playerId: c.id, color: c.to }))));
+        } catch (e) {
+            log.error('saving color failed', { room: room.gameCode, user: userId, error: (e as Error)?.message });
+            // Put it back, unless the room has moved on since (then memory stays the truth).
+            const undo = changes.map(c => ({ id: c.id, from: c.to, to: c.from })).reverse();
+            const undoable = room.status === 'WAITING'
+                && undo.every(c => byId(c.id)?.color === c.from)
+                && undo.every(c => !room.players.some(p => p.color === c.to && !undo.some(u => u.id === p.id)));
+            if (undoable) {
+                for (const c of undo) byId(c.id)!.color = c.to;
+                this.commit(room, [event(undo)], { persist: false });
+            }
+            throw new ServiceError(503, "Couldn't save your color. Try again.");
+        }
+        return room;
+    }
+
+    /** Runs `write` after the room's earlier lobby writes, so Postgres sees changes in memory order. */
+    private lobbyWrite<T>(room: LiveRoom, write: () => Promise<T>): Promise<T> {
+        const prev = this.lobbyWrites.get(room.id) ?? Promise.resolve();
+        const next = prev.catch(() => {}).then(write);
+        this.lobbyWrites.set(room.id, next);
+        void next.catch(() => {}).finally(() => {
+            if (this.lobbyWrites.get(room.id) === next) this.lobbyWrites.delete(room.id);
+        });
+        return next;
     }
 
     async cancelRoom(userId: string, gameCode: string): Promise<LiveRoom> {
@@ -331,6 +418,7 @@ export class GameService {
         room.endedAt = new Date().toISOString();
         await this.db.saveRoom(room);
         this.commit(room, [{ type: 'CANCELLED', reason: 'host-cancelled' }], { persist: false });
+        this.onRoomClosed(room);
         return room;
     }
 
@@ -340,13 +428,23 @@ export class GameService {
         if (room.createdById !== userId) throw new ServiceError(403, 'Only host can start the game.');
         if (room.players.length < 2) throw new ServiceError(400, 'Need at least 2 players to start.');
 
+        // Let in-flight seat / color writes land first, so the game starts on saved colors.
+        const pending = this.lobbyWrites.get(room.id);
+        if (pending) {
+            await pending.catch(() => {});
+            if (room.status !== 'WAITING') throw new ServiceError(400, `Room is already ${room.status}.`);
+            if (room.players.length < 2) throw new ServiceError(400, 'Need at least 2 players to start.');
+        }
+
         room.game = createGame({
             colors: room.players.map(p => p.color),
             balance: { enabled: this.opts.balanceStrength > 0, strength: this.opts.balanceStrength },
         });
         room.status = 'PLAYING';
         room.startedAt = new Date().toISOString();
+        this.lastWatched.set(room.id, Date.now());
         this.scheduleTurn(room);
+        void this.snapshots?.index(room).catch(e => log.error('snapshot index failed', { room: room.gameCode, error: (e as Error)?.message }));
         await this.db.saveRoom(room);
         this.commit(room, [{ type: 'STARTED' }, { type: 'TURN', color: room.game.turn, reason: 'next' }], { persist: false });
         return room;
@@ -400,20 +498,11 @@ export class GameService {
     }
 
     private recordMoves(room: LiveRoom, dice: number | null, events: GameEvent[]) {
-        const captured = events.some(e => e.type === 'CAPTURED');
-        const finished = events.some(e => e.type === 'FINISHED');
+        const startedAt = room.startedAt ? Date.parse(room.startedAt) : Date.now();
         for (const e of events) {
             if (e.type !== 'MOVED') continue;
-            const record: MoveRecord = {
-                userId: userIdOf(room, e.color)!,
-                tokenIndex: e.token,
-                diceValue: dice ?? 0,
-                fromPosition: e.from,
-                toPosition: e.to,
-                actionType: finished ? 'WIN' : captured ? 'CAPTURE' : e.to >= 52 ? 'ENTER_HOME' : 'MOVE',
-                createdAt: new Date().toISOString(),
-            };
-            room.pendingMoves.push(record);
+            const entry: MoveEntry = [e.color, e.token, dice ?? 0, e.from, e.to, Math.round((Date.now() - startedAt) / 100)];
+            room.moveLog.push(entry);
         }
     }
 
@@ -426,7 +515,41 @@ export class GameService {
         room.turnEndsAt = null;
         this.commit(room, events, { persist: false });
         this.dirty.delete(room.id);
+        this.paused.delete(room.id);
+        this.lastWatched.delete(room.id);
         void this.persistFinish(room);
+        this.onRoomClosed(room);
+    }
+
+    /** Nobody has been back for `abandonMs`: end the game without touching anyone's stats. */
+    private async abandon(room: LiveRoom) {
+        this.clearTimer(room.id);
+        this.paused.delete(room.id);
+        this.lastWatched.delete(room.id);
+        room.status = 'CANCELLED';
+        room.endedAt = new Date().toISOString();
+        room.turnEndsAt = null;
+        this.dirty.delete(room.id);
+        this.commit(room, [{ type: 'CANCELLED', reason: 'abandoned' }], { persist: false });
+        log.info('game abandoned', { room: room.gameCode });
+        this.onRoomClosed(room);
+        try {
+            await this.db.saveRoom(room);
+            await this.snapshots?.delete(room).catch(() => {});
+        } catch (e) {
+            log.error('saving abandoned room failed, will retry on flush', { room: room.gameCode, error: (e as Error)?.message });
+            this.dirty.add(room.id);
+        }
+    }
+
+    /** True while someone is connected; otherwise whether they've been gone long enough to stop playing for them. */
+    private unwatched(roomId: string): boolean {
+        const now = Date.now();
+        if (this.onlineCounter(roomId) > 0) {
+            this.lastWatched.set(roomId, now);
+            return false;
+        }
+        return now - (this.lastWatched.get(roomId) ?? now) >= this.opts.unwatchedPauseMs;
     }
 
     /** Final write for a finished room; retried by the flush loop on failure. */
@@ -482,6 +605,13 @@ export class GameService {
         const room = this.rooms.get(roomId);
         const g = room?.game;
         if (!room || !g || room.status !== 'PLAYING') return;
+        if (this.unwatched(roomId)) {
+            // Don't play out a game nobody is watching; the next player to rejoin resumes it.
+            this.paused.add(roomId);
+            room.turnEndsAt = null;
+            log.info('game paused, nobody connected', { room: room.gameCode });
+            return;
+        }
 
         let action = auto;
         if (!action) {
@@ -504,7 +634,16 @@ export class GameService {
         if (!p || p.status === 'LEFT' || p.status === status) return;
         p.status = status;
         this.touch(room.id);
-        if (status === 'CONNECTED') room.timeouts[userId] = 0;
+        if (status === 'CONNECTED') {
+            room.timeouts[userId] = 0;
+            this.lastWatched.set(room.id, Date.now());
+            if (this.paused.delete(room.id) && room.status === 'PLAYING') {
+                log.info('game resumed', { room: room.gameCode });
+                this.scheduleTurn(room);
+                this.commit(room, [], { persist: false });
+                return;
+            }
+        }
         if (room.status === 'PLAYING' && room.game && userIdOf(room, room.game.turn) === userId && !autoAction(room.game)) {
             this.scheduleTurn(room);
             this.commit(room, [], { persist: false });
@@ -523,13 +662,17 @@ export class GameService {
         this.saveSnapshotSoon(room);
     }
 
-    /** Coalesce Redis writes — at most one per room every 200ms. */
+    /**
+     * Coalesce Redis writes — at most one per room per second, and only for games
+     * in progress (lobbies are already in Postgres, ended rooms are deleted).
+     */
     private saveSnapshotSoon(room: LiveRoom) {
-        if (!this.snapshots || this.snapshotTimers.has(room.id)) return;
+        if (!this.snapshots || room.status !== 'PLAYING' || this.snapshotTimers.has(room.id)) return;
         this.snapshotTimers.set(room.id, setTimeout(() => {
             this.snapshotTimers.delete(room.id);
+            if (room.status !== 'PLAYING') return;
             this.snapshots!.save(room).catch(e => log.error('snapshot save failed', { room: room.gameCode, error: (e as Error)?.message }));
-        }, 200));
+        }, SNAPSHOT_DEBOUNCE_MS));
     }
 
     /** Write dirty rooms to Postgres and evict idle ones. */
@@ -541,9 +684,8 @@ export class GameService {
             if (!room) return;
             if (room.status === 'FINISHED') return this.persistFinish(room);
             try {
-                const moves = room.pendingMoves.length;
                 await this.db.saveRoom(room);
-                log.debug('db flush', { room: room.gameCode, version: room.version, moves });
+                log.debug('db flush', { room: room.gameCode, version: room.version });
             } catch (e) {
                 log.error('db flush failed', { room: room.gameCode, error: (e as Error)?.message });
                 this.dirty.add(id);
@@ -555,6 +697,11 @@ export class GameService {
     private evictIdle() {
         const now = Date.now();
         for (const [id, room] of this.rooms) {
+            if (room.status === 'PLAYING' && this.onlineCounter(id) === 0
+                && now - (this.lastWatched.get(id) ?? now) >= this.opts.abandonMs) {
+                void this.abandon(room);
+                continue;
+            }
             if (this.dirty.has(id) || this.finishing.has(id) || this.onlineCounter(id) > 0) continue;
             const idleFor = now - (this.lastActive.get(id) ?? 0);
             const ended = room.status === 'FINISHED' || room.status === 'CANCELLED';
@@ -563,12 +710,21 @@ export class GameService {
             this.rooms.delete(id);
             this.codeToId.delete(room.gameCode);
             this.lastActive.delete(id);
+            this.lastWatched.delete(id);
+            this.paused.delete(id);
         }
+    }
+
+    /** Public rooms still waiting for players, with a free seat. Live rooms only (memory). */
+    openPublicRooms(): LiveRoom[] {
+        return [...this.rooms.values()].filter(
+            r => r.status === 'WAITING' && !r.isPrivate && r.players.length < r.maxPlayers,
+        );
     }
 
     /** For tests / metrics. */
     stats() {
-        return { rooms: this.rooms.size, dirty: this.dirty.size, timers: this.timers.size };
+        return { rooms: this.rooms.size, dirty: this.dirty.size, timers: this.timers.size, paused: this.paused.size };
     }
 }
 
