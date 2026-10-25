@@ -31,6 +31,20 @@
 - **Font**: Plus Jakarta Sans (free, SIL Open Font License) replaces Hellix, a commercial font whose licence didn't cover shipping inside an app. The licence is kept in `app/assets/fonts/PlusJakartaSans-OFL.txt`. Font names live only in `constants/fonts.ts` and `app/_layout.tsx`, so a future change is one place.
 - **Running costs**: unwatched games pause, then end as abandoned without stats. One compact move log per game instead of a row per move. Fewer Redis writes, rate limits, and a cache for unknown rooms. Voice is opt-in, uses a speech bitrate, and its room closes when the game ends.
 - **Turn timer**: a ring on the active player shows the time left before autopilot plays.
+- **Music, sound & haptics**:
+  - Background music plays on the menus and in the lobby. It fades out when a game opens, which then plays its intro once.
+  - In-game effects:
+    - A dice rattle.
+    - A jump on each hop and a landing when the pawn settles.
+    - Different sounds for capturing and for being captured.
+    - Pawn home, your turn, a countdown in the last 5 seconds, and the end of the game.
+  - Matching vibrations on the player's own moments.
+  - Profile → Game: switches for music, effects and vibration, plus separate music and effects volume sliders. Settings are saved on the device.
+  - Voice chat comes first. While a player is in voice, the music stops and effects play at half volume, so game audio doesn't reach the other players through the mic. Effects never take audio focus or end the call's audio session.
+  - Music pauses in the background and picks up where it left off.
+  - Sources and trims are in `app/assets/sounds/SOURCES.md`. Everything is levelled and converted to AAC (1.4 MB in total).
+- **Over-the-air updates**: EAS Update is set up, with a channel per build profile. Publish a JS-only fix with `eas update --channel preview` (or `production`). The runtime follows the app version, so bump `version` in `app.json` whenever native code changes.
+- **Social badges**: badge counts are cached per user on the server and cleared by each social action. Reconnects and foregrounding no longer run 4 count queries.
 
 ## Before launch
 - Add the release/Play signing SHA256s and `IOS_APP_ID` for verified links.

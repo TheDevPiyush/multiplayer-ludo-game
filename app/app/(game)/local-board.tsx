@@ -14,6 +14,8 @@ import { Token } from '@/components/ludo/Token';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
 import { useLocalGame, type LocalGameConfig } from '@/hooks/useLocalGame';
+import { playEffect } from '@/util/audio';
+import { feedbackForEvents, haptic } from '@/util/feedback';
 
 const palette = Colors.dark;
 
@@ -47,14 +49,28 @@ export default function LocalBoardScreen() {
     const [exitDialog, setExitDialog] = useState(false);
     const leavingRef = useRef(false);
 
+    // Everyone at this phone hears the game; haptics and "your turn" are for the human seats.
+    const isHuman = (color: string) => config.seats.some(s => s.color === color && s.kind === 'human');
+
     const onEvents = (events: GameEvent[]) => {
         for (const e of events) {
             if (e.type === 'CAPTURED') setCapturedKey(`${e.color}:${e.token}:${Date.now()}`);
         }
+        feedbackForEvents(events, isHuman);
     };
 
     const game = useLocalGame(config, onEvents);
     const { state, rolling, currentSeat, canRoll, movable } = game;
+
+    useEffect(() => playEffect('intro'), []);
+
+    // Dice: the rattle as the tumble starts, a tap when a human's result lands.
+    const wasRolling = useRef(false);
+    useEffect(() => {
+        if (rolling) playEffect('roll');
+        else if (wasRolling.current && currentSeat?.kind === 'human') haptic.medium();
+        wasRolling.current = rolling;
+    }, [rolling]);
     const isOver = state.phase === 'OVER';
     const turnHex = COLOR_HEX[state.turn] ?? '#fff';
     const humanCount = config.seats.filter(s => s.kind === 'human').length;

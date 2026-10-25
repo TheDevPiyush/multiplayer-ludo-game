@@ -10,20 +10,23 @@
       "environment": "development",
       "android": {
         "buildType": "apk"
-      }
+      },
+      "channel": "development"
     },
     "development-simulator": {
       "extends": "development",
       "ios": {
         "simulator": true
-      }
+      },
+      "channel": "development-simulator"
     },
     "preview": {
       "distribution": "internal",
       "environment": "preview",
       "android": {
         "buildType": "apk"
-      }
+      },
+      "channel": "preview"
     },
     "ios-sideload": {
       "environment": "preview",
@@ -31,7 +34,8 @@
       "ios": {
         "config": "ios-sideload.yml",
         "buildConfiguration": "Release"
-      }
+      },
+      "channel": "ios-sideload"
     },
     "ios-sideload-dev": {
       "extends": "ios-sideload",
@@ -39,14 +43,16 @@
       "environment": "development",
       "ios": {
         "buildConfiguration": "Debug"
-      }
+      },
+      "channel": "ios-sideload-dev"
     },
     "production": {
       "autoIncrement": true,
       "environment": "production",
       "android": {
         "buildType": "app-bundle"
-      }
+      },
+      "channel": "production"
     }
   },
   "submit": {

@@ -9,6 +9,7 @@ import {
   ScrollView,
   Share,
   StyleSheet,
+  Switch,
   TouchableOpacity,
   View as RNView,
 } from 'react-native';
@@ -20,6 +21,8 @@ import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
 import { LUDO } from '@/constants/LudoColors';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
+import { VolumeSlider } from '@/components/VolumeSlider';
+import { playEffect, setAudioSettings, useAudioSettings } from '@/util/audio';
 import { supabase } from '@/util/supabase-client';
 
 type DialogAction = {
@@ -88,6 +91,27 @@ function ActionRow({
   );
 }
 
+function ToggleRow({
+  icon, label, value, onChange,
+}: { icon: string; label: string; value: boolean; onChange: (next: boolean) => void }) {
+  const palette = Colors['dark'];
+  return (
+    <RNView style={styles.actionRow}>
+      <RNView style={[styles.actionIcon, { backgroundColor: palette.elevated }]}>
+        <FontAwesome name={icon as any} size={14} color={palette.mutedText} />
+      </RNView>
+      <Text weight="medium" style={styles.actionLabel}>{label}</Text>
+      <Switch
+        value={value}
+        onValueChange={onChange}
+        accessibilityLabel={label}
+        trackColor={{ false: 'rgba(255,255,255,0.18)', true: LUDO.green }}
+        thumbColor="#FFFFFF"
+      />
+    </RNView>
+  );
+}
+
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function ProfileTabScreen() {
@@ -95,6 +119,7 @@ export default function ProfileTabScreen() {
   const router = useRouter();
   const palette = Colors['dark'];
   const { user, loading, refresh } = useCurrentUser();
+  const audio = useAudioSettings();
   const [dialog, setDialog] = useState<DialogState>({
     visible: false,
     title: '',
@@ -230,6 +255,38 @@ export default function ProfileTabScreen() {
         <StatCard value={`${winRate}%`} label="Win Rate" color={LUDO.yellow} />
       </Animated.View>
 
+
+      {/* ── Game ── */}
+      <Animated.View style={[styles.section, { opacity: fadeCard, transform: [{ translateY: slideCard }] }]}>
+        <Text weight="semiBold" style={styles.sectionTitle}>GAME</Text>
+        <RNView style={styles.sectionCard}>
+          <ToggleRow icon="music" label="Music" value={audio.music} onChange={music => setAudioSettings({ music })} />
+          <RNView style={styles.sliderRow}>
+            <VolumeSlider
+              label="Music volume"
+              value={audio.musicVolume}
+              disabled={!audio.music}
+              color={LUDO.blue}
+              onChange={musicVolume => setAudioSettings({ musicVolume })}
+            />
+          </RNView>
+          <RNView style={styles.separator} />
+          <ToggleRow icon="volume-up" label="Sound effects" value={audio.sound} onChange={sound => setAudioSettings({ sound })} />
+          <RNView style={styles.sliderRow}>
+            <VolumeSlider
+              label="Sound effects volume"
+              value={audio.effectsVolume}
+              disabled={!audio.sound}
+              color={LUDO.green}
+              onChange={effectsVolume => setAudioSettings({ effectsVolume })}
+              // Let the player hear the new level.
+              onRelease={() => playEffect('capture')}
+            />
+          </RNView>
+          <RNView style={styles.separator} />
+          <ToggleRow icon="mobile" label="Vibration" value={audio.haptics} onChange={haptics => setAudioSettings({ haptics })} />
+        </RNView>
+      </Animated.View>
 
       {/* ── Actions ── */}
       <Animated.View style={[styles.section, { opacity: fadeCard, transform: [{ translateY: slideCard }] }]}>
@@ -416,6 +473,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: palette.text,
   },
+  sliderRow: { paddingLeft: 60, paddingRight: 16, paddingBottom: 6, marginTop: -6 },
   separator: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: palette.border,

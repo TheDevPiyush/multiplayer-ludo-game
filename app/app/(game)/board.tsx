@@ -25,12 +25,16 @@ import { markHistoryStale } from '@/util/history-cache';
 import { useSocket } from '@/components/SocketProvider';
 import { useVoiceRoom } from '@/components/VoiceRoomProvider';
 import { setActiveRoom } from '@/util/active-room';
+import { playEffect } from '@/util/audio';
+import { feedbackForEvents, haptic } from '@/util/feedback';
 import { supabase } from '@/util/supabase-client';
 
 
 const ROLL_ANIM_MS = 800;
 /** Autopilot turns for offline players (~2.5 s) are too short to be worth a ring. */
 const MIN_TIMER_RING_MS = 4_000;
+/** The last seconds of your turn tick (sound + haptic) before autopilot plays. */
+const TICK_SECONDS = 5;
 
 function sleep(ms: number) {
     return new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -72,6 +76,8 @@ export default function GameBoardScreen() {
     const leftRef = useRef(false);
     const rollingRef = useRef(false);
     const currentUserIdRef = useRef<string | null>(null);
+    /** This player's color, for sounds fired from socket callbacks. */
+    const myColorRef = useRef<string | null>(null);
     const runRollAnimationRef = useRef<(finalValue: number, rollerColor: string) => Promise<void>>(
         async () => {},
     );
@@ -81,6 +87,7 @@ export default function GameBoardScreen() {
     const { room } = useGameRoom({
         roomId,
         gameCode,
+        onEvents: (events) => feedbackForEvents(events, color => color === myColorRef.current),
         onEvent: (e) => {
             if (e.type === 'dice') {
                 // Local player already animates in handleRollDice — skip duplicate.
@@ -134,6 +141,10 @@ export default function GameBoardScreen() {
     );
 
     const isMyTurn = !!selfPlayer && selfPlayer.color === currentColor && room?.status === 'PLAYING';
+    myColorRef.current = selfPlayer?.color ?? null;
+
+    // Music has faded out with the lobby; the game opens with its intro, once.
+    useEffect(() => playEffect('intro'), []);
 
     // The server restarts the turn timer whenever `turnEndsAt` changes; time it from
     // `turnMsLeft` on arrival so a phone with a wrong clock still counts down right.
@@ -182,10 +193,26 @@ export default function GameBoardScreen() {
         if (diceValue !== null) setLastShownDice(diceValue);
     }, [diceValue]);
 
+    // Countdown ticks in the last seconds of your own turn.
+    useEffect(() => {
+        if (!isMyTurn || !turnDeadline) return;
+        const timers: ReturnType<typeof setTimeout>[] = [];
+        for (let s = TICK_SECONDS; s >= 1; s--) {
+            const wait = turnDeadline.endsAt - s * 1000 - Date.now();
+            if (wait < 0) continue;
+            timers.push(setTimeout(() => {
+                playEffect('tick');
+                haptic.tick();
+            }, wait));
+        }
+        return () => timers.forEach(clearTimeout);
+    }, [isMyTurn, turnDeadline]);
+
     // ── Dice animation ──
     const runRollAnimation = useCallback(async (finalValue: number, rollerColor: string) => {
         if (rollingRef.current) return;
 
+        playEffect('roll');
         setRolling(true);
         setRollingColor(rollerColor);
         rollingRef.current = true;
@@ -203,6 +230,7 @@ export default function GameBoardScreen() {
     const handleRollDice = async () => {
         if (!isMyTurn || rolling || diceValue !== null || !isRealtimeReady || !selfPlayer) return;
 
+        playEffect('roll');
         setRolling(true);
         setRollingColor(selfPlayer.color);
         rollingRef.current = true;
@@ -221,6 +249,7 @@ export default function GameBoardScreen() {
                 return;
             }
             setLastShownDice(result.data?.diceValue ?? null);
+            haptic.medium();
         } finally {
             setRolling(false);
             setRollingColor(null);

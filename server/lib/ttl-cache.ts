@@ -29,4 +29,8 @@ export class TtlCache<K, V> {
     delete(key: K) {
         this.map.delete(key);
     }
+
+    clear() {
+        this.map.clear();
+    }
 }

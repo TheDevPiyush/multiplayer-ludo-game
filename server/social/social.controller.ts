@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { games } from '../game/services';
 import { prisma } from '../lib/prisma';
 import { log } from '../lib/logger';
+import { TtlCache } from '../lib/ttl-cache';
 import { afterCursor, pageParams, toPage } from '../lib/paging';
 import { getIO } from '../socket/socket-server';
 
@@ -36,8 +37,21 @@ function isOnline(userId: string): boolean {
     return (getIO()?.sockets.adapter.rooms.get(`user:${userId}`)?.size ?? 0) > 0;
 }
 
+type Summary = { unreadNotifications: number; incomingRequests: number; outgoingRequests: number; friends: number };
+
+/**
+ * Badge counts per user. Apps ask on every reconnect and foreground, but the
+ * counts only move on social actions, and each of those clears the users involved.
+ */
+const summaries = new TtlCache<string, Summary>(20_000, 10 * 60_000);
+
+function summaryChanged(...userIds: string[]) {
+    for (const id of userIds) summaries.delete(id);
+}
+
 /** Tells a user's open apps to refresh badges / lists. */
 function notify(userId: string, reason: 'request' | 'accepted' | 'removed' | 'invite', fromUserId: string, extra?: object) {
+    summaryChanged(userId);
     getIO()?.to(`user:${userId}`).emit('social:update', { reason, fromUserId, ...extra });
 }
 
@@ -205,6 +219,7 @@ export const sendRequest = handle('sendRequest', async (req, res) => {
         // Double tap: the request already exists.
         if ((e as { code?: string })?.code !== 'P2002') throw e;
     }
+    summaryChanged(me);
     notify(otherId, 'request', me);
     res.status(201).json({ relation: 'outgoing' satisfies Relation });
 });
@@ -221,7 +236,10 @@ export const removeFriend = handle('removeFriend', async (req, res) => {
     const me = req.user!.id;
     const otherId = String(req.params.userId ?? '');
     const { count } = await prisma.friendship.deleteMany({ where: pairWhere(me, otherId) });
-    if (count > 0) notify(otherId, 'removed', me);
+    if (count > 0) {
+        summaryChanged(me);
+        notify(otherId, 'removed', me);
+    }
     res.status(200).json({ relation: 'none' satisfies Relation });
 });
 
@@ -268,13 +286,17 @@ export const inviteToRoom = handle('inviteToRoom', async (req, res) => {
 /** Badge and tab counts — lists are paged, so their totals come from here. */
 export const getSummary = handle('getSummary', async (req, res) => {
     const me = req.user!.id;
+    const cached = summaries.get(me);
+    if (cached) return res.status(200).json({ data: cached });
     const [unreadNotifications, incomingRequests, outgoingRequests, friends] = await Promise.all([
         prisma.notification.count({ where: { userId: me, readAt: null } }),
         prisma.friendship.count({ where: { addresseeId: me, status: 'PENDING' } }),
         prisma.friendship.count({ where: { requesterId: me, status: 'PENDING' } }),
         prisma.friendship.count({ where: { status: 'ACCEPTED', OR: [{ requesterId: me }, { addresseeId: me }] } }),
     ]);
-    res.status(200).json({ data: { unreadNotifications, incomingRequests, outgoingRequests, friends } });
+    const data = { unreadNotifications, incomingRequests, outgoingRequests, friends };
+    summaries.set(me, data);
+    res.status(200).json({ data });
 });
 
 export const listNotifications = handle('listNotifications', async (req, res) => {
@@ -320,6 +342,7 @@ export const markNotificationsRead = handle('markNotificationsRead', async (req,
         where: { userId: me, readAt: null },
         data: { readAt: new Date() },
     });
+    if (count > 0) summaryChanged(me);
     res.status(200).json({ updated: count });
 });
 
@@ -334,6 +357,8 @@ export async function pruneNotifications(now = Date.now()) {
         // An invite is only useful while its room is waiting for players.
         prisma.notification.deleteMany({ where: { type: 'ROOM_INVITE', createdAt: { lt: new Date(now - DAY_MS) } } }),
     ]);
+    // Dropped invites may have been unread, for any number of users.
+    if (invites.count > 0) summaries.clear();
     log.info('notifications pruned', { read: read.count, invites: invites.count });
 }
 

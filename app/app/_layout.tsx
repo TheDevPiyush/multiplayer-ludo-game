@@ -20,6 +20,7 @@ import { LudoBackground } from '@/components/LudoBackground';
 import { getActiveRoom } from '@/util/active-room';
 import { SocialProvider } from '@/components/SocialProvider';
 import { InviteBanner } from '@/components/InviteBanner';
+import { AudioDirector } from '@/components/AudioDirector';
 import { friendsHref, takePendingLink } from '@/util/links';
 
 export {
@@ -172,6 +173,7 @@ function RootLayoutNav() {
                   <Stack.Screen name="join/[code]" dangerouslySingular options={{ headerShown: false, gestureEnabled: false }} />
                 </Stack>
                 <InviteBanner />
+                <AudioDirector />
               </LudoBackground>
             </ThemeProvider>
           </VoiceRoomProvider>

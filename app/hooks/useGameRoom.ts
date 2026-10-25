@@ -39,7 +39,7 @@ export type GameRoom = {
 type Color = RoomPlayer['color'];
 
 /** Engine events as sent by the server in `room:sync`. */
-type SyncEvent =
+export type SyncEvent =
     | { type: 'ROLLED'; color: Color; value: number }
     | { type: 'MOVED'; color: Color; token: number; from: number; to: number; path: number[] }
     | { type: 'CAPTURED'; color: Color; token: number; by: Color; cell: number }
@@ -83,9 +83,11 @@ interface UseGameRoomOpts {
     roomId?: string;
     gameCode?: string;
     onEvent?: (e: RoomEvent) => void;
+    /** The engine events of each accepted update, as sent (sounds use these as-is). */
+    onEvents?: (events: SyncEvent[]) => void;
 }
 
-export function useGameRoom({ roomId, gameCode, onEvent }: UseGameRoomOpts) {
+export function useGameRoom({ roomId, gameCode, onEvent, onEvents }: UseGameRoomOpts) {
     const { socket, isRealtimeReady, connectionPhase, connectGeneration } = useSocket();
     const [room, setRoom] = useState<GameRoom | null>(null);
     const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
@@ -93,6 +95,8 @@ export function useGameRoom({ roomId, gameCode, onEvent }: UseGameRoomOpts) {
     const [disconnectingPlayers, setDisconnectingPlayers] = useState<DisconnectingPlayer[]>([]);
     const onEventRef = useRef(onEvent);
     onEventRef.current = onEvent;
+    const onEventsRef = useRef(onEvents);
+    onEventsRef.current = onEvents;
 
     const roomIdRef = useRef(roomId);
     const gameCodeRef = useRef(gameCode);
@@ -231,6 +235,7 @@ export function useGameRoom({ roomId, gameCode, onEvent }: UseGameRoomOpts) {
             const diceForMove = lastDice?.type === 'ROLLED' ? lastDice.value : sync.room.currentDice ?? 0;
 
             acceptRoom(sync.room);
+            if (sync.events.length > 0) onEventsRef.current?.(sync.events);
 
             for (const e of sync.events) {
                 switch (e.type) {
