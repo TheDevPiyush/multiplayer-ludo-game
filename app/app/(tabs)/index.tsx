@@ -134,7 +134,14 @@ export default function HomeTabScreen() {
         >
             {/* Header */}
             <Animated.View entering={FadeInDown.duration(400)} style={styles.header}>
-                <RNView style={styles.avatar} accessibilityLabel={connected ? 'Online' : 'Offline'}>
+                {/* Opens the Profile tab (a tab switch, like the tab bar). */}
+                <Pressable
+                    onPress={() => router.navigate('/(tabs)/profile')}
+                    style={({ pressed }) => [styles.avatar, pressed && { transform: [{ scale: 0.94 }] }]}
+                    hitSlop={6}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Your profile, ${connected ? 'online' : 'offline'}`}
+                >
                     {user ? (
                         <UserAvatar user={user} size={40} />
                     ) : (
@@ -142,7 +149,7 @@ export default function HomeTabScreen() {
                     )}
                     {/* Live connection to the game server */}
                     <RNView style={[styles.connDot, { backgroundColor: connected ? '#22C55E' : '#FF3B4E' }]} />
-                </RNView>
+                </Pressable>
                 <RNView style={{ flex: 1 }}>
                     <Text weight="medium" style={styles.hello}>Ready to roll?</Text>
                     <Text weight="bold" style={styles.name} numberOfLines={1}>@{username}</Text>
