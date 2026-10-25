@@ -1,6 +1,7 @@
 import { ReactNode } from 'react';
 import { StyleSheet } from 'react-native';
 import { Button, Dialog as PaperDialog, Portal } from 'react-native-paper';
+import { Fonts } from '@/constants/fonts';
 import { Text } from './Themed';
 
 type DialogAction = {
@@ -80,5 +81,5 @@ const styles = StyleSheet.create({
     message: { fontSize: 14, lineHeight: 20, color: '#5B5F7E' },
     actions: { paddingHorizontal: 16, paddingBottom: 16, gap: 4 },
     button: { borderRadius: 14 },
-    buttonLabel: { fontFamily: 'Hellix-Bold', fontSize: 14, marginHorizontal: 14 },
+    buttonLabel: { fontFamily: Fonts.bold, fontSize: 14, marginHorizontal: 14 },
 });

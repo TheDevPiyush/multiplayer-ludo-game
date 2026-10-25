@@ -18,6 +18,7 @@ import { ColorPicker, type ColorOption } from '@/components/ludo/ColorPicker';
 import { COLOR_HEX } from '@/components/ludo/geometry';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
+import { Fonts } from '@/constants/fonts';
 import type { LocalGameConfig, SeatKind } from '@/hooks/useLocalGame';
 
 const palette = Colors.dark;
@@ -306,7 +307,7 @@ const styles = StyleSheet.create({
         borderColor: palette.glassBorder,
         color: palette.text,
         fontSize: 14,
-        fontFamily: 'Hellix-SemiBold',
+        fontFamily: Fonts.semiBold,
     },
     levelChip: {
         paddingHorizontal: 10,

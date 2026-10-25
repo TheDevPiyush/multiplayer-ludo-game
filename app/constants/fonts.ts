@@ -1,7 +1,7 @@
 export const Fonts = {
-    regular: 'Hellix-Medium',
-    medium: 'Hellix-Medium',
-    semiBold: 'Hellix-SemiBold',
-    bold: 'Hellix-Bold',
+    regular: 'PlusJakartaSans-Medium',
+    medium: 'PlusJakartaSans-Medium',
+    semiBold: 'PlusJakartaSans-SemiBold',
+    bold: 'PlusJakartaSans-Bold',
     mono: 'SpaceMono-Regular',
 }

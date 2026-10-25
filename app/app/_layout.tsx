@@ -37,9 +37,10 @@ SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
-    'Hellix-Medium': require('../assets/fonts/Hellix-Medium.ttf'),
-    'Hellix-SemiBold': require('../assets/fonts/Hellix-SemiBold.ttf'),
-    'Hellix-Bold': require('../assets/fonts/Hellix-Bold.ttf'),
+    // Plus Jakarta Sans, SIL Open Font License (assets/fonts/PlusJakartaSans-OFL.txt).
+    'PlusJakartaSans-Medium': require('../assets/fonts/PlusJakartaSans-Medium.ttf'),
+    'PlusJakartaSans-SemiBold': require('../assets/fonts/PlusJakartaSans-SemiBold.ttf'),
+    'PlusJakartaSans-Bold': require('../assets/fonts/PlusJakartaSans-Bold.ttf'),
     'SpaceMono-Regular': require('../assets/fonts/SpaceMono-Regular.ttf'),
   })
 

@@ -30,6 +30,7 @@ import AppDialog from '@/components/Dialog';
 import { useSocial } from '@/components/SocialProvider';
 import { Text } from '@/components/Themed';
 import { UserAvatar } from '@/components/UserAvatar';
+import { Fonts } from '@/constants/fonts';
 import { usePagedList } from '@/hooks/usePagedList';
 import type { FriendsTab } from '@/util/links';
 
@@ -399,7 +400,7 @@ const styles = StyleSheet.create({
         borderRadius: 16,
         backgroundColor: TRACK,
     },
-    searchInput: { flex: 1, fontSize: 15, color: INK, fontFamily: 'Hellix-SemiBold', paddingVertical: 0 },
+    searchInput: { flex: 1, fontSize: 15, color: INK, fontFamily: Fonts.semiBold, paddingVertical: 0 },
 
     tabs: { flexDirection: 'row', gap: 6, padding: 4, borderRadius: 14, backgroundColor: TRACK, marginTop: 14 },
     tab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, height: 38, borderRadius: 11 },

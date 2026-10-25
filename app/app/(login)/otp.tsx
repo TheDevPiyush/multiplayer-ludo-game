@@ -17,6 +17,7 @@ import AppDialog from '@/components/Dialog';
 import { GlassPanel } from '@/components/GlassPanel';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
+import { Fonts } from '@/constants/fonts';
 import { useAuth } from '@/hooks/useAuth';
 
 const palette = Colors.dark;
@@ -296,7 +297,7 @@ const styles = StyleSheet.create({
         flex: 1,
         fontSize: 16,
         color: palette.text,
-        fontFamily: 'Hellix-SemiBold',
+        fontFamily: Fonts.semiBold,
     },
     codeRow: {
         flexDirection: 'row',
