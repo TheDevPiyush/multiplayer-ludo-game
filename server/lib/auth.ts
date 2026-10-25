@@ -4,9 +4,14 @@ import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 
 import { TtlCache } from './ttl-cache';
 
+/** `User.provider` for guests (Supabase anonymous sign-in). */
+export const GUEST_PROVIDER = 'anonymous';
+
 export interface AuthUser {
     id: string;
     email?: string;
+    /** A guest (Supabase anonymous sign-in) until they link Google or an email. */
+    isAnonymous: boolean;
     user_metadata: Record<string, unknown>;
     app_metadata: Record<string, unknown>;
 }
@@ -28,7 +33,8 @@ function fromClaims(p: JWTPayload): AuthUser | null {
     if (typeof p.sub !== 'string') return null;
     return {
         id: p.sub,
-        email: typeof p.email === 'string' ? p.email : undefined,
+        email: typeof p.email === 'string' && p.email ? p.email : undefined,
+        isAnonymous: p.is_anonymous === true,
         user_metadata: (p.user_metadata as Record<string, unknown>) ?? {},
         app_metadata: (p.app_metadata as Record<string, unknown>) ?? {},
     };
@@ -74,7 +80,8 @@ export async function verifyAccessToken(token: string): Promise<AuthUser | null>
     if (error || !data.user) return null;
     const user: AuthUser = {
         id: data.user.id,
-        email: data.user.email,
+        email: data.user.email || undefined,
+        isAnonymous: data.user.is_anonymous === true,
         user_metadata: data.user.user_metadata ?? {},
         app_metadata: data.user.app_metadata ?? {},
     };

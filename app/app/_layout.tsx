@@ -165,6 +165,7 @@ function RootLayoutNav() {
                   <Stack.Screen name="(game)" options={{ headerShown: false }} />
                   <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
                   <Stack.Screen name="edit-username" dangerouslySingular options={{ headerShown: false, presentation: 'modal' }} />
+                  <Stack.Screen name="save-progress" dangerouslySingular options={{ headerShown: false, animation: 'slide_from_right' }} />
                   <Stack.Screen
                     name="friends"
                     dangerouslySingular

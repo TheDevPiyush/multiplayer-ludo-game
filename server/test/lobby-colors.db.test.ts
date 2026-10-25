@@ -53,5 +53,5 @@ describe.skipIf(!hasDb)('lobby colors in Postgres', async () => {
         await games.joinRoom(c.id, duo.gameCode);
         await games.chooseColor(c.id, duo.gameCode, 'BLUE');
         expect(await dbColors(duo.id)).toEqual({ [b.id]: 'YELLOW', [c.id]: 'BLUE' });
-    });
+    }, 20_000); // a dozen round trips to the remote database
 });

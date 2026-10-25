@@ -11,7 +11,7 @@ import { useSocial } from '@/components/SocialProvider';
 const TAB_COLORS: Record<string, string> = {
   index: '#FF5A6A',
   history: '#FFB020',
-  notifications: '#B794FF',
+  notifications: '#34D27B',
   profile: '#5AA2FF',
 };
 

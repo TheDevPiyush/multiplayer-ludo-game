@@ -19,6 +19,7 @@ import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
 import { Fonts } from '@/constants/fonts';
 import { useAuth } from '@/hooks/useAuth';
+import { leaveGuest, LEAVE_GUEST_DIALOG, takenDialog } from '@/util/guest';
 
 const palette = Colors.dark;
 
@@ -27,10 +28,25 @@ const OTP_LENGTH = Number(process.env.EXPO_PUBLIC_OTP_LENGTH ?? 6);
 const RESEND_SECONDS = 60;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
+type DialogAction = { label: string; onPress: () => void };
+type LocalDialog = { title: string; message: string; actions: DialogAction[] } | null;
+
 export default function OtpLoginScreen() {
+    return <EmailCodeScreen mode="signin" />;
+}
+
+/**
+ * Email + code, in two modes: `signin` signs in (or up); `link` saves a guest's
+ * progress by attaching the email to the guest account (app/save-progress.tsx).
+ */
+export function EmailCodeScreen({ mode }: { mode: 'signin' | 'link' }) {
     const router = useRouter();
     const insets = useSafeAreaInsets();
-    const { sendEmailOtp, verifyEmailOtp, loading, dialog, hideDialog } = useAuth();
+    const { sendEmailOtp, verifyEmailOtp, startEmailLink, verifyEmailLink, loading, dialog, hideDialog } = useAuth();
+    const linking = mode === 'link';
+    /** Dialogs with choices (taken email, leaving the guest, saved). */
+    const [choice, setChoice] = useState<LocalDialog>(null);
+    const closeChoice = () => setChoice(null);
 
     const [step, setStep] = useState<'email' | 'code'>('email');
     const [email, setEmail] = useState('');
@@ -47,9 +63,33 @@ export default function OtpLoginScreen() {
         return () => clearTimeout(t);
     }, [resendIn]);
 
+    const confirmLeaveGuest = () =>
+        setChoice({
+            ...LEAVE_GUEST_DIALOG,
+            actions: [
+                { label: 'Cancel', onPress: closeChoice },
+                { label: 'Leave guest', onPress: () => { closeChoice(); void leaveGuest(); } },
+            ],
+        });
+
     const sendCode = async () => {
         if (!emailValid || busy) return;
-        const ok = await sendEmailOtp(email);
+        let ok: boolean;
+        if (linking) {
+            const res = await startEmailLink(email);
+            if (!res.ok && res.reason === 'taken') {
+                setChoice({
+                    ...takenDialog('email'),
+                    actions: [
+                        { label: 'Sign in to it', onPress: confirmLeaveGuest },
+                        { label: 'Use another email', onPress: closeChoice },
+                    ],
+                });
+            }
+            ok = res.ok;
+        } else {
+            ok = await sendEmailOtp(email);
+        }
         if (!ok) return;
         setCode('');
         setStep('code');
@@ -59,8 +99,16 @@ export default function OtpLoginScreen() {
 
     const verify = async (value = code) => {
         if (value.length !== OTP_LENGTH || busy) return;
-        const ok = await verifyEmailOtp(email, value);
-        // On success the root auth listener navigates into the app.
+        // Signing in: the root auth listener navigates into the app on success.
+        const ok = linking ? await verifyEmailLink(email, value) : await verifyEmailOtp(email, value);
+        if (ok && linking) {
+            setChoice({
+                title: 'Progress saved',
+                message: `Your guest progress now belongs to ${email.trim().toLowerCase()}. Sign in with it on any phone.`,
+                actions: [{ label: 'Done', onPress: () => { closeChoice(); router.back(); } }],
+            });
+            return;
+        }
         if (!ok) {
             setCode('');
             codeInputRef.current?.focus();
@@ -92,7 +140,7 @@ export default function OtpLoginScreen() {
                     <FontAwesome name="chevron-left" size={14} color={palette.mutedText} />
                 </TouchableOpacity>
                 <Text weight="bold" style={styles.topTitle}>
-                    {step === 'email' ? 'Sign in with email' : 'Verify email'}
+                    {step === 'code' ? 'Verify email' : linking ? 'Save your progress' : 'Sign in with email'}
                 </Text>
                 <RNView style={{ width: 36 }} />
             </RNView>
@@ -106,7 +154,9 @@ export default function OtpLoginScreen() {
                 </Text>
                 {step === 'email' ? (
                     <Text weight="medium" style={styles.subheading}>
-                        We'll send you a {OTP_LENGTH}-digit code. No password needed.
+                        {linking
+                            ? `Your stats and history move to this email. We'll send a ${OTP_LENGTH}-digit code to confirm it's yours.`
+                            : `We'll send you a ${OTP_LENGTH}-digit code. No password needed.`}
                     </Text>
                 ) : (
                     <Text weight="medium" style={styles.subheading}>
@@ -187,7 +237,7 @@ export default function OtpLoginScreen() {
                         onPress={() => verify()}
                         activeOpacity={0.85}
                     >
-                        {busy ? <ActivityIndicator color="#1A1048" /> : <Text weight="bold" style={styles.primaryText}>Verify & play</Text>}
+                        {busy ? <ActivityIndicator color="#1A1048" /> : <Text weight="bold" style={styles.primaryText}>{linking ? 'Verify & save' : 'Verify & play'}</Text>}
                     </TouchableOpacity>
                     <TouchableOpacity
                         disabled={resendIn > 0 || busy}
@@ -208,6 +258,13 @@ export default function OtpLoginScreen() {
                 message={dialog.message}
                 onDismiss={hideDialog}
                 actions={[{ label: 'OK', onPress: hideDialog }]}
+            />
+            <AppDialog
+                visible={!!choice}
+                title={choice?.title ?? ''}
+                message={choice?.message}
+                onDismiss={closeChoice}
+                actions={choice?.actions}
             />
         </KeyboardAvoidingView>
     );

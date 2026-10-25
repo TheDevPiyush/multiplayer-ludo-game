@@ -7,6 +7,11 @@
 - **Room invites**: the host taps an empty seat to invite friends. The friend gets a live banner in the app and a notification in Alerts.
 - **Public rooms**: a list of open public rooms, refreshed by a button rather than polling. Tapping a room re-checks it, then joins its lobby.
 - **Live social updates**: socket `social:update` events keep badges and lists current without a refetch.
+- **Play as guest**: no sign-up needed. A guest is a Supabase anonymous user with a normal player row (`guest_1234`), and can play offline and online, public and private, including joining by invite link.
+  - Friends, friend search, invites, alerts and voice chat need a saved account. The server enforces this (`account_required`), and the app shows a "Save your progress" prompt in those places. Guests don't appear in friend search.
+  - Saving progress from Profile links Google (`linkIdentity`) or an email (6-digit code) to the same user. Stats, history and games carry over automatically. The server swaps the guest name for one based on their Google name or email (a name they picked themselves is kept) and fills in the provider and avatar.
+  - If that Google account or email already has an account, the player is asked to use a fresh one, or to sign in to that account and leave the guest progress behind (with a warning).
+  - Signing out as a guest warns that the account can't be recovered.
 - **Lobby colours**: players pick any free colour, locked live for everyone and released on change or leave. 2-player rooms keep opposite corners. Local games get per-seat colours (tap another seat's colour to swap).
 
 ## Improvements
@@ -46,6 +51,13 @@
 - **Over-the-air updates**: EAS Update is set up, with a channel per build profile. Publish a JS-only fix with `eas update --channel preview` (or `production`). The runtime follows the app version, so bump `version` in `app.json` whenever native code changes.
 - **Social badges**: badge counts are cached per user on the server and cleared by each social action. Reconnects and foregrounding no longer run 4 count queries.
 
+## Supabase settings for guests
+- Authentication → Sign In / Providers: turn on **Allow anonymous sign-ins** and **Allow manual linking**.
+- Authentication → Emails → **Change email address** template: include `{{ .Token }}`, so guests saving with email get the 6-digit code the app asks for.
+
 ## Before launch
 - Add the release/Play signing SHA256s and `IOS_APP_ID` for verified links.
 - Push notifications for offline invites and requests.
+- Guests:
+  - Turn on CAPTCHA (Cloudflare Turnstile) for anonymous sign-ins, because guests are cheap to create in bulk.
+  - Clean up guests unused for 30+ days, both the Supabase users and their player rows.

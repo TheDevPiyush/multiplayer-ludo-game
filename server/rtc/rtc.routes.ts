@@ -4,6 +4,7 @@ import { AccessToken, TrackSource } from 'livekit-server-sdk';
 import { games } from '../game/services';
 import { log } from '../lib/logger';
 import { rateLimit } from '../lib/rate-limit';
+import { requireAccount } from '../middleware/requireAccount.middleware';
 import { verifySupabaseToken } from '../middleware/tokenVerify.middleware';
 import { voiceRoomName } from './livekit';
 
@@ -46,7 +47,7 @@ async function voiceToken(req: Request, res: Response) {
 }
 
 const rtcRouter = Router();
-rtcRouter.post('/voice-token', verifySupabaseToken, rateLimit('voice-token', 10, 0.5), (req, res) => {
+rtcRouter.post('/voice-token', verifySupabaseToken, requireAccount, rateLimit('voice-token', 10, 0.5), (req, res) => {
     voiceToken(req, res).catch(e => {
         log.error('voice-token failed', { user: req.user?.id, error: (e as Error)?.message });
         res.status(500).json({ message: 'Could not start voice chat.' });

@@ -3,7 +3,9 @@ import { useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Modal, Pressable, StyleSheet, useWindowDimensions, View as RNView } from 'react-native';
 import Animated, { FadeIn, ZoomIn } from 'react-native-reanimated';
 
+import AppDialog from '@/components/Dialog';
 import { Text } from '@/components/Themed';
+import { useIsGuest } from '@/hooks/useIsGuest';
 import { useVoiceRoom, type AudioRoute } from '@/components/VoiceRoomProvider';
 
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
@@ -48,7 +50,25 @@ function RoundButton({
 /** Mute / unmute. Joins voice first if this player isn't in it yet. */
 export function MicButton({ roomId }: { roomId: string }) {
     const voice = useVoiceRoom();
+    const guest = useIsGuest();
     const [joining, setJoining] = useState(false);
+    const [guestNotice, setGuestNotice] = useState(false);
+
+    // Voice is for saved accounts (the server refuses guests a voice token).
+    if (guest) {
+        return (
+            <>
+                <RoundButton icon="headset-off" label="Voice chat needs an account" onPress={() => setGuestNotice(true)} />
+                <AppDialog
+                    visible={guestNotice}
+                    title="Voice chat comes with an account"
+                    message="You're playing as a guest. Save your progress with Google or an email from Profile to talk with other players."
+                    onDismiss={() => setGuestNotice(false)}
+                    actions={[{ label: 'OK', onPress: () => setGuestNotice(false) }]}
+                />
+            </>
+        );
+    }
 
     if (voice.micPermission === 'denied') {
         return <RoundButton icon="microphone-off" tone="danger" label="Microphone blocked — open settings" onPress={() => void Linking.openSettings()} />;

@@ -12,7 +12,9 @@ import {
     removeFriend,
     type AppNotification,
 } from '@/apis/social-api';
+import { AccountRequired } from '@/components/AccountRequired';
 import { useSocial } from '@/components/SocialProvider';
+import { useIsGuest } from '@/hooks/useIsGuest';
 import { usePagedList } from '@/hooks/usePagedList';
 import { Text } from '@/components/Themed';
 import { UserAvatar } from '@/components/UserAvatar';
@@ -45,6 +47,28 @@ function describe(n: AppNotification): { text: string; tab: FriendsTab } {
 }
 
 export default function NotificationsScreen() {
+    const guest = useIsGuest();
+    const insets = useSafeAreaInsets();
+    if (!guest) return <NotificationsList />;
+    // Guests have no friends or invites, so there is nothing to load.
+    return (
+        <RNView style={[styles.screen, { paddingTop: insets.top + 12 }]}>
+            <RNView style={styles.header}>
+                <RNView style={{ flex: 1 }}>
+                    <Text weight="bold" style={styles.title}>Notifications</Text>
+                    <Text weight="medium" style={styles.subtitle}>Friend requests and updates</Text>
+                </RNView>
+            </RNView>
+            <AccountRequired
+                icon="bell-ring-outline"
+                title="Alerts come with an account"
+                sub="Save your progress with Google or an email, and friend requests and room invites will show up here."
+            />
+        </RNView>
+    );
+}
+
+function NotificationsList() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
     const { revision, refresh, summary } = useSocial();

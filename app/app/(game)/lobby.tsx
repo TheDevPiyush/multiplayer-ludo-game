@@ -33,6 +33,7 @@ import { UserAvatar } from '@/components/UserAvatar';
 import { AudioOutputButton, MicButton } from '@/components/VoiceButtons';
 import { useGameActions } from '@/hooks/useGameActions';
 import { useGameRoom, type RoomPlayer } from '@/hooks/useGameRoom';
+import { useIsGuest } from '@/hooks/useIsGuest';
 import { useSocket } from '@/components/SocketProvider';
 import { useVoiceRoom } from '@/components/VoiceRoomProvider';
 import { supabase } from '@/util/supabase-client';
@@ -189,6 +190,9 @@ export default function LobbyScreen() {
     const players = room?.players ?? [];
     const selfPlayer = players.find(p => p.userId === currentUserId);
     const isHost = !!room && !!selfPlayer && selfPlayer.userId === room.createdById;
+    const guest = useIsGuest();
+    /** Guests have no friends to invite; the share link still works. */
+    const canInvite = isHost && !guest;
     const isFull = players.length === maxPlayers;
     const canStart = players.length >= 2;
 
@@ -487,7 +491,7 @@ export default function LobbyScreen() {
                                     onMicTap={player.isMe && voice.inRoom ? voice.toggleMute : undefined}
                                 />
                             ) : (
-                                <EmptySeat key={`empty-${i}`} width={seatW} height={seatH} onInvite={isHost ? () => setInviteOpen(true) : undefined} />
+                                <EmptySeat key={`empty-${i}`} width={seatW} height={seatH} onInvite={canInvite ? () => setInviteOpen(true) : undefined} />
                             ),
                         )}
                     </RNView>

@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 
-import type { AuthUser } from '../lib/auth.ts';
+import { GUEST_PROVIDER, type AuthUser } from '../lib/auth.ts';
 import { prisma } from '../lib/prisma.ts';
 import { games } from '../game/services.ts';
 import { getUserRow, userRows, type UserRow } from '../game/user-cache.ts';
@@ -10,6 +10,8 @@ const USERNAME_RE = /^[a-z0-9_]{3,20}$/;
 /** After the first (free) rename, one change per this long. */
 const USERNAME_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 
+const GUEST_PREFIX = 'guest_';
+
 /** What the app sees of its own row — no admin flag or provider ids. */
 function publicUser(u: UserRow) {
     return {
@@ -17,6 +19,7 @@ function publicUser(u: UserRow) {
         username: u.username,
         avatarUrl: u.avatarUrl,
         provider: u.provider,
+        isGuest: u.provider === GUEST_PROVIDER,
         totalWins: u.totalWins,
         totalGames: u.totalGames,
         createdAt: u.createdAt,
@@ -25,48 +28,63 @@ function publicUser(u: UserRow) {
     };
 }
 
+/** How they signed in ('google', 'email', or the guest marker). */
+function providerOf(u: AuthUser): string {
+    if (u.isAnonymous) return GUEST_PROVIDER;
+    const main = u.app_metadata?.provider as string | undefined;
+    if (main && main !== GUEST_PROVIDER) return main;
+    // A linked guest keeps 'anonymous' as its first provider; the linked one is in the list.
+    const all = (u.app_metadata?.providers as string[] | undefined) ?? [];
+    return all.find(p => p !== GUEST_PROVIDER) ?? 'email';
+}
+
+/** Name stem from the sign-in profile: Google name, else the email's local part. */
+function usernameBase(u: AuthUser): string {
+    if (u.isAnonymous) return 'guest';
+    const meta = u.user_metadata;
+    const raw = meta?.user_name || meta?.preferred_username || meta?.full_name || meta?.name || u.email?.split('@')[0] || 'player';
+    return String(raw)
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '')
+        .slice(0, 15) || 'player';
+}
+
+function avatarOf(u: AuthUser): string | null {
+    const meta = u.user_metadata;
+    return (typeof meta?.avatar_url === 'string' && meta.avatar_url) || (typeof meta?.picture === 'string' && meta.picture) || null;
+}
+
+const withSuffix = (base: string) => `${base}_${Math.floor(1000 + Math.random() * 9000)}`;
+const isUniqueClash = (e: unknown) => (e as { code?: string })?.code === 'P2002';
+
 /**
  * Returns the player row for an authenticated user, creating it on first sign-in
- * (works for OAuth and email OTP alike). Safe to call concurrently.
+ * (OAuth, email OTP or guest alike). Safe to call concurrently.
  */
 async function ensureUser(authUser: AuthUser): Promise<{ user: UserRow; created: boolean }> {
     const existing = await getUserRow(authUser.id);
-    if (existing) return { user: existing, created: false };
+    if (existing) {
+        if (existing.provider === GUEST_PROVIDER && !authUser.isAnonymous) {
+            return { user: await upgradeGuest(existing, authUser), created: false };
+        }
+        return { user: existing, created: false };
+    }
 
-    const meta = authUser.user_metadata;
-    const rawUsername =
-        meta?.user_name ||
-        meta?.preferred_username ||
-        meta?.full_name ||
-        meta?.name ||
-        authUser.email?.split('@')[0] ||
-        'player';
-
-    const baseUsername =
-        String(rawUsername)
-            .trim()
-            .toLowerCase()
-            .replace(/[^a-z0-9_]/g, '_')
-            .replace(/_+/g, '_')
-            .replace(/^_|_$/g, '')
-            .slice(0, 15) || 'player';
-
-    const avatarUrl =
-        (typeof meta?.avatar_url === 'string' && meta.avatar_url) ||
-        (typeof meta?.picture === 'string' && meta.picture) ||
-        null;
-    const provider = (authUser.app_metadata?.provider as string | undefined) ?? 'email';
-
+    const base = usernameBase(authUser);
+    const provider = providerOf(authUser);
+    const avatarUrl = avatarOf(authUser);
     for (let attempt = 0; attempt < 10; attempt++) {
-        const username = `${baseUsername}_${Math.floor(1000 + Math.random() * 9000)}`;
         try {
             const user = await prisma.user.create({
-                data: { id: authUser.id, username, provider, providerId: authUser.id, avatarUrl },
+                data: { id: authUser.id, username: withSuffix(base), provider, providerId: authUser.id, avatarUrl },
             });
             userRows.set(user.id, user);
             return { user, created: true };
         } catch (e) {
-            if ((e as { code?: string })?.code !== 'P2002') throw e;
+            if (!isUniqueClash(e)) throw e;
             // Unique clash: either the username is taken, or a parallel request created this user.
             const raced = await prisma.user.findUnique({ where: { id: authUser.id } });
             if (raced) {
@@ -76,6 +94,45 @@ async function ensureUser(authUser: AuthUser): Promise<{ user: UserRow; created:
         }
     }
     throw new Error('Could not pick a unique username.');
+}
+
+const upgrading = new Map<string, Promise<UserRow>>();
+
+/**
+ * A guest just linked Google or an email. The Supabase user (and so this row,
+ * its games, stats and history) is the same one; only the placeholder name and
+ * the sign-in details change. Runs once even if several requests race here.
+ */
+function upgradeGuest(row: UserRow, authUser: AuthUser): Promise<UserRow> {
+    let pending = upgrading.get(row.id);
+    if (!pending) {
+        pending = (async () => {
+            const avatar = avatarOf(authUser);
+            const base = {
+                provider: providerOf(authUser),
+                ...(!row.avatarUrl && avatar ? { avatarUrl: avatar } : {}),
+            };
+            // Keep a name they picked themselves; swap the generated guest_1234.
+            const rename = row.username.startsWith(GUEST_PREFIX);
+            for (let attempt = 0; attempt < 10; attempt++) {
+                try {
+                    const user = await prisma.user.update({
+                        where: { id: row.id },
+                        data: rename ? { ...base, username: withSuffix(usernameBase(authUser)) } : base,
+                    });
+                    userRows.set(user.id, user);
+                    games.invalidateProfile(user.id, { username: user.username, avatarUrl: user.avatarUrl });
+                    log.info('guest saved their progress', { user: user.id, provider: user.provider });
+                    return user;
+                } catch (e) {
+                    if (!rename || !isUniqueClash(e)) throw e;
+                }
+            }
+            throw new Error('Could not pick a unique username.');
+        })().finally(() => upgrading.delete(row.id));
+        upgrading.set(row.id, pending);
+    }
+    return pending;
 }
 
 export async function registerUser(req: Request, res: Response) {

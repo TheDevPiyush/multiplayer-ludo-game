@@ -27,10 +27,12 @@ import {
     type SearchResult,
 } from '@/apis/social-api';
 import AppDialog from '@/components/Dialog';
+import { AccountRequired } from '@/components/AccountRequired';
 import { useSocial } from '@/components/SocialProvider';
 import { Text } from '@/components/Themed';
 import { UserAvatar } from '@/components/UserAvatar';
 import { Fonts } from '@/constants/fonts';
+import { useIsGuest } from '@/hooks/useIsGuest';
 import { usePagedList } from '@/hooks/usePagedList';
 import type { FriendsTab } from '@/util/links';
 
@@ -114,6 +116,42 @@ function EmptyState({ icon, title, sub }: { icon: IconName; title: string; sub: 
  * /friends?tab=friends | /friends?tab=requests.
  */
 export default function FriendsModal() {
+    const guest = useIsGuest();
+    return guest ? <GuestFriends /> : <FriendsSheet />;
+}
+
+/** Guests can't have friends: the same sheet, explaining how to unlock them. */
+function GuestFriends() {
+    const router = useRouter();
+    const insets = useSafeAreaInsets();
+    const close = () => {
+        if (router.canGoBack()) router.back();
+        else router.replace('/(tabs)');
+    };
+    return (
+        <RNView style={styles.backdrop}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={close} accessibilityLabel="Close friends" />
+            <Animated.View entering={SlideInDown.duration(320)} style={[styles.sheet, { paddingBottom: insets.bottom + 8 }]}>
+                <RNView style={styles.grabber} />
+                <RNView style={styles.titleRow}>
+                    <Text weight="bold" style={styles.title}>Friends</Text>
+                    <Pressable onPress={close} style={styles.closeBtn} hitSlop={8} accessibilityLabel="Close">
+                        <MaterialCommunityIcons name="close" size={20} color={MUTED} />
+                    </Pressable>
+                </RNView>
+                <AccountRequired
+                    tone="light"
+                    icon="account-heart-outline"
+                    title="Friends come with an account"
+                    sub="Save your progress with Google or an email to add friends, see who's online and invite them to games."
+                    onNavigate={close}
+                />
+            </Animated.View>
+        </RNView>
+    );
+}
+
+function FriendsSheet() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const params = useLocalSearchParams<{ tab?: string }>();

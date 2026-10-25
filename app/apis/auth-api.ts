@@ -5,6 +5,8 @@ export type BackendUser = {
     username: string;
     avatarUrl: string | null;
     provider: string | null;
+    /** Playing without an account until they link Google or an email. */
+    isGuest: boolean;
     totalWins: number;
     totalGames: number;
     createdAt: string;

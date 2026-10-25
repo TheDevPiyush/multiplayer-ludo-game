@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 
 import { games } from '../game/services';
+import { GUEST_PROVIDER } from '../lib/auth';
 import { prisma } from '../lib/prisma';
 import { log } from '../lib/logger';
 import { TtlCache } from '../lib/ttl-cache';
@@ -79,7 +80,12 @@ export const searchUsers = handle('searchUsers', async (req, res) => {
     if (q.length < 2) return res.status(200).json({ data: [] });
 
     const users = await prisma.user.findMany({
-        where: { username: { startsWith: q }, id: { not: me } },
+        // Guests can't have friends, so they don't show up here.
+        where: {
+            username: { startsWith: q },
+            id: { not: me },
+            OR: [{ provider: null }, { provider: { not: GUEST_PROVIDER } }],
+        },
         orderBy: { username: 'asc' },
         take: 20,
         select: userSummary,
@@ -194,8 +200,8 @@ export const sendRequest = handle('sendRequest', async (req, res) => {
     const otherId = String(req.params.userId ?? '');
     if (!otherId || otherId === me) return res.status(400).json({ message: "You can't add yourself." });
 
-    const other = await prisma.user.findUnique({ where: { id: otherId }, select: { id: true } });
-    if (!other) return res.status(404).json({ message: 'Player not found.' });
+    const other = await prisma.user.findUnique({ where: { id: otherId }, select: { id: true, provider: true } });
+    if (!other || other.provider === GUEST_PROVIDER) return res.status(404).json({ message: 'Player not found.' });
 
     const existing = await prisma.friendship.findFirst({ where: pairWhere(me, otherId) });
     if (existing) {
@@ -285,6 +291,9 @@ export const inviteToRoom = handle('inviteToRoom', async (req, res) => {
 
 /** Badge and tab counts — lists are paged, so their totals come from here. */
 export const getSummary = handle('getSummary', async (req, res) => {
+    if (req.user!.isAnonymous) {
+        return res.status(200).json({ data: { unreadNotifications: 0, incomingRequests: 0, outgoingRequests: 0, friends: 0 } });
+    }
     const me = req.user!.id;
     const cached = summaries.get(me);
     if (cached) return res.status(200).json({ data: cached });
