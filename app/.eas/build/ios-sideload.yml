@@ -1,0 +1,43 @@
+# Unsigned iOS IPA for sideloading (AltStore / Althea re-sign it with a free Apple ID).
+# ios-sideload builds Release (JS bundled, no Metro needed); ios-sideload-dev builds the
+# Debug dev client, which loads JS from Metro on your PC (same Wi-Fi).
+build:
+  name: Unsigned IPA for sideloading
+  steps:
+    - eas/checkout
+    - eas/install_node_modules
+    - run:
+        name: Prebuild iOS project
+        command: npx expo prebuild --platform ios --no-install
+    - run:
+        name: Install pods
+        working_directory: ios
+        command: pod install
+    - run:
+        name: Build without code signing
+        working_directory: ios
+        command: |
+          set -o pipefail
+          CONFIG=$([ "$EAS_BUILD_PROFILE" = "ios-sideload-dev" ] && echo Debug || echo Release)
+          echo "Building $CONFIG"
+          WORKSPACE=$(ls -d *.xcworkspace | head -1)
+          SCHEME="${WORKSPACE%.xcworkspace}"
+          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" \
+            -configuration "$CONFIG" -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            | tail -n 200
+    - run:
+        name: Package IPA
+        working_directory: ios
+        command: |
+          rm -rf Payload && mkdir Payload
+          cp -R build/Build/Products/*-iphoneos/*.app Payload/
+          zip -qry simple-ludo-unsigned.ipa Payload
+          ls -lh simple-ludo-unsigned.ipa
+    - eas/upload_artifact:
+        name: Upload IPA
+        inputs:
+          type: application-archive
+          # Resolved from the repo root, not app/.
+          path: app/ios/simple-ludo-unsigned.ipa

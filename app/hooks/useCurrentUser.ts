@@ -13,7 +13,6 @@ export function useCurrentUser() {
     const [error, setError] = useState<string | null>(null);
 
     const refresh = useCallback(async () => {
-        setLoading(true);
         setError(null);
         try {
             const { data: sessionData } = await supabase.auth.getSession();
@@ -44,7 +43,19 @@ export function useCurrentUser() {
         }
     }, []);
 
+    // Paint the cached profile immediately, then revalidate in the background.
     useEffect(() => {
+        AsyncStorage.getItem(STORAGE_KEY)
+            .then(raw => {
+                if (!raw) return;
+                const parsed = JSON.parse(raw);
+                const cached = parsed?.user ?? parsed;
+                if (cached?.username) {
+                    setUser(prev => prev ?? (cached as BackendUser));
+                    setLoading(false);
+                }
+            })
+            .catch(() => {});
         void refresh();
     }, [refresh]);
 

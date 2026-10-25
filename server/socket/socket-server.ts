@@ -1,16 +1,18 @@
 import type { Server as HttpServer } from 'http';
 import { Server, type Socket } from 'socket.io';
 
-import { socketAuth } from './socket-auth';
+import { ServiceError, type GameService } from '../game/game-service';
+import { log } from '../lib/logger';
+import { RateLimiter } from '../lib/rate-limit';
+import { socketAuth, socketUser } from './socket-auth';
 import {
     addSocket,
+    getRoomPresence,
+    GRACE_MS,
+    onlineCount,
     removeSocket,
     scheduleDisconnect,
-    markPlayerConnected,
-    markPlayerDisconnected,
-    getRoomPresence,
 } from './room-presence';
-import { prisma } from '../lib/prisma';
 
 let io: Server | null = null;
 
@@ -18,213 +20,168 @@ export function getIO(): Server | null {
     return io;
 }
 
-export function broadcastToRoom(roomId: string, event: string, payload: any) {
-    if (!io) return;
-    io.to(`room:${roomId}`).emit(event, payload);
+type Ack = (res: unknown) => void;
+
+/** Game actions per socket — taps are ~2/s at most. */
+const actionLimiter = new RateLimiter(8, 8);
+/** room:join / room:state per user — each may load a room from Redis / Postgres. */
+const roomLimiter = new RateLimiter(10, 2);
+
+function corsOrigin(): string | string[] {
+    const list = process.env.CORS_ORIGINS?.split(',').map(s => s.trim()).filter(Boolean);
+    return list?.length ? list : '*';
 }
 
-interface JoinPayload {
-    roomId: string;
-    gameCode: string;
-}
-
-interface SignalingPayload {
-    targetUserId: string;
-    [k: string]: any;
-}
-
-export function attachSocketServer(httpServer: HttpServer) {
+export function attachSocketServer(httpServer: HttpServer, games: GameService) {
     io = new Server(httpServer, {
-        cors: { origin: '*', methods: ['GET', 'POST'] },
+        cors: { origin: corsOrigin(), methods: ['GET', 'POST'] },
         path: '/socket.io',
-        pingInterval: 15_000,
-        pingTimeout: 10_000,
+        transports: ['websocket'],
+        pingInterval: 10_000,
+        pingTimeout: 8_000,
+        // Socket.IO 4.6+: buffer packets for a briefly dropped client and replay on reconnect.
+        connectionStateRecovery: { maxDisconnectionDuration: 2 * 60_000 },
     });
 
     io.use(socketAuth);
 
     io.on('connection', (socket: Socket) => {
-        const userId = socket.user?.id;
+        const userId = socketUser(socket)?.id;
         if (!userId) {
+            log.warn('socket without user, disconnecting', { socket: socket.id, recovered: socket.recovered });
             socket.disconnect(true);
             return;
         }
 
+        // Personal channel: friend requests, notifications, online status.
+        socket.join(`user:${userId}`);
+
         const joinedRooms = new Set<string>();
+        log.info('socket connected', { user: userId, socket: socket.id, recovered: socket.recovered || undefined });
 
-        // ─── room:join ──────────────────────────────────────────────
-        socket.on('room:join', async (payload: JoinPayload, ack?: (res: any) => void) => {
+        // Every incoming event at debug level.
+        socket.onAny((event: string, payload: unknown) => {
+            log.debug(`⇢ ${event}`, { user: userId, ...summarize(payload) });
+        });
+
+        const rateLimited = () => !actionLimiter.take(socket.id);
+
+        const roomSnapshot = (roomId: string, room: Parameters<GameService['dto']>[0]) => ({
+            room: games.dto(room),
+            onlineUserIds: getRoomPresence(roomId),
+        });
+
+        // ─── room:join / room:rejoin ───────────────────────────────
+        const onJoin = async (payload: { roomId?: string; gameCode?: string }, ack?: Ack) => {
             try {
-                const { roomId, gameCode } = payload || {};
-                if (!roomId || !gameCode) {
-                    return ack?.({ ok: false, error: 'roomId and gameCode required' });
-                }
+                const { roomId } = payload || {};
+                if (!roomId) return ack?.({ ok: false, error: 'roomId required' });
+                if (!roomLimiter.take(userId)) return ack?.({ ok: false, error: 'Slow down.' });
 
-                const player = await prisma.gamePlayer.findFirst({
-                    where: { gameRoomId: roomId, userId },
-                });
-
-                if (!player) {
-                    return ack?.({ ok: false, error: 'Not a member of this room.' });
-                }
+                const room = await games.getRoom({ id: roomId });
+                if (!room) return ack?.({ ok: false, error: 'Room not found.' });
+                if (!games.isMember(room, userId)) return ack?.({ ok: false, error: 'Not a member of this room.' });
 
                 socket.join(`room:${roomId}`);
                 joinedRooms.add(roomId);
-                addSocket(roomId, userId, socket.id);
+                const first = addSocket(roomId, userId, socket.id);
+                games.setPresence(room, userId, 'CONNECTED');
 
-                await markPlayerConnected(io!, roomId, userId);
-
-                const room = await prisma.gameRoom.findUnique({
-                    where: { id: roomId },
-                    include: {
-                        players: {
-                            include: { user: { select: { username: true, avatarUrl: true } } },
-                            orderBy: { seatNumber: 'asc' },
-                        },
-                    },
-                });
-
-                if (!room) {
-                    return ack?.({ ok: false, error: 'Room not found.' });
-                }
-
-                // Tell newcomer who's online & who's in voice
-                const onlineUserIds = getRoomPresence(roomId);
-                const voicePeers = Array.from(voiceMembers.get(roomId) ?? []);
-
-                ack?.({
-                    ok: true,
-                    data: {
-                        room,
-                        onlineUserIds,
-                        voicePeers,
-                    },
-                });
-
-                // Tell everyone else
-                socket.to(`room:${roomId}`).emit('presence:connected', { userId });
+                ack?.({ ok: true, data: roomSnapshot(roomId, room) });
+                log.info('socket room:join', { user: userId, room: room.gameCode, status: room.status });
+                if (first) socket.to(`room:${roomId}`).emit('presence:connected', { userId });
             } catch (e) {
-                console.error('room:join error:', (e as Error)?.message);
+                log.error('room:join failed', { user: userId, error: (e as Error)?.message });
                 ack?.({ ok: false, error: 'Failed to join room.' });
             }
+        };
+        socket.on('room:join', onJoin);
+        socket.on('room:rejoin', onJoin);
+
+        socket.on('room:state', async (payload: { roomId: string }, ack?: Ack) => {
+            if (!roomLimiter.take(userId)) return ack?.({ ok: false, error: 'Slow down.' });
+            const room = await games.getRoom({ id: payload?.roomId }).catch(() => null);
+            if (!room || !games.isMember(room, userId)) return ack?.({ ok: false, error: 'Room not found.' });
+            ack?.({ ok: true, data: roomSnapshot(room.id, room) });
         });
 
-        // ─── room:leave (explicit) ──────────────────────────────────
-        socket.on('room:leave', async (payload: { roomId: string }, ack?: (res: any) => void) => {
+        socket.on('room:leave', (payload: { roomId: string }, ack?: Ack) => {
             const { roomId } = payload || {};
             if (!roomId || !joinedRooms.has(roomId)) return ack?.({ ok: false });
             socket.leave(`room:${roomId}`);
             joinedRooms.delete(roomId);
-            removeSocket(roomId, userId, socket.id);
-            leaveVoice(roomId, userId);
-            io!.to(`room:${roomId}`).emit('presence:disconnected', { userId });
-            io!.to(`room:${roomId}`).emit('voice:peer-left', { userId });
+            if (removeSocket(roomId, userId, socket.id)) {
+                io!.to(`room:${roomId}`).emit('presence:disconnected', { userId });
+            }
             ack?.({ ok: true });
         });
 
-        // ─── room:state (re-fetch helper) ───────────────────────────
-        socket.on('room:state', async (payload: { roomId: string }, ack?: (res: any) => void) => {
-            try {
-                const room = await prisma.gameRoom.findUnique({
-                    where: { id: payload.roomId },
-                    include: {
-                        players: {
-                            include: { user: { select: { username: true, avatarUrl: true } } },
-                            orderBy: { seatNumber: 'asc' },
-                        },
-                    },
-                });
-                if (!room) return ack?.({ ok: false, error: 'Room not found.' });
-                ack?.({
-                    ok: true,
-                    data: {
-                        room,
-                        onlineUserIds: getRoomPresence(payload.roomId),
-                        voicePeers: Array.from(voiceMembers.get(payload.roomId) ?? []),
-                    },
-                });
-            } catch (e) {
-                ack?.({ ok: false, error: (e as Error)?.message });
-            }
-        });
-
-        // ─── voice:join / voice:leave ───────────────────────────────
-        socket.on('voice:join', (payload: { roomId: string }, ack?: (res: any) => void) => {
-            const { roomId } = payload || {};
-            if (!roomId || !joinedRooms.has(roomId)) {
-                return ack?.({ ok: false, error: 'Not in room.' });
-            }
-            joinVoice(roomId, userId);
-            const peers = Array.from(voiceMembers.get(roomId) ?? []).filter(id => id !== userId);
-            ack?.({ ok: true, data: { peers } });
-            socket.to(`room:${roomId}`).emit('voice:peer-joined', { userId });
-        });
-
-        socket.on('voice:leave', (payload: { roomId: string }) => {
-            const { roomId } = payload || {};
-            if (!roomId) return;
-            leaveVoice(roomId, userId);
-            socket.to(`room:${roomId}`).emit('voice:peer-left', { userId });
-        });
-
-        // ─── voice:mute (state broadcast) ───────────────────────────
-        socket.on('voice:mute', (payload: { roomId: string; muted: boolean }) => {
-            const { roomId, muted } = payload || {};
-            if (!roomId) return;
-            socket.to(`room:${roomId}`).emit('voice:mute', { userId, muted: !!muted });
-        });
-
-        // ─── WebRTC signaling (relays to target) ────────────────────
-        const relaySignal = (eventName: 'voice:offer' | 'voice:answer' | 'voice:ice') => {
-            return (payload: SignalingPayload & { roomId: string }) => {
-                const { targetUserId, roomId } = payload || {};
-                if (!targetUserId || !roomId) return;
-                const targets = io!.sockets.adapter.rooms.get(`room:${roomId}`);
-                if (!targets) return;
-                for (const sid of targets) {
-                    const s = io!.sockets.sockets.get(sid);
-                    if (s?.user?.id === targetUserId) {
-                        s.emit(eventName, { ...payload, fromUserId: userId });
-                    }
+        // ─── Gameplay ──────────────────────────────────────────────
+        const gameAction = (event: string, run: (payload: any) => Promise<unknown>) =>
+            async (payload: any, ack?: Ack) => {
+                const start = performance.now();
+                const fields = () => ({ user: userId, room: payload?.gameCode, ms: (performance.now() - start).toFixed(1) });
+                if (rateLimited()) {
+                    log.warn(`socket ${event} rate-limited`, fields());
+                    return ack?.({ ok: false, error: 'Slow down.' });
+                }
+                try {
+                    const data = await run(payload ?? {});
+                    ack?.({ ok: true, data });
+                    log.info(`socket ${event} ok`, { ...fields(), ...(data && typeof data === 'object' ? data : {}) });
+                } catch (e) {
+                    const known = e instanceof ServiceError;
+                    (known ? log.warn : log.error)(`socket ${event} rejected`, { ...fields(), error: (e as Error)?.message });
+                    ack?.({ ok: false, error: known ? (e as Error).message : 'Something went wrong.' });
                 }
             };
-        };
-        socket.on('voice:offer', relaySignal('voice:offer'));
-        socket.on('voice:answer', relaySignal('voice:answer'));
-        socket.on('voice:ice', relaySignal('voice:ice'));
 
-        // ─── disconnect ─────────────────────────────────────────────
-        socket.on('disconnect', () => {
+        socket.on('room:color', gameAction('room:color', async p => {
+            const room = await games.chooseColor(userId, p.gameCode, p.color);
+            return { color: room.players.find(x => x.userId === userId)?.color };
+        }));
+        socket.on('game:start', gameAction('game:start', async p => {
+            await games.startGame(userId, p.gameCode);
+        }));
+        socket.on('game:roll-dice', gameAction('game:roll-dice', async p => {
+            const r = await games.act(userId, p.gameCode, { kind: 'ROLL' });
+            return { diceValue: r.diceValue };
+        }));
+        socket.on('game:move-token', gameAction('game:move-token', async p => {
+            const token = Number(p.tokenIndex);
+            if (!Number.isInteger(token) || token < 0 || token > 3) throw new ServiceError(400, 'tokenIndex must be 0..3.');
+            await games.act(userId, p.gameCode, { kind: 'MOVE', token });
+        }));
+        socket.on('game:skip-turn', gameAction('game:skip-turn', async p => {
+            await games.act(userId, p.gameCode, { kind: 'SKIP' });
+        }));
+
+        // ─── disconnect ────────────────────────────────────────────
+        socket.on('disconnect', (reason) => {
+            log.info('socket disconnected', { user: userId, socket: socket.id, reason });
             for (const roomId of joinedRooms) {
-                removeSocket(roomId, userId, socket.id);
-                leaveVoice(roomId, userId);
-                io!.to(`room:${roomId}`).emit('voice:peer-left', { userId });
-                scheduleDisconnect(io!, roomId, userId, async (r, u) => {
-                    await markPlayerDisconnected(io!, r, u);
+                if (!removeSocket(roomId, userId, socket.id)) continue;
+                io!.to(`room:${roomId}`).emit('presence:disconnecting', { userId, graceMs: GRACE_MS });
+                scheduleDisconnect(roomId, userId, () => {
+                    io!.to(`room:${roomId}`).emit('presence:disconnected', { userId });
+                    void games.getRoom({ id: roomId }).then(room => {
+                        if (room) games.setPresence(room, userId, 'DISCONNECTED');
+                    });
                 });
             }
         });
     });
 
+    games.start(onlineCount);
     return io;
 }
 
-// ─── Voice room membership ──────────────────────────────────────────
-
-const voiceMembers = new Map<string, Set<string>>(); // roomId → userIds
-
-function joinVoice(roomId: string, userId: string) {
-    let set = voiceMembers.get(roomId);
-    if (!set) {
-        set = new Set();
-        voiceMembers.set(roomId, set);
+/** Small, safe view of an event payload for logs (ids and numbers only). */
+function summarize(payload: unknown): Record<string, unknown> {
+    if (!payload || typeof payload !== 'object') return {};
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(payload)) {
+        if (typeof v === 'number' || typeof v === 'boolean' || (typeof v === 'string' && v.length <= 64)) out[k] = v;
     }
-    set.add(userId);
-}
-
-function leaveVoice(roomId: string, userId: string) {
-    const set = voiceMembers.get(roomId);
-    if (!set) return;
-    set.delete(userId);
-    if (set.size === 0) voiceMembers.delete(roomId);
+    return out;
 }

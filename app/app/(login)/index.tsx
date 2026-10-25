@@ -96,7 +96,8 @@ export default function AuthIndex() {
     const palette = Colors[scheme];
 
 
-    const { signInWithGithub, signInWithGoogle, loading, dialog, hideDialog } = useAuth();
+    const { signInWithGoogle, playAsGuest, loading, dialog, hideDialog } = useAuth();
+    const busy = loading.googleLoading || loading.guestLoading;
 
 
     // Token float anims
@@ -229,51 +230,65 @@ export default function AuthIndex() {
                     {/* Card handle */}
                     <View style={styles.cardHandle} />
 
-                    <Text weight="bold" style={styles.welcome}>Welcome back</Text>
-                    <Text weight="medium" style={styles.subtitle}>Sign in to continue playing</Text>
+                    <Text weight="bold" style={styles.welcome}>Ready to play?</Text>
+                    <Text weight="medium" style={styles.subtitle}>Sign in to keep your stats and play with friends</Text>
 
-                    <View style={styles.btnStack}>
-                        {/* Google */}
-                        <TouchableOpacity
-                            style={styles.btnGoogle}
-                            activeOpacity={0.85}
-                            onPress={signInWithGoogle}
-                            disabled={loading.githubLoading || loading.googleLoading}
-                        >
-                            <FontAwesome name="google" size={16} color="#EA4335" />
-                            <Text weight="bold" style={styles.btnGoogleText}>
-                                {
-                                    loading.googleLoading
-                                        ?
-                                        <ActivityIndicator color={"blue"}/>
-                                        :
-                                        "Continue with Google"
-                                }
-                            </Text>
-                        </TouchableOpacity>
+                    {/* Google */}
+                    <TouchableOpacity
+                        style={[styles.btnGoogle, busy && styles.btnBusy]}
+                        activeOpacity={0.85}
+                        onPress={signInWithGoogle}
+                        disabled={busy}
+                    >
+                        {loading.googleLoading ? (
+                            <ActivityIndicator color="#3B3BE8" />
+                        ) : (
+                            <>
+                                <FontAwesome name="google" size={16} color="#EA4335" />
+                                <Text weight="bold" style={styles.btnGoogleText}>Continue with Google</Text>
+                            </>
+                        )}
+                    </TouchableOpacity>
 
-                        {/* GitHub */}
-                        <TouchableOpacity
-                            style={styles.btnGithub}
-                            activeOpacity={0.85}
-                            onPress={signInWithGithub}
-                            disabled={loading.githubLoading || loading.googleLoading}
-                        >
-                            <FontAwesome name="github" size={16} color="#C0C0D8" />
-                            <Text weight="bold" style={styles.btnGithubText}>
-                                {
-                                    loading.githubLoading
-                                        ?
-                                        <ActivityIndicator color={"blue"} />
-                                        :
-                                        "Continue with GitHub"
-                                }
-                            </Text>
-                        </TouchableOpacity>
+                    <View style={styles.orRow}>
+                        <View style={styles.orLine} />
+                        <Text weight="semiBold" style={styles.orText}>OR</Text>
+                        <View style={styles.orLine} />
                     </View>
 
+                    {/* Email code · guest (no account; progress can be saved later from Profile) */}
+                    <View style={styles.altRow}>
+                        <TouchableOpacity
+                            style={[styles.btnAlt, busy && styles.btnBusy]}
+                            activeOpacity={0.85}
+                            onPress={() => router.push('/(login)/otp')}
+                            disabled={busy}
+                        >
+                            <FontAwesome name="envelope" size={15} color="#C0C0D8" />
+                            <Text weight="bold" style={styles.btnAltText}>Email</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.btnAlt, busy && styles.btnBusy]}
+                            activeOpacity={0.85}
+                            onPress={() => void playAsGuest()}
+                            disabled={busy}
+                            accessibilityLabel="Play as guest"
+                            accessibilityHint="Plays without an account. You can save your progress later from Profile."
+                        >
+                            {loading.guestLoading ? (
+                                <ActivityIndicator color="#FFFFFF" />
+                            ) : (
+                                <>
+                                    <FontAwesome name="gamepad" size={15} color="#C0C0D8" />
+                                    <Text weight="bold" style={styles.btnAltText}>Guest</Text>
+                                </>
+                            )}
+                        </TouchableOpacity>
+                    </View>
+                    <Text weight="medium" style={styles.guestHint}>Guests can save their progress anytime from Profile.</Text>
+
                     <Text weight="regular" style={styles.terms}>
-                        By signing in you agree to our{' '}
+                        By continuing you agree to our{' '}
                         <Text weight="semiBold" style={styles.termsLink}>Terms</Text>
                         {' '}&{' '}
                         <Text weight="semiBold" style={styles.termsLink}>Privacy Policy</Text>
@@ -405,10 +420,7 @@ const styles = StyleSheet.create({
         marginTop: 5,
         marginBottom: 24,
     },
-    btnStack: {
-        gap: 11,
-        marginBottom: 20,
-    },
+    btnBusy: { opacity: 0.6 },
     btnGoogle: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -423,29 +435,41 @@ const styles = StyleSheet.create({
         color: '#111120',
         letterSpacing: 0.2,
     },
-    btnGithub: {
+    orRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginVertical: 16 },
+    orLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255, 255, 255, 0.25)' },
+    orText: { fontSize: 11, color: 'rgba(255, 255, 255, 0.55)', letterSpacing: 1.2 },
+    altRow: { flexDirection: 'row', gap: 11 },
+    btnAlt: {
+        flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 10,
+        gap: 9,
         backgroundColor: 'rgba(255, 255, 255, 0.10)',
         borderRadius: 16,
         paddingVertical: 15,
         borderWidth: 1.5,
         borderColor: 'rgba(255, 255, 255, 0.18)',
     },
-    btnGithubText: {
+    btnAltText: {
         fontSize: 14,
         color: 'rgba(255, 255, 255, 0.82)',
         letterSpacing: 0.2,
     },
+    guestHint: {
+        fontSize: 12,
+        color: 'rgba(255, 255, 255, 0.55)',
+        textAlign: 'center',
+        marginTop: 10,
+        marginBottom: 18,
+    },
     terms: {
         textAlign: 'center',
         fontSize: 11,
-        color: '#2A2A42',
+        color: 'rgba(255, 255, 255, 0.5)',
         lineHeight: 18,
     },
     termsLink: {
-        color: '#3B7DD8',
+        color: 'rgba(255, 255, 255, 0.85)',
     },
 });

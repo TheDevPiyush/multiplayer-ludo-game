@@ -58,6 +58,16 @@ function apiBase(): string | null {
     return url.replace(/\/$/, '');
 }
 
+/** If the socket isn't back this long after returning to the app, start a fresh one. */
+const FOREGROUND_RECONNECT_TIMEOUT_MS = 5000;
+
+/** Current access token; never hangs (supabase-js can stall right after resume). */
+async function currentToken(): Promise<string> {
+    const timeout = new Promise<null>(resolve => setTimeout(() => resolve(null), 4000));
+    const session = await Promise.race([supabase.auth.getSession().then(r => r.data.session), timeout]);
+    return session?.access_token ?? '';
+}
+
 function isNetworkReachable(state: NetInfoState): boolean {
     return state.isConnected === true && state.isInternetReachable !== false;
 }
@@ -105,7 +115,6 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         if (existing?.connected) return;
 
         if (existing) {
-            existing.auth = { token };
             existing.connect();
             setStatus('connecting');
             return;
@@ -115,7 +124,11 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
 
         const s = io(base, {
             transports: ['websocket'],
-            auth: { token },
+            // Called on every (re)connect attempt, so auto-reconnects never reuse an
+            // expired access token (supabase-js refreshes the session in the background).
+            auth: (cb) => {
+                void currentToken().then(token => cb({ token }));
+            },
             reconnection: true,
             reconnectionAttempts: Infinity,
             reconnectionDelay: 800,
@@ -130,8 +143,14 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         });
         s.on('disconnect', (reason) => {
             setStatus(reason === 'io client disconnect' ? 'disconnected' : 'reconnecting');
+            // Socket.IO never auto-reconnects after a server-side disconnect; we always want to.
+            if (reason === 'io server disconnect') {
+                setTimeout(() => {
+                    if (socketRef.current === s && !s.connected) s.connect();
+                }, 1000);
+            }
         });
-        s.on('reconnect_attempt', () => setStatus('reconnecting'));
+        s.io.on('reconnect_attempt', () => setStatus('reconnecting'));
         s.on('connect_error', (err) => {
             setLastError(err?.message ?? 'connect_error');
             if (!networkOnlineRef.current) {
@@ -190,10 +209,16 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         return () => unsub();
     }, [connect]);
 
-    // Reconnect on app foregrounding
+    // Background / foreground: pause token refresh while hidden (per supabase-js
+    // React Native docs) and make sure the socket really comes back on resume.
     useEffect(() => {
         let prev: AppStateStatus = AppState.currentState;
+        let watchdog: ReturnType<typeof setTimeout> | null = null;
+
         const sub = AppState.addEventListener('change', (next) => {
+            if (next === 'active') void supabase.auth.startAutoRefresh();
+            else void supabase.auth.stopAutoRefresh();
+
             if (prev.match(/inactive|background/) && next === 'active') {
                 void NetInfo.fetch().then(state => {
                     const online = isNetworkReachable(state);
@@ -203,12 +228,23 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
                     const s = socketRef.current;
                     if (s && !s.connected) s.connect();
                     else if (!s) void connect();
+
+                    // Last resort: a socket that is still stuck gets replaced.
+                    if (watchdog) clearTimeout(watchdog);
+                    watchdog = setTimeout(() => {
+                        if (socketRef.current?.connected) return;
+                        teardown();
+                        void connect();
+                    }, FOREGROUND_RECONNECT_TIMEOUT_MS);
                 });
             }
             prev = next;
         });
-        return () => sub.remove();
-    }, [connect]);
+        return () => {
+            sub.remove();
+            if (watchdog) clearTimeout(watchdog);
+        };
+    }, [connect, teardown]);
 
     const connectionPhase = useMemo<ConnectionPhase>(() => {
         if (!networkOnline) return 'offline';

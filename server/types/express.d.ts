@@ -1,9 +1,9 @@
-import type { User } from '@supabase/supabase-js';
+import type { AuthUser } from '../lib/auth';
 
 declare global {
     namespace Express {
         interface Request {
-            user?: User;
+            user?: AuthUser;
         }
     }
 }

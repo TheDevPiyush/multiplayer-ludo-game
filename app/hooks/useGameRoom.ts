@@ -25,7 +25,38 @@ export type GameRoom = {
     winnerId: string | null;
     createdById: string;
     players: RoomPlayer[];
+    /** Server state version — updates older than the current one are dropped. */
+    version: number;
+    phase: 'ROLL' | 'MOVE' | 'OVER' | null;
+    /** Tokens the current player may move with the current dice (server-computed). */
+    movableTokens: number[];
+    /** Epoch ms when the server auto-plays this turn, null when no timer runs. */
+    turnEndsAt: number | null;
+    /** Time left on the turn when the server sent this snapshot (immune to device clock skew). */
+    turnMsLeft?: number | null;
 };
+
+type Color = RoomPlayer['color'];
+
+/** Engine events as sent by the server in `room:sync`. */
+export type SyncEvent =
+    | { type: 'ROLLED'; color: Color; value: number }
+    | { type: 'MOVED'; color: Color; token: number; from: number; to: number; path: number[] }
+    | { type: 'CAPTURED'; color: Color; token: number; by: Color; cell: number }
+    | { type: 'HOME'; color: Color; token: number }
+    | { type: 'FINISHED'; color: Color; rank: number }
+    | { type: 'LEFT'; color: Color }
+    | { type: 'TURN'; color: Color; reason: string }
+    | { type: 'OVER'; ranking: Color[] }
+    | { type: 'PLAYER_JOINED'; userId: string }
+    | { type: 'COLORS_CHANGED'; byUserId: string; changes: ColorChange[] }
+    | { type: 'PLAYER_LEFT'; userId: string }
+    | { type: 'STARTED' }
+    | { type: 'CANCELLED'; reason: string };
+
+type RoomSync = { version: number; room: GameRoom; events: SyncEvent[] };
+
+export type ColorChange = { userId: string; from: Color; to: Color };
 
 export type RoomEvent =
     | { type: 'dice'; diceValue: number; byUserId: string; color: string }
@@ -35,6 +66,8 @@ export type RoomEvent =
     | { type: 'over'; winnerId: string; winnerColor: string }
     | { type: 'started' }
     | { type: 'cancelled'; reason: string }
+    /** Lobby colors moved: `byUserId` picked; others in `changes` followed (2-player corners). */
+    | { type: 'colors'; byUserId: string; changes: ColorChange[] }
     | { type: 'presence:disconnecting'; userId: string; graceMs: number }
     | { type: 'presence:disconnected'; userId: string }
     | { type: 'presence:connected'; userId: string }
@@ -50,23 +83,27 @@ interface UseGameRoomOpts {
     roomId?: string;
     gameCode?: string;
     onEvent?: (e: RoomEvent) => void;
+    /** The engine events of each accepted update, as sent (sounds use these as-is). */
+    onEvents?: (events: SyncEvent[]) => void;
 }
 
-export function useGameRoom({ roomId, gameCode, onEvent }: UseGameRoomOpts) {
+export function useGameRoom({ roomId, gameCode, onEvent, onEvents }: UseGameRoomOpts) {
     const { socket, isRealtimeReady, connectionPhase, connectGeneration } = useSocket();
     const [room, setRoom] = useState<GameRoom | null>(null);
     const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
-    const [voicePeers, setVoicePeers] = useState<string[]>([]);
     const [joinError, setJoinError] = useState<string | null>(null);
     const [disconnectingPlayers, setDisconnectingPlayers] = useState<DisconnectingPlayer[]>([]);
     const onEventRef = useRef(onEvent);
     onEventRef.current = onEvent;
+    const onEventsRef = useRef(onEvents);
+    onEventsRef.current = onEvents;
 
     const roomIdRef = useRef(roomId);
     const gameCodeRef = useRef(gameCode);
     const wantsInRoomRef = useRef(false);
     const hasJoinedRef = useRef(false);
     const lastJoinGenRef = useRef(-1);
+    const versionRef = useRef(0);
 
     roomIdRef.current = roomId;
     gameCodeRef.current = gameCode;
@@ -75,7 +112,21 @@ export function useGameRoom({ roomId, gameCode, onEvent }: UseGameRoomOpts) {
     useEffect(() => {
         hasJoinedRef.current = false;
         lastJoinGenRef.current = -1;
+        versionRef.current = 0;
     }, [roomId, gameCode]);
+
+    /**
+     * Accept a full room snapshot only if it is newer than what we have.
+     * `force` is used for (re)join snapshots — they are authoritative even if the
+     * server restarted and its version counter went backwards.
+     */
+    const acceptRoom = useCallback((next: GameRoom | undefined | null, force = false): boolean => {
+        if (!next) return false;
+        if (!force && (next.version ?? 0) < versionRef.current) return false;
+        versionRef.current = next.version ?? 0;
+        setRoom(next);
+        return true;
+    }, []);
 
     const fire = useCallback((e: RoomEvent) => {
         onEventRef.current?.(e);
@@ -87,25 +138,23 @@ export function useGameRoom({ roomId, gameCode, onEvent }: UseGameRoomOpts) {
             return;
         }
         setJoinError(null);
-        setRoom(res.data.room);
+        acceptRoom(res.data.room, true);
         setOnlineUserIds(res.data.onlineUserIds ?? []);
-        setVoicePeers(res.data.voicePeers ?? []);
         hasJoinedRef.current = true;
-    }, []);
+    }, [acceptRoom]);
 
     const refresh = useCallback(async () => {
         if (!socket?.connected || !roomIdRef.current) return;
         await new Promise<void>((resolve) => {
             socket.emit('room:state', { roomId: roomIdRef.current }, (res: any) => {
                 if (res?.ok) {
-                    setRoom(res.data.room);
+                    acceptRoom(res.data.room, true);
                     setOnlineUserIds(res.data.onlineUserIds ?? []);
-                    setVoicePeers(res.data.voicePeers ?? []);
                 }
                 resolve();
             });
         });
-    }, [socket]);
+    }, [socket, acceptRoom]);
 
     const joinSocketRoom = useCallback((isReconnect: boolean) => {
         const s = socket;
@@ -140,34 +189,6 @@ export function useGameRoom({ roomId, gameCode, onEvent }: UseGameRoomOpts) {
     useEffect(() => {
         if (!socket) return;
 
-        const onPlayerJoined = ({ player }: any) => {
-            setRoom(prev => {
-                if (!prev) return prev;
-                const exists = prev.players.some(p => p.id === player.id);
-                return {
-                    ...prev,
-                    players: exists
-                        ? prev.players.map(p => (p.id === player.id ? { ...p, ...player } : p))
-                        : [...prev.players, player].sort((a, b) => a.seatNumber - b.seatNumber),
-                };
-            });
-        };
-        const onPlayerLeft = ({ userId }: any) => {
-            setRoom(prev => {
-                if (!prev) return prev;
-                if (prev.status === 'WAITING') {
-                    return { ...prev, players: prev.players.filter(p => p.userId !== userId) };
-                }
-                return {
-                    ...prev,
-                    players: prev.players.map(p =>
-                        p.userId === userId ? { ...p, status: 'LEFT' as const } : p,
-                    ),
-                };
-            });
-            setOnlineUserIds(prev => prev.filter(u => u !== userId));
-            setDisconnectingPlayers(prev => prev.filter(p => p.userId !== userId));
-        };
         const markOnline = (userId: string) => {
             setOnlineUserIds(prev => (prev.includes(userId) ? prev : [...prev, userId]));
             setDisconnectingPlayers(prev => prev.filter(p => p.userId !== userId));
@@ -205,95 +226,71 @@ export function useGameRoom({ roomId, gameCode, onEvent }: UseGameRoomOpts) {
             } : prev);
             fire({ type: 'presence:disconnected', userId });
         };
-        const onGameStarted = ({ currentTurnColor }: any) => {
-            setRoom(prev => prev ? { ...prev, status: 'PLAYING', currentTurnColor } : prev);
-            fire({ type: 'started' });
-        };
-        const onRoomCancelled = ({ reason }: any) => {
-            setRoom(prev => prev ? { ...prev, status: 'CANCELLED' } : prev);
-            fire({ type: 'cancelled', reason });
-        };
-        const onDiceRolled = ({ diceValue, byUserId, color }: any) => {
-            setRoom(prev => prev ? { ...prev, currentDice: diceValue } : prev);
-            fire({ type: 'dice', diceValue, byUserId, color });
-        };
-        const onTokenMoved = (p: any) => {
-            setRoom(prev => {
-                if (!prev) return prev;
-                return {
-                    ...prev,
-                    players: prev.players.map(pl => {
-                        if (pl.userId !== p.byUserId) return pl;
-                        const np = [...pl.tokenPositions];
-                        np[p.tokenIndex] = p.toPosition;
-                        return { ...pl, tokenPositions: np };
-                    }),
-                };
-            });
-            fire({ type: 'move', ...p });
-        };
-        const onCaptured = (p: any) => {
-            setRoom(prev => {
-                if (!prev) return prev;
-                return {
-                    ...prev,
-                    players: prev.players.map(pl => {
-                        if (pl.userId !== p.capturedUserId) return pl;
-                        const np = [...pl.tokenPositions];
-                        np[p.capturedTokenIndex] = 0;
-                        return { ...pl, tokenPositions: np };
-                    }),
-                };
-            });
-            fire({ type: 'capture', ...p });
-        };
-        const onTurnChanged = ({ currentTurnColor, currentDice, reason }: any) => {
-            setRoom(prev => prev ? { ...prev, currentTurnColor, currentDice } : prev);
-            fire({ type: 'turn', currentTurnColor, currentDice, reason });
-        };
-        const onGameOver = ({ winnerId, winnerColor }: any) => {
-            setRoom(prev => prev ? { ...prev, status: 'FINISHED', winnerId } : prev);
-            fire({ type: 'over', winnerId, winnerColor });
-        };
-        const onVoicePeerJoined = ({ userId }: any) =>
-            setVoicePeers(prev => (prev.includes(userId) ? prev : [...prev, userId]));
-        const onVoicePeerLeft = ({ userId }: any) =>
-            setVoicePeers(prev => prev.filter(u => u !== userId));
+        // One authoritative stream: full room snapshot + the events that produced it.
+        const onSync = (sync: RoomSync) => {
+            if (!sync?.room || sync.version <= versionRef.current) return;
+            const players = sync.room.players;
+            const userOf = (color: string) => players.find(p => p.color === color)?.userId ?? '';
+            const lastDice = sync.events.find(e => e.type === 'ROLLED');
+            const diceForMove = lastDice?.type === 'ROLLED' ? lastDice.value : sync.room.currentDice ?? 0;
 
-        socket.on('player:joined', onPlayerJoined);
-        socket.on('player:left', onPlayerLeft);
+            acceptRoom(sync.room);
+            if (sync.events.length > 0) onEventsRef.current?.(sync.events);
+
+            for (const e of sync.events) {
+                switch (e.type) {
+                    case 'ROLLED':
+                        fire({ type: 'dice', diceValue: e.value, byUserId: userOf(e.color), color: e.color });
+                        break;
+                    case 'MOVED':
+                        fire({
+                            type: 'move', byUserId: userOf(e.color), color: e.color, tokenIndex: e.token,
+                            fromPosition: e.from, toPosition: e.to, diceValue: diceForMove,
+                        });
+                        break;
+                    case 'CAPTURED':
+                        fire({
+                            type: 'capture', byUserId: userOf(e.by), capturedUserId: userOf(e.color),
+                            capturedColor: e.color, capturedTokenIndex: e.token,
+                        });
+                        break;
+                    case 'TURN':
+                        fire({ type: 'turn', currentTurnColor: e.color, currentDice: null, reason: e.reason });
+                        break;
+                    case 'OVER':
+                        fire({ type: 'over', winnerId: sync.room.winnerId ?? userOf(e.ranking[0] ?? ''), winnerColor: e.ranking[0] ?? '' });
+                        break;
+                    case 'STARTED':
+                        fire({ type: 'started' });
+                        break;
+                    case 'CANCELLED':
+                        fire({ type: 'cancelled', reason: e.reason });
+                        break;
+                    case 'COLORS_CHANGED':
+                        fire({ type: 'colors', byUserId: e.byUserId, changes: e.changes });
+                        break;
+                    case 'PLAYER_LEFT':
+                        setOnlineUserIds(prev => prev.filter(u => u !== e.userId));
+                        setDisconnectingPlayers(prev => prev.filter(p => p.userId !== e.userId));
+                        break;
+                }
+            }
+        };
+
+        socket.on('room:sync', onSync);
         socket.on('presence:connected', onConnected);
         socket.on('presence:reconnected', onReconnected);
         socket.on('presence:disconnecting', onDisconnecting);
         socket.on('presence:disconnected', onDisconnected);
-        socket.on('game:started', onGameStarted);
-        socket.on('room:cancelled', onRoomCancelled);
-        socket.on('dice:rolled', onDiceRolled);
-        socket.on('token:moved', onTokenMoved);
-        socket.on('token:captured', onCaptured);
-        socket.on('turn:changed', onTurnChanged);
-        socket.on('game:over', onGameOver);
-        socket.on('voice:peer-joined', onVoicePeerJoined);
-        socket.on('voice:peer-left', onVoicePeerLeft);
 
         return () => {
-            socket.off('player:joined', onPlayerJoined);
-            socket.off('player:left', onPlayerLeft);
+            socket.off('room:sync', onSync);
             socket.off('presence:connected', onConnected);
             socket.off('presence:reconnected', onReconnected);
             socket.off('presence:disconnecting', onDisconnecting);
             socket.off('presence:disconnected', onDisconnected);
-            socket.off('game:started', onGameStarted);
-            socket.off('room:cancelled', onRoomCancelled);
-            socket.off('dice:rolled', onDiceRolled);
-            socket.off('token:moved', onTokenMoved);
-            socket.off('token:captured', onCaptured);
-            socket.off('turn:changed', onTurnChanged);
-            socket.off('game:over', onGameOver);
-            socket.off('voice:peer-joined', onVoicePeerJoined);
-            socket.off('voice:peer-left', onVoicePeerLeft);
         };
-    }, [socket, fire]);
+    }, [socket, fire, acceptRoom]);
 
     // Prune expired disconnecting grace entries
     useEffect(() => {
@@ -308,7 +305,6 @@ export function useGameRoom({ roomId, gameCode, onEvent }: UseGameRoomOpts) {
     return {
         room,
         onlineUserIds,
-        voicePeers,
         disconnectingPlayers,
         joinError,
         refresh,

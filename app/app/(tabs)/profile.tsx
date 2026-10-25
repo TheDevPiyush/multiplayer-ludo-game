@@ -3,12 +3,14 @@ import * as Clipboard from 'expo-clipboard';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
   Easing,
   Image,
   ScrollView,
   Share,
   StyleSheet,
+  Switch,
   TouchableOpacity,
   View as RNView,
 } from 'react-native';
@@ -19,7 +21,12 @@ import { GlassPanel } from '@/components/GlassPanel';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
 import { LUDO } from '@/constants/LudoColors';
+import { useAuth } from '@/hooks/useAuth';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
+import { useIsGuest } from '@/hooks/useIsGuest';
+import { leaveGuest, LEAVE_GUEST_DIALOG, takenDialog } from '@/util/guest';
+import { VolumeSlider } from '@/components/VolumeSlider';
+import { playEffect, setAudioSettings, useAudioSettings } from '@/util/audio';
 import { supabase } from '@/util/supabase-client';
 
 type DialogAction = {
@@ -88,6 +95,27 @@ function ActionRow({
   );
 }
 
+function ToggleRow({
+  icon, label, value, onChange,
+}: { icon: string; label: string; value: boolean; onChange: (next: boolean) => void }) {
+  const palette = Colors['dark'];
+  return (
+    <RNView style={styles.actionRow}>
+      <RNView style={[styles.actionIcon, { backgroundColor: palette.elevated }]}>
+        <FontAwesome name={icon as any} size={14} color={palette.mutedText} />
+      </RNView>
+      <Text weight="medium" style={styles.actionLabel}>{label}</Text>
+      <Switch
+        value={value}
+        onValueChange={onChange}
+        accessibilityLabel={label}
+        trackColor={{ false: 'rgba(255,255,255,0.18)', true: LUDO.green }}
+        thumbColor="#FFFFFF"
+      />
+    </RNView>
+  );
+}
+
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function ProfileTabScreen() {
@@ -95,6 +123,11 @@ export default function ProfileTabScreen() {
   const router = useRouter();
   const palette = Colors['dark'];
   const { user, loading, refresh } = useCurrentUser();
+  const audio = useAudioSettings();
+  const auth = useAuth();
+  // The session knows at once (e.g. right after linking); the profile row may still be loading.
+  const sessionGuest = useIsGuest();
+  const guest = sessionGuest || !!user?.isGuest;
   const [dialog, setDialog] = useState<DialogState>({
     visible: false,
     title: '',
@@ -102,7 +135,11 @@ export default function ProfileTabScreen() {
     dismissable: true,
   });
 
-  const providerName = user?.provider === 'google' ? 'Google' : user?.provider === 'github' ? 'GitHub' : 'OAuth';
+  const account = guest
+    ? { label: 'Guest', icon: 'user-secret', color: '#FFC83D' }
+    : user?.provider === 'google'
+      ? { label: 'Google account', icon: 'google', color: '#EA4335' }
+      : { label: 'Email account', icon: 'envelope', color: '#8FB4FF' };
 
   const totalGames = user?.totalGames ?? 0;
   const totalWins = user?.totalWins ?? 0;
@@ -176,7 +213,44 @@ export default function ProfileTabScreen() {
     router.push('/edit-username');
   };
 
+  const confirmLeaveGuest = () =>
+    setDialog({
+      visible: true,
+      ...LEAVE_GUEST_DIALOG,
+      dismissable: true,
+      actions: [
+        { label: 'Cancel', onPress: hideDialog },
+        {
+          label: 'Leave guest',
+          onPress: async () => {
+            hideDialog();
+            await leaveGuest();
+            router.replace('/(login)');
+          },
+        },
+      ],
+    });
+
+  const saveWithGoogle = async () => {
+    const res = await auth.linkGoogle();
+    if (res.ok) {
+      await refresh();
+      showInfoDialog('Progress saved', 'You’re now signed in with Google. Your stats and history came with you.');
+    } else if (res.reason === 'taken') {
+      setDialog({
+        visible: true,
+        ...takenDialog('Google account'),
+        dismissable: true,
+        actions: [
+          { label: 'Sign in to it', onPress: confirmLeaveGuest },
+          { label: 'Use another', onPress: hideDialog },
+        ],
+      });
+    }
+  };
+
   const handleSignOut = () => {
+    if (guest) return confirmLeaveGuest();
     setDialog({
       visible: true,
       title: 'Sign Out',
@@ -208,17 +282,52 @@ export default function ProfileTabScreen() {
           <Avatar name={user?.username ?? '?'} url={user?.avatarUrl} size={88} />
           <Text weight="bold" style={styles.username}>@{user?.username ?? (loading ? '…' : 'player')}</Text>
           <RNView style={styles.providerBadge}>
-            <FontAwesome
-              name={user?.provider === 'google' ? 'google' : 'github'}
-              size={11}
-              color={user?.provider === 'google' ? '#EA4335' : '#C0C0D8'}
-            />
-            <Text weight="semiBold" style={styles.providerText}>
-              {providerName} account
-            </Text>
+            <FontAwesome name={account.icon as any} size={11} color={account.color} />
+            <Text weight="semiBold" style={styles.providerText}>{account.label}</Text>
           </RNView>
         </GlassPanel>
       </Animated.View>
+
+      {/* ── Guest: save progress ── */}
+      {guest && (
+        <Animated.View style={[styles.section, { opacity: fadeHeader }]}>
+          <GlassPanel intensity="heavy" accent="#FFC83D" style={styles.saveCard}>
+            <RNView style={styles.saveTitleRow}>
+              <FontAwesome name="save" size={16} color="#FFC83D" />
+              <Text weight="bold" style={styles.saveTitle}>Save your progress</Text>
+            </RNView>
+            <Text weight="medium" style={styles.saveText}>
+              You're playing as a guest. Link Google or an email to keep your stats on any phone, add friends and use voice chat.
+            </Text>
+            <RNView style={styles.saveButtons}>
+              <TouchableOpacity
+                style={[styles.saveBtn, styles.saveBtnGoogle]}
+                activeOpacity={0.85}
+                onPress={() => void saveWithGoogle()}
+                disabled={auth.loading.googleLoading}
+              >
+                {auth.loading.googleLoading ? (
+                  <ActivityIndicator color="#3B3BE8" />
+                ) : (
+                  <>
+                    <FontAwesome name="google" size={14} color="#EA4335" />
+                    <Text weight="bold" style={styles.saveBtnGoogleText}>Google</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.saveBtn, styles.saveBtnEmail]}
+                activeOpacity={0.85}
+                onPress={() => router.push('/save-progress')}
+                disabled={auth.loading.googleLoading}
+              >
+                <FontAwesome name="envelope" size={13} color="#FFFFFF" />
+                <Text weight="bold" style={styles.saveBtnEmailText}>Email</Text>
+              </TouchableOpacity>
+            </RNView>
+          </GlassPanel>
+        </Animated.View>
+      )}
 
       {/* ── Stats Row ── */}
       <Animated.View style={[
@@ -231,21 +340,58 @@ export default function ProfileTabScreen() {
       </Animated.View>
 
 
+      {/* ── Game ── */}
+      <Animated.View style={[styles.section, { opacity: fadeCard, transform: [{ translateY: slideCard }] }]}>
+        <Text weight="semiBold" style={styles.sectionTitle}>GAME</Text>
+        <RNView style={styles.sectionCard}>
+          <ToggleRow icon="music" label="Music" value={audio.music} onChange={music => setAudioSettings({ music })} />
+          <RNView style={styles.sliderRow}>
+            <VolumeSlider
+              label="Music volume"
+              value={audio.musicVolume}
+              disabled={!audio.music}
+              color={LUDO.blue}
+              onChange={musicVolume => setAudioSettings({ musicVolume })}
+            />
+          </RNView>
+          <RNView style={styles.separator} />
+          <ToggleRow icon="volume-up" label="Sound effects" value={audio.sound} onChange={sound => setAudioSettings({ sound })} />
+          <RNView style={styles.sliderRow}>
+            <VolumeSlider
+              label="Sound effects volume"
+              value={audio.effectsVolume}
+              disabled={!audio.sound}
+              color={LUDO.green}
+              onChange={effectsVolume => setAudioSettings({ effectsVolume })}
+              // Let the player hear the new level.
+              onRelease={() => playEffect('capture')}
+            />
+          </RNView>
+          <RNView style={styles.separator} />
+          <ToggleRow icon="mobile" label="Vibration" value={audio.haptics} onChange={haptics => setAudioSettings({ haptics })} />
+        </RNView>
+      </Animated.View>
+
       {/* ── Actions ── */}
       <Animated.View style={[styles.section, { opacity: fadeCard, transform: [{ translateY: slideCard }] }]}>
         <Text weight="semiBold" style={styles.sectionTitle}>ACCOUNT</Text>
         <RNView style={styles.sectionCard}>
           <ActionRow icon="pencil" label="Edit Username" onPress={editUsername} />
-          <RNView style={styles.separator} />
-          <ActionRow icon="copy" label="Copy Username" onPress={copyUsername} />
-          <RNView style={styles.separator} />
-          <ActionRow icon="share-alt" label="Share Profile" onPress={shareProfile} />
+          {/* Guests can't be found or added, so there's nothing to share yet. */}
+          {!guest && (
+            <>
+              <RNView style={styles.separator} />
+              <ActionRow icon="copy" label="Copy Username" onPress={copyUsername} />
+              <RNView style={styles.separator} />
+              <ActionRow icon="share-alt" label="Share Profile" onPress={shareProfile} />
+            </>
+          )}
         </RNView>
       </Animated.View>
 
       <Animated.View style={[styles.section, { opacity: fadeCard, transform: [{ translateY: slideCard }] }]}>
         <RNView style={styles.sectionCard}>
-          <ActionRow icon="sign-out" label="Sign Out" onPress={handleSignOut} danger />
+          <ActionRow icon="sign-out" label={guest ? 'Leave guest account' : 'Sign Out'} onPress={handleSignOut} danger />
         </RNView>
       </Animated.View>
 
@@ -258,6 +404,14 @@ export default function ProfileTabScreen() {
         onDismiss={hideDialog}
         actions={dialog.actions}
         dismissable={dialog.dismissable}
+      />
+      {/* Unexpected linking errors (from useAuth). */}
+      <AppDialog
+        visible={auth.dialog.visible}
+        title={auth.dialog.title}
+        message={auth.dialog.message}
+        onDismiss={auth.hideDialog}
+        actions={[{ label: 'OK', onPress: auth.hideDialog }]}
       />
     </ScrollView>
   );
@@ -416,6 +570,25 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: palette.text,
   },
+  sliderRow: { paddingLeft: 60, paddingRight: 16, paddingBottom: 6, marginTop: -6 },
+  saveCard: { padding: 18, gap: 10, borderColor: 'rgba(255, 200, 61, 0.45)' },
+  saveTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  saveTitle: { fontSize: 17, color: '#FFFFFF' },
+  saveText: { fontSize: 13, lineHeight: 19, color: 'rgba(255, 255, 255, 0.75)' },
+  saveButtons: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  saveBtn: {
+    flex: 1,
+    height: 46,
+    borderRadius: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  saveBtnGoogle: { backgroundColor: '#FFFFFF' },
+  saveBtnGoogleText: { fontSize: 14, color: '#111120' },
+  saveBtnEmail: { backgroundColor: 'rgba(255, 255, 255, 0.12)', borderWidth: 1.5, borderColor: 'rgba(255, 255, 255, 0.22)' },
+  saveBtnEmailText: { fontSize: 14, color: '#FFFFFF' },
   separator: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: palette.border,

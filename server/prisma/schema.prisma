@@ -37,6 +37,17 @@ enum MoveAction {
   WIN
 }
 
+enum FriendshipStatus {
+  PENDING
+  ACCEPTED
+}
+
+enum NotificationType {
+  FRIEND_REQUEST
+  FRIEND_ACCEPTED
+  ROOM_INVITE
+}
+
 // ─── Models ──────────────────────────────────────────────────────────────────
 
 model User {
@@ -48,6 +59,8 @@ model User {
   providerId String?
   totalWins  Int      @default(0)
   totalGames Int      @default(0)
+  /// Last username change; changes are limited to one a week (the first is free).
+  usernameChangedAt DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -55,7 +68,14 @@ model User {
   createdRooms GameRoom[]   @relation("RoomCreator")
   gameMoves    GameMove[]
 
+  sentFriendRequests     Friendship[]   @relation("FriendRequester")
+  receivedFriendRequests Friendship[]   @relation("FriendAddressee")
+  notifications          Notification[] @relation("NotificationRecipient")
+  notificationsSent      Notification[] @relation("NotificationActor")
+
   @@index([providerId])
+  /// Prefix search ("pi" → piyush_1234); usernames are stored lowercase.
+  @@index([username(ops: raw("text_pattern_ops"))], map: "User_username_pattern_idx")
 }
 
 model GameRoom {
@@ -71,6 +91,12 @@ model GameRoom {
   currentDice       Int?
   winnerId          String?
 
+  /// Engine snapshot (@ludo/engine GameState) — written in batches, not per move.
+  gameState    Json?
+  stateVersion Int   @default(0)
+  /// Every move of a finished game, compact ([color, token, dice, from, to, tenths of s]) — see MoveEntry.
+  moveLog      Json?
+
   createdById String
   createdBy   User   @relation("RoomCreator", fields: [createdById], references: [id])
 
@@ -83,6 +109,7 @@ model GameRoom {
 
   @@index([gameCode])
   @@index([status])
+  @@index([status, createdAt])
 }
 
 model GamePlayer {
@@ -105,9 +132,10 @@ model GamePlayer {
   @@unique([gameRoomId, color])
   @@unique([gameRoomId, userId])
   @@index([gameRoomId])
-  @@index([userId])
+  @@index([userId, joinedAt])
 }
 
+/// Legacy: one row per move, no longer written (finished games keep `GameRoom.moveLog`).
 model GameMove {
   id           String     @id @default(uuid())
   gameRoomId   String
@@ -124,4 +152,43 @@ model GameMove {
 
   @@index([gameRoomId])
   @@index([userId])
+}
+
+/// One row per pair of users. A pending request is requester → addressee;
+/// declining or unfriending deletes the row.
+model Friendship {
+  id          String           @id @default(uuid())
+  requesterId String
+  addresseeId String
+  status      FriendshipStatus @default(PENDING)
+  createdAt   DateTime         @default(now())
+  respondedAt DateTime?
+
+  requester     User           @relation("FriendRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  addressee     User           @relation("FriendAddressee", fields: [addresseeId], references: [id], onDelete: Cascade)
+  notifications Notification[]
+
+  @@unique([requesterId, addresseeId])
+  @@index([addresseeId, status])
+  @@index([requesterId, status])
+}
+
+model Notification {
+  id           String           @id @default(uuid())
+  userId       String
+  type         NotificationType
+  actorId      String
+  friendshipId String?
+  /// ROOM_INVITE: the room to join.
+  gameCode     String?
+  readAt       DateTime?
+  createdAt    DateTime         @default(now())
+
+  user       User        @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  actor      User        @relation("NotificationActor", fields: [actorId], references: [id], onDelete: Cascade)
+  friendship Friendship? @relation(fields: [friendshipId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@index([userId, actorId, gameCode])
 }

@@ -17,6 +17,7 @@ import { GlassPanel } from '@/components/GlassPanel';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
 import { updateUsername } from '@/apis/user-api';
+import { Fonts } from '@/constants/fonts';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { supabase } from '@/util/supabase-client';
 
@@ -177,7 +178,7 @@ const styles = StyleSheet.create({
         flex: 1,
         fontSize: 17,
         color: palette.text,
-        fontFamily: 'Hellix-SemiBold',
+        fontFamily: Fonts.semiBold,
     },
     hint: {
         fontSize: 12,

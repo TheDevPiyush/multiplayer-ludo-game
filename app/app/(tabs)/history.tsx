@@ -1,6 +1,8 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useCallback, useEffect, useState } from 'react';
 import {
     ActivityIndicator,
     FlatList,
@@ -16,6 +18,8 @@ import type { GameHistoryEntry } from '@/apis/user-api';
 import { fetchGameHistory } from '@/apis/user-api';
 import Colors from '@/constants/Colors';
 import { LUDO } from '@/constants/LudoColors';
+import { usePagedList } from '@/hooks/usePagedList';
+import { historyFetchedAt, markHistoryFetched } from '@/util/history-cache';
 import { supabase } from '@/util/supabase-client';
 
 const palette = Colors.dark;
@@ -27,15 +31,16 @@ const COLOR_HEX: Record<string, string> = {
     YELLOW: LUDO.yellow,
 };
 
-function formatWhen(iso: string | null) {
-    if (!iso) return '—';
+function formatDay(iso: string) {
     const d = new Date(iso);
-    return d.toLocaleString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-    });
+    const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
+    if (days < 1 && new Date().getDate() === d.getDate()) return 'Today';
+    if (days < 2) return 'Yesterday';
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function formatTime(iso: string) {
+    return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
 function duration(start: string | null, end: string | null) {
@@ -48,93 +53,95 @@ function duration(start: string | null, end: string | null) {
     return `${Math.floor(mins / 60)}h ${mins % 60}m`;
 }
 
-function HistoryCard({ item }: { item: GameHistoryEntry }) {
+const ORDINAL = ['', '1st', '2nd', '3rd', '4th'];
+
+function outcome(item: GameHistoryEntry): { label: string; icon: React.ComponentProps<typeof MaterialCommunityIcons>['name']; tone: string } {
+    if (item.status === 'CANCELLED') return { label: 'Cancelled', icon: 'close', tone: 'rgba(255,255,255,0.45)' };
+    if (item.isWin) return { label: 'Won', icon: 'crown', tone: '#FFD54A' };
+    if (item.myRank && item.myRank < item.playerCount) return { label: `${ORDINAL[item.myRank] ?? `#${item.myRank}`} place`, icon: 'medal', tone: '#C9D1FF' };
+    return { label: 'Lost', icon: 'flag-variant', tone: 'rgba(255,255,255,0.6)' };
+}
+
+/** "vs @alex", "vs @alex, @sam", "vs @alex +2" */
+function opponents(item: GameHistoryEntry): string | null {
+    const others = item.players.filter(p => p.color !== item.myColor).map(p => `@${p.username}`);
+    if (others.length === 0) return null;
+    return `vs ${others.length <= 2 ? others.join(', ') : `${others[0]} +${others.length - 1}`}`;
+}
+
+function HistoryRow({ item }: { item: GameHistoryEntry }) {
+    const result = outcome(item);
     const myColor = COLOR_HEX[item.myColor] ?? palette.mutedText;
-    const cancelled = item.status === 'CANCELLED';
+    const when = item.endedAt ?? item.startedAt ?? item.createdAt;
+    const meta = [opponents(item), duration(item.startedAt, item.endedAt)].filter(Boolean).join(' · ');
 
     return (
-        <GlassPanel intensity="heavy" style={styles.card}>
-            <RNView style={styles.cardTop}>
-                <RNView style={styles.cardLeft}>
-                    <RNView style={[styles.colorDot, { backgroundColor: myColor }]} />
-                    <RNView style={{ flex: 1 }}>
-                        <Text weight="bold" style={styles.gameCode}>{item.gameCode}</Text>
-                        <Text weight="medium" style={styles.meta}>
-                            {item.playerCount} players · {item.myColor}
-                        </Text>
-                    </RNView>
-                </RNView>
-                <RNView style={[
-                    styles.badge,
-                    cancelled
-                        ? styles.badgeCancelled
-                        : item.isWin
-                            ? styles.badgeWin
-                            : styles.badgeLoss,
-                ]}>
-                    <Text weight="semiBold" style={styles.badgeText}>
-                        {cancelled ? 'Cancelled' : item.isWin ? 'Won' : item.myRank ? `#${item.myRank}` : 'Lost'}
-                    </Text>
-                </RNView>
+        <RNView style={styles.row}>
+            <RNView style={[styles.badge, { backgroundColor: myColor }]}>
+                <MaterialCommunityIcons name={result.icon} size={18} color="#FFFFFF" />
             </RNView>
-
-            <RNView style={styles.divider} />
-
-            <RNView style={styles.statsRow}>
-                <RNView style={styles.stat}>
-                    <Text weight="medium" style={styles.statLabel}>Started</Text>
-                    <Text weight="semiBold" style={styles.statValue}>{formatWhen(item.startedAt)}</Text>
-                </RNView>
-                <RNView style={styles.stat}>
-                    <Text weight="medium" style={styles.statLabel}>Ended</Text>
-                    <Text weight="semiBold" style={styles.statValue}>{formatWhen(item.endedAt)}</Text>
-                </RNView>
+            <RNView style={styles.rowMain}>
+                <Text weight="bold" style={[styles.result, { color: result.tone }]} numberOfLines={1}>{result.label}</Text>
+                <Text weight="medium" style={styles.meta} numberOfLines={1}>{meta || `${item.playerCount} players`}</Text>
             </RNView>
-
-            {duration(item.startedAt, item.endedAt) ? (
-                <Text weight="medium" style={styles.duration}>
-                    Duration · {duration(item.startedAt, item.endedAt)}
-                </Text>
-            ) : null}
-
-            {!cancelled && item.winnerUsername ? (
-                <Text weight="medium" style={styles.winner}>
-                    Winner · @{item.winnerUsername}
-                </Text>
-            ) : null}
-        </GlassPanel>
+            <RNView style={styles.rowEnd}>
+                <Text weight="semiBold" style={styles.day}>{formatDay(when)}</Text>
+                <Text weight="medium" style={styles.code}>{item.gameCode} · {formatTime(when)}</Text>
+            </RNView>
+        </RNView>
     );
+}
+
+const HISTORY_KEY = 'simpleludo:history';
+/** Re-fetch on tab focus at most this often; pull-to-refresh always fetches. */
+const HISTORY_STALE_MS = 60_000;
+
+const historyKey = (g: GameHistoryEntry) => `${g.gameCode}-${g.createdAt}`;
+
+async function fetchHistoryPage(cursor?: string) {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) return { ok: false as const, error: 'Not signed in' };
+    return fetchGameHistory(token, cursor);
 }
 
 export default function HistoryTabScreen() {
     const insets = useSafeAreaInsets();
-    const [items, setItems] = useState<GameHistoryEntry[]>([]);
+    const list = usePagedList<GameHistoryEntry>(fetchHistoryPage, historyKey);
+    const items = list.items ?? [];
+    const { setItems, reload } = list;
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+
+    // Show the last known first page instantly, then revalidate.
+    useEffect(() => {
+        AsyncStorage.getItem(HISTORY_KEY)
+            .then(raw => {
+                if (!raw) return;
+                setItems(prev => (prev?.length ? prev : (JSON.parse(raw) as GameHistoryEntry[])));
+                setLoading(false);
+            })
+            .catch(() => {});
+    }, [setItems]);
 
     const load = useCallback(async (isRefresh = false) => {
+        if (!isRefresh && Date.now() - historyFetchedAt() < HISTORY_STALE_MS) {
+            setLoading(false);
+            return;
+        }
         if (isRefresh) setRefreshing(true);
-        else setLoading(true);
-        setError(null);
         try {
-            const { data } = await supabase.auth.getSession();
-            const token = data.session?.access_token;
-            if (!token) {
-                setError('Not signed in');
-                return;
-            }
-            const result = await fetchGameHistory(token);
-            if (!result.ok) {
-                setError(result.error);
-                return;
-            }
-            setItems(result.data.data);
+            if (await reload()) markHistoryFetched();
         } finally {
             setLoading(false);
             setRefreshing(false);
         }
-    }, []);
+    }, [reload]);
+
+    // Cache the first page for the next cold start.
+    useEffect(() => {
+        if (list.items?.length) void AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(list.items.slice(0, 20))).catch(() => {});
+    }, [list.items]);
 
     useFocusEffect(
         useCallback(() => {
@@ -156,11 +163,14 @@ export default function HistoryTabScreen() {
             ) : (
                 <FlatList
                     data={items}
-                    keyExtractor={item => `${item.gameCode}-${item.createdAt}`}
+                    keyExtractor={historyKey}
+                    onEndReached={() => void list.loadMore()}
+                    onEndReachedThreshold={0.5}
+                    ListFooterComponent={list.loadingMore ? <ActivityIndicator color={palette.text} style={{ marginVertical: 16 }} /> : null}
                     contentContainerStyle={{
                         paddingHorizontal: 20,
                         paddingBottom: insets.bottom + 24,
-                        gap: 12,
+                        gap: 8,
                     }}
                     refreshControl={
                         <RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor="#fff" />
@@ -170,11 +180,11 @@ export default function HistoryTabScreen() {
                             <FontAwesome name="history" size={28} color={palette.dimText} />
                             <Text weight="semiBold" style={styles.emptyTitle}>No games yet</Text>
                             <Text weight="medium" style={styles.emptySub}>
-                                {error ?? 'Finished matches will appear here.'}
+                                {list.error ?? 'Finished matches will appear here.'}
                             </Text>
                         </GlassPanel>
                     }
-                    renderItem={({ item }) => <HistoryCard item={item} />}
+                    renderItem={({ item }) => <HistoryRow item={item} />}
                 />
             )}
         </RNView>
@@ -198,41 +208,24 @@ const styles = StyleSheet.create({
         color: palette.mutedText,
     },
     center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-    card: { padding: 16, gap: 10 },
-    cardTop: {
+    row: {
         flexDirection: 'row',
-        alignItems: 'flex-start',
-        justifyContent: 'space-between',
+        alignItems: 'center',
         gap: 12,
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+        borderRadius: 16,
+        backgroundColor: 'rgba(10, 8, 60, 0.24)',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.12)',
     },
-    cardLeft: { flexDirection: 'row', gap: 12, flex: 1 },
-    colorDot: { width: 10, height: 10, borderRadius: 5, marginTop: 6 },
-    gameCode: { fontSize: 16, color: palette.text, letterSpacing: 1 },
-    meta: { fontSize: 12, color: palette.mutedText, marginTop: 2 },
-    badge: {
-        borderRadius: 10,
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-    },
-    badgeWin: { backgroundColor: 'rgba(55, 189, 106, 0.22)' },
-    badgeLoss: { backgroundColor: 'rgba(255, 255, 255, 0.08)' },
-    badgeCancelled: { backgroundColor: 'rgba(224, 72, 72, 0.18)' },
-    badgeText: { fontSize: 11, color: palette.text },
-    divider: {
-        height: StyleSheet.hairlineWidth,
-        backgroundColor: palette.glassBorder,
-    },
-    statsRow: { flexDirection: 'row', gap: 16 },
-    stat: { flex: 1, gap: 2 },
-    statLabel: {
-        fontSize: 10,
-        color: palette.dimText,
-        textTransform: 'uppercase',
-        letterSpacing: 0.8,
-    },
-    statValue: { fontSize: 13, color: palette.text },
-    duration: { fontSize: 12, color: palette.mutedText },
-    winner: { fontSize: 12, color: palette.mutedText },
+    badge: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+    rowMain: { flex: 1, gap: 2 },
+    result: { fontSize: 15 },
+    meta: { fontSize: 12, color: palette.mutedText },
+    rowEnd: { alignItems: 'flex-end', gap: 2 },
+    day: { fontSize: 12, color: palette.text },
+    code: { fontSize: 11, color: palette.dimText, letterSpacing: 0.3 },
     empty: {
         alignItems: 'center',
         padding: 32,
