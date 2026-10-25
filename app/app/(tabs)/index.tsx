@@ -1,62 +1,19 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useRouter } from 'expo-router';
-import { useEffect } from 'react';
 import { Pressable, ScrollView, StyleSheet, View as RNView } from 'react-native';
-import Animated, {
-    Easing,
-    FadeInDown,
-    useAnimatedStyle,
-    useSharedValue,
-    withRepeat,
-    withSequence,
-    withTiming,
-} from 'react-native-reanimated';
+import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { GameTile } from '@/components/GameTile';
 import { useSocial } from '@/components/SocialProvider';
 import { useSocket } from '@/components/SocketProvider';
 import { UserAvatar } from '@/components/UserAvatar';
-import { Dice3D } from '@/components/ludo/Dice';
-import { COLOR_HEX } from '@/components/ludo/geometry';
-import { Pawn } from '@/components/ludo/Token';
+import { FloatingDiceArt } from '@/components/ludo/FloatingDiceArt';
 import { Text } from '@/components/Themed';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { friendsHref } from '@/util/links';
 
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
-
-/** Floating dice + pawns for the hero card. */
-function HeroArt() {
-    const float = useSharedValue(0);
-    useEffect(() => {
-        float.value = withRepeat(
-            withSequence(
-                withTiming(1, { duration: 1600, easing: Easing.inOut(Easing.sin) }),
-                withTiming(0, { duration: 1600, easing: Easing.inOut(Easing.sin) }),
-            ),
-            -1,
-        );
-    }, []);
-    const diceStyle = useAnimatedStyle(() => ({
-        transform: [{ translateY: -float.value * 8 }, { rotate: `${-12 + float.value * 6}deg` }],
-    }));
-    const pawnStyle = useAnimatedStyle(() => ({ transform: [{ translateY: float.value * 4 }] }));
-
-    return (
-        <RNView style={styles.heroArt} pointerEvents="none">
-            <Animated.View style={[styles.heroPawnBack, pawnStyle]}>
-                <Pawn color="BLUE" width={38} />
-            </Animated.View>
-            <Animated.View style={[styles.heroDice, diceStyle]}>
-                <Dice3D value={6} size={62} color={COLOR_HEX.RED!} tilt={[-28, 34, 0]} />
-            </Animated.View>
-            <Animated.View style={[styles.heroPawnFront, pawnStyle]}>
-                <Pawn color="YELLOW" width={44} />
-            </Animated.View>
-        </RNView>
-    );
-}
 
 const HERO_BUTTONS = {
     /** Create: white with a warm edge — the main action, full width. */
@@ -172,7 +129,7 @@ export default function HomeTabScreen() {
             {/* Hero: online with friends */}
             <Animated.View entering={FadeInDown.delay(80).duration(450)}>
                 <GameTile colors={['#FF5A5F', '#FF8A3D']} edge="#C2304A" contentStyle={styles.hero} radius={28} depth={7}>
-                    <HeroArt />
+                    <FloatingDiceArt style={styles.heroArt} />
                     <RNView style={styles.heroChip}>
                         <MaterialCommunityIcons name="microphone" size={12} color="#FFFFFF" />
                         <Text weight="bold" style={styles.heroChipText}>ONLINE · VOICE CHAT</Text>
@@ -288,10 +245,7 @@ const styles = StyleSheet.create({
     friendsBadgeText: { fontSize: 10, color: '#FFFFFF' },
 
     hero: { padding: 18, paddingBottom: 16 },
-    heroArt: { position: 'absolute', right: 4, top: 6, width: 140, height: 130 },
-    heroDice: { position: 'absolute', right: 26, top: 6 },
-    heroPawnBack: { position: 'absolute', right: 6, top: 52 },
-    heroPawnFront: { position: 'absolute', right: 70, top: 62 },
+    heroArt: { position: 'absolute', right: 4, top: 6 },
     heroChip: {
         flexDirection: 'row',
         alignItems: 'center',
