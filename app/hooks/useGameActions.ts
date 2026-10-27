@@ -84,5 +84,15 @@ export function useGameActions(gameCode: string | undefined) {
         return emitWithAck(socket, 'game:start', { gameCode: code });
     }, [socket, isRealtimeReady]);
 
-    return { rollDice, moveToken, skipTurn, startGame, chooseColor, isRealtimeReady };
+    /** Host only: stop a public lobby's start countdown (it comes back a little later). */
+    const cancelCountdown = useCallback(async (): Promise<GameActionResult> => {
+        const code = gameCodeRef.current?.trim();
+        if (!code) return { ok: false, error: 'No game code.' };
+        if (!isRealtimeReady || !socket?.connected) {
+            return { ok: false, error: 'Waiting for connection…' };
+        }
+        return emitWithAck(socket, 'room:countdown-cancel', { gameCode: code });
+    }, [socket, isRealtimeReady]);
+
+    return { rollDice, moveToken, skipTurn, startGame, chooseColor, cancelCountdown, isRealtimeReady };
 }

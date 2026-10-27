@@ -8,10 +8,8 @@ import { AppState } from 'react-native';
 // pre-trimmed and levelled (music -20 LUFS under effects at -16), so the
 // gains below only balance how often each one plays.
 //
-// Voice chat comes first. Effects never take audio focus or end the audio
-// session (LiveKit owns it), play quieter during a call, and the music stops
-// while in voice: speaker audio leaks into the mic and the other players would
-// hear it.
+// Players are often on a call (WhatsApp, Discord) while they play, so game
+// audio mixes with other apps: it never takes audio focus or ends the session.
 
 const EFFECTS = {
     intro: require('../assets/sounds/intro.m4a'),
@@ -35,8 +33,6 @@ const GAIN: Partial<Record<EffectName, number>> = { hop: 0.35, land: 0.6, tick: 
 const POOL: Partial<Record<EffectName, number>> = { hop: 3, land: 2 };
 /** The same effect fired again this soon is the same moment (e.g. two updates). */
 const DEDUPE_MS = 50;
-/** Effects during a voice call. */
-const VOICE_DUCK = 0.5;
 /** Full slider = this much of the track's level, so music stays a background. */
 const MUSIC_MAX = 0.7;
 const FADE_IN_MS = 700;
@@ -98,38 +94,33 @@ export function useAudioSettings(): AudioSettings {
 let appActive = AppState.currentState === 'active';
 /** Music belongs to the current screen (menus and lobby, not the game or sign-in). */
 let musicScreen = false;
-let inVoice = false;
 
 AppState.addEventListener('change', state => {
     appActive = state === 'active';
     syncMusic({ immediate: !appActive });
 });
 
-let audioModeFor: boolean | null = null;
+let audioModeSet = false;
 
-/** Mix with everything, never take audio focus; keep a recording session while voice is on (iOS). */
+/** Mix with everything and never take audio focus. */
 function applyAudioMode() {
-    if (audioModeFor === inVoice) return;
-    audioModeFor = inVoice;
+    if (audioModeSet) return;
+    audioModeSet = true;
     void setAudioModeAsync({
         playsInSilentMode: false,
         interruptionMode: 'mixWithOthers',
-        allowsRecording: inVoice,
+        allowsRecording: false,
     }).catch(() => {});
 }
 
 function newPlayer(source: number): AudioPlayer {
     applyAudioMode();
-    // Ending playback must not end the audio session the voice call is using (iOS).
+    // Ending playback must not end the audio session another app's call is using (iOS).
     return createAudioPlayer(source, { keepAudioSessionActive: true });
 }
 
-/** Called by the screen layer: which screen is showing, and whether this player is in voice chat. */
-export function setAudioContext(next: { musicScreen?: boolean; inVoice?: boolean }) {
-    if (next.inVoice !== undefined && next.inVoice !== inVoice) {
-        inVoice = next.inVoice;
-        applyAudioMode();
-    }
+/** Called by the screen layer: which screen is showing. */
+export function setAudioContext(next: { musicScreen?: boolean }) {
     if (next.musicScreen !== undefined) musicScreen = next.musicScreen;
     syncMusic();
 }
@@ -163,7 +154,7 @@ export function playEffect(name: EffectName, gain = 1) {
         const p = pool(name);
         const player = p.players[p.next]!;
         p.next = (p.next + 1) % p.players.length;
-        player.volume = Math.min(1, (GAIN[name] ?? 1) * gain * settings.effectsVolume * (inVoice ? VOICE_DUCK : 1));
+        player.volume = Math.min(1, (GAIN[name] ?? 1) * gain * settings.effectsVolume);
         void player.seekTo(0);
         player.play();
     } catch {
@@ -208,7 +199,7 @@ function fadeTo(player: AudioPlayer, to: number, ms: number, done?: () => void) 
  * `immediate` skips the fade (background, slider drags).
  */
 function syncMusic({ immediate = false } = {}) {
-    const wanted = settings.music && settings.musicVolume > 0 && musicScreen && appActive && !inVoice;
+    const wanted = settings.music && settings.musicVolume > 0 && musicScreen && appActive;
     try {
         if (wanted) {
             const player = musicPlayer();

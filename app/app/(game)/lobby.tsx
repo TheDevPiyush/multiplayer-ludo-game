@@ -12,6 +12,7 @@ import {
     View as RNView,
 } from 'react-native';
 import Animated, {
+    FadeIn,
     FadeInDown,
     useAnimatedStyle,
     useSharedValue,
@@ -23,24 +24,26 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { leaveRoom } from '@/apis/game-api';
+import { ChatSheet } from '@/components/chat/ChatSheet';
+import { ReactionBubble } from '@/components/chat/ReactionBubble';
+import { ReactionPicker } from '@/components/chat/ReactionPicker';
 import AppDialog from '@/components/Dialog';
 import { GameTile } from '@/components/GameTile';
+import { GlobeSearch } from '@/components/GlobeSearch';
 import { InviteFriendsSheet } from '@/components/InviteFriendsSheet';
+import { PlayerSheet, type SheetPlayer } from '@/components/PlayerSheet';
 import { ColorPicker, colorOptions } from '@/components/ludo/ColorPicker';
 import { COLOR_BRIGHT, COLOR_DARK, COLOR_HEX } from '@/components/ludo/geometry';
 import { Text } from '@/components/Themed';
 import { UserAvatar } from '@/components/UserAvatar';
-import { AudioOutputButton, MicButton } from '@/components/VoiceButtons';
 import { useGameActions } from '@/hooks/useGameActions';
 import { useGameRoom, type RoomPlayer } from '@/hooks/useGameRoom';
 import { useIsGuest } from '@/hooks/useIsGuest';
+import { useRoomChat, type Bubble } from '@/hooks/useRoomChat';
 import { useSocket } from '@/components/SocketProvider';
-import { useVoiceRoom } from '@/components/VoiceRoomProvider';
 import { supabase } from '@/util/supabase-client';
 import { setActiveRoom } from '@/util/active-room';
 import { roomInviteUrl } from '@/util/links';
-
-type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 
 const GRID_GAP = 12;
 const SEAT_HEIGHT = 150;
@@ -70,52 +73,56 @@ function WaitingDots() {
     );
 }
 
-type SlotData = RoomPlayer & { isHost: boolean; isMe: boolean; isOnline: boolean; inVoice: boolean; voiceMuted: boolean };
+type SlotData = RoomPlayer & { isHost: boolean; isMe: boolean; isOnline: boolean; muted: boolean; blocked: boolean };
 
-/** A seated player: a tile in their colour. */
-function PlayerSeat({ player, width, height, onMicTap }: { player: SlotData; width: number; height: number; onMicTap?: () => void }) {
-    const voiceIcon: IconName = !player.inVoice ? 'microphone-off' : player.voiceMuted ? 'microphone-off' : 'microphone';
-    const voiceLive = player.inVoice && !player.voiceMuted;
+/** A seated player: a tile in their colour, with their latest emote or message over it. Others' seats open them. */
+function PlayerSeat({ player, width, height, bubble, onPress }: {
+    player: SlotData;
+    width: number;
+    height: number;
+    bubble?: Bubble;
+    onPress?: () => void;
+}) {
     return (
-        <GameTile
-            colors={[COLOR_BRIGHT[player.color]!, COLOR_HEX[player.color]!]}
-            edge={COLOR_DARK[player.color]!}
-            radius={22}
-            depth={5}
-            style={{ width }}
-            contentStyle={[styles.seat, { height }, !player.isOnline && { opacity: 0.55 }]}
-        >
-            {player.isHost && (
-                <RNView style={styles.hostChip}>
-                    <MaterialCommunityIcons name="crown" size={13} color="#B7791F" />
-                    <Text weight="bold" style={styles.hostText}>HOST</Text>
-                </RNView>
-            )}
-            <Pressable
-                onPress={onMicTap}
-                disabled={!onMicTap}
-                hitSlop={8}
-                style={[styles.voiceBadge, voiceLive && styles.voiceBadgeLive]}
-                accessibilityLabel={!player.inVoice ? 'Not in voice' : player.voiceMuted ? 'Muted' : 'Talking'}
+        <RNView style={{ width }}>
+            <GameTile
+                onPress={onPress}
+                colors={[COLOR_BRIGHT[player.color]!, COLOR_HEX[player.color]!]}
+                edge={COLOR_DARK[player.color]!}
+                radius={22}
+                depth={5}
+                style={{ width }}
+                contentStyle={[styles.seat, { height }, !player.isOnline && { opacity: 0.55 }]}
             >
-                <MaterialCommunityIcons name={voiceIcon} size={14} color={voiceLive ? COLOR_DARK[player.color] : 'rgba(255,255,255,0.85)'} />
-            </Pressable>
+                {player.isHost && (
+                    <RNView style={styles.hostChip}>
+                        <MaterialCommunityIcons name="crown" size={13} color="#B7791F" />
+                        <Text weight="bold" style={styles.hostText}>HOST</Text>
+                    </RNView>
+                )}
+                {player.muted && (
+                    <RNView style={styles.mutedBadge} accessibilityLabel={player.blocked ? 'Blocked' : 'Muted'}>
+                        <MaterialCommunityIcons name={player.blocked ? 'account-cancel' : 'block-helper'} size={13} color="rgba(255,255,255,0.9)" />
+                    </RNView>
+                )}
 
-            <RNView style={styles.seatAvatar}>
-                <UserAvatar user={{ id: player.userId, ...player.user }} size={height < SEAT_HEIGHT ? 46 : 58} />
-            </RNView>
-            <Text weight="bold" style={styles.seatName} numberOfLines={1}>
-                {player.isMe ? 'You' : player.user.username}
-            </Text>
-            <Text weight="semiBold" style={styles.seatSub} numberOfLines={1}>
-                {!player.isOnline ? 'Offline' : player.isMe ? `@${player.user.username}` : 'Ready'}
-            </Text>
-        </GameTile>
+                <RNView style={styles.seatAvatar}>
+                    <UserAvatar user={{ id: player.userId, ...player.user }} size={height < SEAT_HEIGHT ? 46 : 58} />
+                </RNView>
+                <Text weight="bold" style={styles.seatName} numberOfLines={1}>
+                    {player.isMe ? 'You' : player.user.username}
+                </Text>
+                <Text weight="semiBold" style={styles.seatSub} numberOfLines={1}>
+                    {!player.isOnline ? 'Offline' : player.isMe ? `@${player.user.username}` : 'Ready'}
+                </Text>
+            </GameTile>
+            <ReactionBubble bubble={bubble} placement="over" />
+        </RNView>
     );
 }
 
-/** An open seat: the host taps it to invite a friend; everyone else sees it waiting. */
-function EmptySeat({ width, height, onInvite }: { width: number; height: number; onInvite?: () => void }) {
+/** An open seat: the host taps it to invite a friend; everyone else sees it waiting (or, in public rooms, searching). */
+function EmptySeat({ width, height, onInvite, searching }: { width: number; height: number; onInvite?: () => void; searching?: boolean }) {
     return (
         <Pressable
             onPress={onInvite}
@@ -124,12 +131,29 @@ function EmptySeat({ width, height, onInvite }: { width: number; height: number;
             accessibilityLabel={onInvite ? 'Invite a friend' : 'Open seat'}
         >
             <RNView style={styles.emptyIcon}>
-                <MaterialCommunityIcons name={onInvite ? 'account-plus' : 'account-clock'} size={26} color="#FFFFFF" />
+                <MaterialCommunityIcons name={onInvite ? 'account-plus' : searching ? 'earth' : 'account-clock'} size={26} color="#FFFFFF" />
             </RNView>
-            <Text weight="bold" style={styles.emptyTitle}>{onInvite ? 'Invite' : 'Open seat'}</Text>
+            <Text weight="bold" style={styles.emptyTitle}>{onInvite ? 'Invite' : searching ? 'Searching…' : 'Open seat'}</Text>
             {onInvite ? <Text weight="medium" style={styles.emptySub}>Tap to add a friend</Text> : <WaitingDots />}
         </Pressable>
     );
+}
+
+/** Whole seconds left on a public lobby's start countdown, timed from the server's ms-left (not the device clock). */
+function useStartCountdown(msLeft: number | null | undefined, version: number | undefined): number | null {
+    const [left, setLeft] = useState<number | null>(null);
+    useEffect(() => {
+        if (msLeft == null) {
+            setLeft(null);
+            return;
+        }
+        const endsAt = Date.now() + msLeft;
+        const tick = () => setLeft(Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)));
+        tick();
+        const t = setInterval(tick, 200);
+        return () => clearInterval(t);
+    }, [msLeft, version]);
+    return left;
 }
 
 function connectionLabel(phase: string): string {
@@ -168,13 +192,12 @@ export default function LobbyScreen() {
     });
 
     const serverLeaveDoneRef = useRef(false);
-    const voiceSyncedRef = useRef(false);
     const [inviteOpen, setInviteOpen] = useState(false);
 
     const [pendingColor, setPendingColor] = useState<Color | null>(null);
     const [colorNote, setColorNote] = useState<string | null>(null);
 
-    const { room, onlineUserIds, joinError } = useGameRoom({
+    const { room, joinCount, onlineUserIds, joinError } = useGameRoom({
         roomId,
         gameCode: roomCode,
         onEvent: (e) => {
@@ -184,16 +207,30 @@ export default function LobbyScreen() {
             if (mine) setColorNote(`Your color is now ${titleCase(mine.to)}: 2-player games use opposite corners.`);
         },
     });
-    const { startGame, chooseColor } = useGameActions(roomCode);
-    const voice = useVoiceRoom();
+    const { startGame, chooseColor, cancelCountdown } = useGameActions(roomCode);
+    const startsIn = useStartCountdown(room?.status === 'WAITING' ? room.startsInMs : null, room?.version);
 
     const players = room?.players ?? [];
+    const chat = useRoomChat(roomId, currentUserId, joinCount);
+    const [pickerOpen, setPickerOpen] = useState(false);
+    const [sheetPlayer, setSheetPlayer] = useState<SheetPlayer | null>(null);
+    const [chatOpen, setChatOpen] = useState(false);
+    const chatPlayers = useMemo(
+        () => players.map(p => ({ userId: p.userId, username: p.user.username, color: p.color })),
+        [players],
+    );
+    const openPlayer = (userId: string) => {
+        const p = players.find(x => x.userId === userId);
+        if (p) setSheetPlayer({ id: p.userId, username: p.user.username, avatarUrl: p.user.avatarUrl });
+    };
     const selfPlayer = players.find(p => p.userId === currentUserId);
     const isHost = !!room && !!selfPlayer && selfPlayer.userId === room.createdById;
     const guest = useIsGuest();
     /** Guests have no friends to invite; the share link still works. */
     const canInvite = isHost && !guest;
     const isFull = players.length === maxPlayers;
+    /** Public rooms find players (and fill up) by themselves; private ones wait for invites. */
+    const isPublic = room ? !room.isPrivate : false;
     const canStart = players.length >= 2;
 
     const colorOpts = useMemo(
@@ -262,19 +299,6 @@ export default function LobbyScreen() {
         if (joinError) showError('Could not join', joinError);
     }, [joinError, showError]);
 
-    // Voice is opt-in (the mic button joins): every connected minute is billed.
-    // Someone already in this room's voice gets reconnected if it dropped.
-    useEffect(() => {
-        voiceSyncedRef.current = false;
-    }, [roomId]);
-
-    useEffect(() => {
-        if (!room?.voiceEnabled || !roomId || !isRealtimeReady) return;
-        if (voiceSyncedRef.current) return;
-        voiceSyncedRef.current = true;
-        if (voice.inRoom && voice.roomId === roomId) voice.resync();
-    }, [room?.voiceEnabled, roomId, isRealtimeReady, voice.inRoom, voice.roomId, voice.resync]);
-
     async function notifyServerLeave() {
         if (!roomCode) return { ok: true as const };
         const { data: sessionData } = await supabase.auth.getSession();
@@ -288,7 +312,8 @@ export default function LobbyScreen() {
         setDialog({
             visible: true,
             title: 'Leave Room',
-            message: isHost
+            // Public rooms carry on under another player; a private room closes with its host.
+            message: isHost && room?.isPrivate
                 ? 'You are the host. Leaving will cancel the room for everyone.'
                 : 'Are you sure you want to leave?',
             actions: [
@@ -303,7 +328,6 @@ export default function LobbyScreen() {
                                 showError('Could not leave', (result as { error: string }).error);
                                 return;
                             }
-                            voice.leave();
                             await setActiveRoom(null);
                             serverLeaveDoneRef.current = true;
                             hideDialog();
@@ -343,6 +367,11 @@ export default function LobbyScreen() {
         }
     };
 
+    const handleCancelCountdown = async () => {
+        const result = await cancelCountdown();
+        if (!result.ok) showError('Could not stop it', result.error);
+    };
+
     const [copied, setCopied] = useState(false);
     const copyCode = async () => {
         await Clipboard.setStringAsync(roomCode);
@@ -364,19 +393,17 @@ export default function LobbyScreen() {
     const slotData = useMemo<SlotData[]>(() => {
         if (!room) return [];
         return players.map(p => {
-            const inVoice = voice.peers.some(vp => vp.userId === p.userId) || (p.userId === currentUserId && voice.inRoom);
             const isMe = p.userId === currentUserId;
-            const voiceMuted = isMe ? voice.isMuted : (voice.peers.find(vp => vp.userId === p.userId)?.muted ?? false);
             return {
                 ...p,
                 isMe,
                 isHost: p.userId === room.createdById,
                 isOnline: onlineUserIds.includes(p.userId) || isMe,
-                inVoice,
-                voiceMuted,
+                muted: chat.muted.has(p.userId),
+                blocked: chat.blocked.has(p.userId),
             };
         });
-    }, [room, players, voice.peers, voice.isMuted, voice.inRoom, onlineUserIds, currentUserId]);
+    }, [room, players, onlineUserIds, currentUserId, chat.muted, chat.blocked]);
 
     const slots = useMemo<(SlotData | null)[]>(
         () => Array.from({ length: maxPlayers }, (_, i) => slotData[i] ?? null),
@@ -398,52 +425,105 @@ export default function LobbyScreen() {
                     <MaterialCommunityIcons name="chevron-left" size={26} color="#FFFFFF" />
                 </Pressable>
                 <RNView style={{ flex: 1 }}>
-                    <Text weight="bold" style={styles.title}>Room lobby</Text>
+                    <Text weight="bold" style={styles.title}>{isPublic ? 'Public lobby' : 'Room lobby'}</Text>
                     <RNView style={styles.connRow}>
                         <RNView style={[styles.connDot, { backgroundColor: connColor }]} />
                         <Text weight="medium" style={styles.connText}>{connectionLabel(connectionPhase)}</Text>
                     </RNView>
                 </RNView>
-                {room?.voiceEnabled && (
-                    <RNView style={styles.voiceRow}>
-                        <MicButton roomId={roomId} />
-                        <AudioOutputButton />
-                    </RNView>
-                )}
+                <RNView style={styles.headerBtns}>
+                    <Pressable
+                        onPress={() => setPickerOpen(true)}
+                        disabled={!isRealtimeReady || !room}
+                        style={({ pressed }) => [styles.roundBtn, pressed && { transform: [{ scale: 0.92 }] }]}
+                        hitSlop={4}
+                        accessibilityLabel="Emotes and quick replies"
+                    >
+                        <MaterialCommunityIcons name="emoticon-happy-outline" size={23} color="#FFFFFF" />
+                    </Pressable>
+                    <Pressable
+                        onPress={() => setChatOpen(true)}
+                        style={({ pressed }) => [styles.roundBtn, pressed && { transform: [{ scale: 0.92 }] }]}
+                        hitSlop={4}
+                        accessibilityLabel="Room chat"
+                    >
+                        <MaterialCommunityIcons name="chat-processing-outline" size={22} color="#FFFFFF" />
+                        {chat.unread > 0 && (
+                            <RNView style={styles.unread}>
+                                <Text weight="bold" style={styles.unreadText}>{chat.unread > 9 ? '9+' : chat.unread}</Text>
+                            </RNView>
+                        )}
+                    </Pressable>
+                </RNView>
             </RNView>
 
             <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-                {/* Room code */}
-                <Animated.View entering={FadeInDown.duration(380)}>
-                    <GameTile colors={['#FF5A5F', '#FF8A3D']} edge="#C2304A" radius={26} depth={6} contentStyle={styles.codeCard}>
-                        <RNView style={styles.codeTop}>
-                            <Text weight="bold" style={styles.codeLabel}>ROOM CODE</Text>
-                            <RNView style={styles.countChip}>
-                                <MaterialCommunityIcons name="account-group" size={14} color="#FFFFFF" />
-                                <Text weight="bold" style={styles.countText}>{players.length}/{maxPlayers}</Text>
-                            </RNView>
-                        </RNView>
-                        <RNView style={styles.codeRow}>
-                            <Pressable onPress={copyCode} style={styles.codeCopy} hitSlop={6} accessibilityLabel="Copy room code">
-                                <Text weight="bold" style={styles.code} numberOfLines={1} adjustsFontSizeToFit>{roomCode || '——'}</Text>
-                                <RNView style={styles.copyBtn}>
-                                    <MaterialCommunityIcons name={copied ? 'check' : 'content-copy'} size={16} color="#FFFFFF" />
+                {/* Room code: public rooms show the search instead, with the code and share link still there */}
+                {isPublic ? (
+                    <Animated.View entering={FadeInDown.duration(380)}>
+                        <GameTile colors={['#4F46F0', '#3730D6']} edge="#241C9E" radius={26} depth={6} contentStyle={styles.publicCard}>
+                            <GlobeSearch size={78} searching={!isFull} />
+                            <RNView style={styles.publicInfo}>
+                                <RNView style={styles.codeTop}>
+                                    <Text weight="bold" style={styles.codeLabel}>PUBLIC ROOM</Text>
+                                    <RNView style={styles.countChip}>
+                                        <MaterialCommunityIcons name="account-group" size={14} color="#FFFFFF" />
+                                        <Text weight="bold" style={styles.countText}>{players.length}/{maxPlayers}</Text>
+                                    </RNView>
                                 </RNView>
-                            </Pressable>
-                            <GameTile
-                                colors={['#FFFFFF', '#FFF1EC']}
-                                edge="#E2A895"
-                                radius={14}
-                                depth={4}
-                                onPress={shareInvite}
-                                contentStyle={styles.shareBtn}
-                            >
-                                <MaterialCommunityIcons name="share-variant" size={17} color="#E2364A" />
-                                <Text weight="bold" style={styles.shareText}>Share</Text>
-                            </GameTile>
-                        </RNView>
-                    </GameTile>
-                </Animated.View>
+                                <Text weight="bold" style={styles.publicTitle}>
+                                    {isFull ? 'Table’s full. Let’s play!' : 'Finding players around the globe'}
+                                </Text>
+                                <RNView style={styles.publicActions}>
+                                    <Pressable onPress={copyCode} style={styles.publicCode} hitSlop={6} accessibilityLabel="Copy room code">
+                                        <Text weight="bold" style={styles.publicCodeText} numberOfLines={1}>{roomCode || '——'}</Text>
+                                        <MaterialCommunityIcons name={copied ? 'check' : 'content-copy'} size={14} color="#FFFFFF" />
+                                    </Pressable>
+                                    <Pressable
+                                        onPress={shareInvite}
+                                        style={({ pressed }) => [styles.publicShare, pressed && { transform: [{ scale: 0.95 }] }]}
+                                        hitSlop={6}
+                                        accessibilityLabel="Share invite link"
+                                    >
+                                        <MaterialCommunityIcons name="share-variant" size={15} color="#3B3BE8" />
+                                        <Text weight="bold" style={styles.publicShareText}>Share</Text>
+                                    </Pressable>
+                                </RNView>
+                            </RNView>
+                        </GameTile>
+                    </Animated.View>
+                ) : (
+                    <Animated.View entering={FadeInDown.duration(380)}>
+                        <GameTile colors={['#FF5A5F', '#FF8A3D']} edge="#C2304A" radius={26} depth={6} contentStyle={styles.codeCard}>
+                            <RNView style={styles.codeTop}>
+                                <Text weight="bold" style={styles.codeLabel}>ROOM CODE</Text>
+                                <RNView style={styles.countChip}>
+                                    <MaterialCommunityIcons name="account-group" size={14} color="#FFFFFF" />
+                                    <Text weight="bold" style={styles.countText}>{players.length}/{maxPlayers}</Text>
+                                </RNView>
+                            </RNView>
+                            <RNView style={styles.codeRow}>
+                                <Pressable onPress={copyCode} style={styles.codeCopy} hitSlop={6} accessibilityLabel="Copy room code">
+                                    <Text weight="bold" style={styles.code} numberOfLines={1} adjustsFontSizeToFit>{roomCode || '——'}</Text>
+                                    <RNView style={styles.copyBtn}>
+                                        <MaterialCommunityIcons name={copied ? 'check' : 'content-copy'} size={16} color="#FFFFFF" />
+                                    </RNView>
+                                </Pressable>
+                                <GameTile
+                                    colors={['#FFFFFF', '#FFF1EC']}
+                                    edge="#E2A895"
+                                    radius={14}
+                                    depth={4}
+                                    onPress={shareInvite}
+                                    contentStyle={styles.shareBtn}
+                                >
+                                    <MaterialCommunityIcons name="share-variant" size={17} color="#E2364A" />
+                                    <Text weight="bold" style={styles.shareText}>Share</Text>
+                                </GameTile>
+                            </RNView>
+                        </GameTile>
+                    </Animated.View>
+                )}
 
                 {/* Color */}
                 {/* Who holds which color shows on the seat tiles below, so the dots need no names. */}
@@ -488,10 +568,17 @@ export default function LobbyScreen() {
                                     player={player}
                                     width={seatW}
                                     height={seatH}
-                                    onMicTap={player.isMe && voice.inRoom ? voice.toggleMute : undefined}
+                                    bubble={chat.bubbles[player.userId]}
+                                    onPress={player.isMe ? undefined : () => openPlayer(player.userId)}
                                 />
                             ) : (
-                                <EmptySeat key={`empty-${i}`} width={seatW} height={seatH} onInvite={canInvite ? () => setInviteOpen(true) : undefined} />
+                                <EmptySeat
+                                    key={`empty-${i}`}
+                                    width={seatW}
+                                    height={seatH}
+                                    onInvite={canInvite ? () => setInviteOpen(true) : undefined}
+                                    searching={isPublic}
+                                />
                             ),
                         )}
                     </RNView>
@@ -500,7 +587,26 @@ export default function LobbyScreen() {
 
             {/* Start / waiting */}
             <RNView style={[styles.footer, { paddingBottom: insets.bottom + 14 }]}>
-                {isHost ? (
+                {startsIn !== null ? (
+                    <Animated.View entering={FadeIn.duration(200)} style={styles.countPanel}>
+                        <Animated.View key={startsIn} entering={FadeInDown.duration(220)} style={styles.countBadge}>
+                            <Text weight="bold" style={styles.countNum}>{startsIn > 0 ? startsIn : '…'}</Text>
+                        </Animated.View>
+                        <Text weight="semiBold" style={[styles.waitText, { flex: 1 }]}>
+                            {startsIn > 0 ? 'Game starting' : 'Starting…'}
+                        </Text>
+                        {isHost && startsIn > 0 && (
+                            <Pressable
+                                onPress={() => void handleCancelCountdown()}
+                                style={({ pressed }) => [styles.countCancel, pressed && { opacity: 0.8, transform: [{ scale: 0.96 }] }]}
+                                hitSlop={6}
+                                accessibilityLabel="Stop the countdown"
+                            >
+                                <Text weight="bold" style={styles.countCancelText}>Cancel</Text>
+                            </Pressable>
+                        )}
+                    </Animated.View>
+                ) : isHost ? (
                     <GameTile
                         colors={canStart ? ['#22D07A', '#0FAE62'] : ['#A3A8CC', '#8A90B8']}
                         edge={canStart ? '#08804A' : '#666C99'}
@@ -518,7 +624,9 @@ export default function LobbyScreen() {
                 ) : (
                     <RNView style={styles.waitPanel}>
                         <WaitingDots />
-                        <Text weight="semiBold" style={styles.waitText}>Waiting for the host to start</Text>
+                        <Text weight="semiBold" style={styles.waitText}>
+                            {isPublic ? (isFull ? 'Starting soon' : 'Waiting for more players') : 'Waiting for the host to start'}
+                        </Text>
                     </RNView>
                 )}
             </RNView>
@@ -532,6 +640,31 @@ export default function LobbyScreen() {
                     setInviteOpen(false);
                     void shareInvite();
                 }}
+            />
+
+            <ReactionPicker
+                visible={pickerOpen}
+                onClose={() => setPickerOpen(false)}
+                onPick={chat.react}
+                anchor={{ top: insets.top + 62, right: 18 }}
+            />
+            <ChatSheet
+                visible={chatOpen}
+                onClose={() => setChatOpen(false)}
+                chat={chat}
+                players={chatPlayers}
+                currentUserId={currentUserId}
+                onPlayerPress={userId => {
+                    setChatOpen(false);
+                    openPlayer(userId);
+                }}
+            />
+            <PlayerSheet
+                player={sheetPlayer}
+                onClose={() => setSheetPlayer(null)}
+                roomId={roomId}
+                muted={!!sheetPlayer && chat.mutedHere.has(sheetPlayer.id)}
+                onToggleMute={sheetPlayer ? () => chat.toggleMute(sheetPlayer.id) : undefined}
             />
 
             <AppDialog
@@ -562,7 +695,20 @@ const styles = StyleSheet.create({
     connRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
     connDot: { width: 8, height: 8, borderRadius: 4 },
     connText: { fontSize: 12, color: 'rgba(255,255,255,0.75)' },
-    voiceRow: { flexDirection: 'row', gap: 8 },
+    headerBtns: { flexDirection: 'row', gap: 8 },
+    unread: {
+        position: 'absolute',
+        top: -3,
+        right: -3,
+        minWidth: 18,
+        height: 18,
+        paddingHorizontal: 4,
+        borderRadius: 9,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#FF4D5E',
+    },
+    unreadText: { fontSize: 10, color: '#FFFFFF' },
 
     scroll: { paddingHorizontal: 18, paddingTop: 4, paddingBottom: 16, gap: 16 },
 
@@ -592,6 +738,24 @@ const styles = StyleSheet.create({
     },
     shareBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, height: 40, paddingHorizontal: 14 },
     shareText: { fontSize: 15, color: '#E2364A' },
+
+    publicCard: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, paddingLeft: 2, paddingRight: 16 },
+    publicInfo: { flex: 1, gap: 6 },
+    publicTitle: { fontSize: 17, lineHeight: 22, color: '#FFFFFF' },
+    publicActions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
+    publicCode: {
+        flexShrink: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        height: 34,
+        paddingHorizontal: 10,
+        borderRadius: 11,
+        backgroundColor: 'rgba(255,255,255,0.16)',
+    },
+    publicCodeText: { flexShrink: 1, fontSize: 15, color: '#FFFFFF', letterSpacing: 2, fontFamily: 'SpaceMono-Regular' },
+    publicShare: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 34, paddingHorizontal: 12, borderRadius: 11, backgroundColor: '#FFFFFF' },
+    publicShareText: { fontSize: 13, color: '#3B3BE8' },
 
     section: { fontSize: 15, color: '#FFFFFF' },
     colorCard: {
@@ -625,18 +789,17 @@ const styles = StyleSheet.create({
         backgroundColor: '#FFE08A',
     },
     hostText: { fontSize: 10, color: '#8A5A00', letterSpacing: 0.6 },
-    voiceBadge: {
+    mutedBadge: {
         position: 'absolute',
         top: 10,
         right: 10,
-        width: 28,
-        height: 28,
-        borderRadius: 14,
+        width: 26,
+        height: 26,
+        borderRadius: 13,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: 'rgba(0,0,0,0.18)',
+        backgroundColor: 'rgba(0,0,0,0.22)',
     },
-    voiceBadgeLive: { backgroundColor: '#FFFFFF' },
 
     emptySeat: {
         borderRadius: 22,
@@ -677,4 +840,19 @@ const styles = StyleSheet.create({
         borderColor: 'rgba(255,255,255,0.16)',
     },
     waitText: { fontSize: 15, color: 'rgba(255,255,255,0.85)' },
+    countPanel: {
+        height: 60,
+        borderRadius: 20,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        paddingHorizontal: 10,
+        backgroundColor: 'rgba(10, 8, 60, 0.28)',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.18)',
+    },
+    countBadge: { width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#22C55E' },
+    countNum: { fontSize: 22, color: '#FFFFFF' },
+    countCancel: { height: 40, paddingHorizontal: 16, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' },
+    countCancelText: { fontSize: 14, color: '#E2364A' },
 });

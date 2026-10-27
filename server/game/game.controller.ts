@@ -5,8 +5,8 @@ import { ServiceError } from './game-service';
 import { games } from './services';
 import { historyCache } from './user-cache';
 import { log } from '../lib/logger';
-import { onlineCount } from '../socket/room-presence';
 import { afterCursor, pageParams, toPage } from '../lib/paging';
+import { blockedEither } from '../social/blocks';
 
 /** Maps service errors to HTTP responses. */
 function handle(name: string, fn: (req: Request, res: Response) => Promise<unknown>) {
@@ -47,32 +47,13 @@ export const startGame = handle('startGame', async (req, res) => {
     res.status(200).json({ message: 'Game started.', data: games.dto(room) });
 });
 
-const PUBLIC_LIMIT = 50;
-
-/**
- * Open public rooms for the browse screen: nearly-full first (quickest to
- * start), then newest. Rooms nobody is connected to are left out — the host
- * has likely closed the app. Joining still re-checks everything.
- */
-export const listPublicRooms = handle('listPublicRooms', async (_req, res) => {
-    const data = games
-        .openPublicRooms()
-        .filter(r => onlineCount(r.id) > 0)
-        .sort((a, b) => b.players.length - a.players.length || b.createdAt.localeCompare(a.createdAt))
-        .slice(0, PUBLIC_LIMIT)
-        .map(r => {
-            const host = r.players.find(p => p.userId === r.createdById) ?? r.players[0];
-            return {
-                gameCode: r.gameCode,
-                maxPlayers: r.maxPlayers,
-                playerCount: r.players.length,
-                voiceEnabled: r.voiceEnabled,
-                createdAt: r.createdAt,
-                host: host ? { id: host.userId, username: host.username, avatarUrl: host.avatarUrl } : null,
-                players: r.players.map(p => ({ id: p.userId, username: p.username, avatarUrl: p.avatarUrl, color: p.color })),
-            };
-        });
-    res.status(200).json({ data });
+/** Join Public: the server picks the room (or makes one) — see GameService.quickMatch. */
+export const quickMatch = handle('quickMatch', async (req, res) => {
+    const me = req.user!.id;
+    const avoid = await blockedEither(me).catch(() => new Set<string>());
+    const { room, player } = await games.quickMatch(me, avoid);
+    const dto = games.dto(room);
+    res.status(200).json({ message: 'Matched.', data: { room: dto, player: dto.players.find(p => p.id === player.id) } });
 });
 
 /** Newest first, paged. The first page is cached per user until their next game ends. */

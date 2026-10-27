@@ -32,3 +32,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Finder (MacOS) folder config
 .DS_Store
+
+# Production secrets live only on the droplet (deploy/README.md)
+deploy/api.env

@@ -1,0 +1,14 @@
+# Docker build context is the repo root (server/Dockerfile, web/Dockerfile).
+**/node_modules
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.github
+app
+branding
+deploy
+web/.next
+server/generated
+server/test
+*.md

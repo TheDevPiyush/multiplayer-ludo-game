@@ -3,6 +3,7 @@ import { AppState } from 'react-native';
 
 import { getSocialSummary, type SocialSummary } from '@/apis/social-api';
 import { useSocket } from '@/components/SocketProvider';
+import { loadBlocks } from '@/hooks/useBlocks';
 
 type SocialCtxValue = {
     summary: SocialSummary;
@@ -39,14 +40,23 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
 
     // On every (re)connect: signing in, coming back online, a fresh socket after resume.
     useEffect(() => {
-        if (connectGeneration > 0) void loadSummary();
+        if (connectGeneration === 0) return;
+        void loadSummary();
+        void loadBlocks();
     }, [connectGeneration, loadSummary]);
 
     useEffect(() => {
         if (!socket) return;
+        // Blocking also unfriends, so the counts move too.
+        const onBlocks = () => {
+            void loadBlocks();
+            refresh();
+        };
         socket.on('social:update', refresh);
+        socket.on('blocks:update', onBlocks);
         return () => {
             socket.off('social:update', refresh);
+            socket.off('blocks:update', onBlocks);
         };
     }, [socket, refresh]);
 

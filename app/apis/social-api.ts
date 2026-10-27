@@ -76,3 +76,18 @@ export const inviteFriend = (gameCode: string, userId: string) =>
 export const getSocialSummary = () => authed<{ data: SocialSummary }>('/summary');
 export const getNotifications = (cursor?: string) => authed<Page<AppNotification>>(`/notifications${pageQuery(cursor)}`);
 export const markNotificationsRead = () => authed<{ updated: number }>('/notifications/read', { method: 'POST' });
+
+// ─── Blocks & reports (guests too) ──────────────────────────────────────────
+
+export type BlockedUser = { user: PublicUser; createdAt: string };
+export type ReportReason = 'abuse' | 'cheating' | 'username' | 'other';
+
+export const getBlocks = () => authed<{ data: BlockedUser[] }>('/blocks');
+
+/** Also unfriends; neither side sees the other's emotes or chat after this. */
+export const blockUser = (userId: string) => authed<{ blocked: boolean }>(`/blocks/${userId}`, { method: 'POST' });
+export const unblockUser = (userId: string) => authed<{ blocked: boolean }>(`/blocks/${userId}`, { method: 'DELETE' });
+
+/** From a room, pass its id: the server saves what they said there with the report. */
+export const reportUser = (report: { userId: string; reason: ReportReason; note?: string; roomId?: string }) =>
+    authed<{ reported: boolean }>('/reports', { method: 'POST', body: JSON.stringify(report) });

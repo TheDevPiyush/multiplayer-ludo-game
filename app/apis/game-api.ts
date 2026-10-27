@@ -5,7 +5,6 @@ import { apiFetch, type Result } from './http';
 export type CreateRoomPayload = {
     maxPlayers: number;
     isPrivate: boolean;
-    voiceEnabled: boolean;
 };
 
 export type GameRoomDto = {
@@ -104,17 +103,9 @@ export async function startGame(
     });
 }
 
-export type PublicRoom = {
-    gameCode: string;
-    maxPlayers: number;
-    playerCount: number;
-    voiceEnabled: boolean;
-    createdAt: string;
-    host: { id: string; username: string; avatarUrl: string | null } | null;
-    players: { id: string; username: string; avatarUrl: string | null; color: GamePlayerDto['color'] }[];
-};
-
-/** GET /game/rooms/public — open public rooms with a free seat. */
-export async function listPublicRooms(accessToken: string): Promise<Result<{ data: PublicRoom[] }>> {
-    return apiFetch(accessToken, '/game/rooms/public', { method: 'GET' });
+/** POST /game/quick-match — the server picks an open public room (or makes one) and seats you. */
+export async function quickMatch(
+    accessToken: string,
+): Promise<Result<{ message: string; data: { room: GameRoomDto; player: GamePlayerDto } }>> {
+    return apiFetch(accessToken, '/game/quick-match', { method: 'POST' });
 }

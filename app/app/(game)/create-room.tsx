@@ -65,7 +65,6 @@ export default function CreateRoomScreen() {
     // ?visibility=public (from the public rooms screen) starts with the room public.
     const { visibility } = useLocalSearchParams<{ visibility?: string }>();
     const [isPrivate, setIsPrivate] = useState(visibility !== 'public');
-    const [voiceEnable, setVoiceEnable] = useState(true);
     const [loading, setLoading] = useState(false);
     const [dialog, setDialog] = useState({
         visible: false,
@@ -113,7 +112,6 @@ export default function CreateRoomScreen() {
             const result = await createRoom(accessToken, {
                 maxPlayers,
                 isPrivate,
-                voiceEnabled: voiceEnable,
             });
 
             if (!result.ok) {
@@ -249,20 +247,6 @@ export default function CreateRoomScreen() {
                                 onValueChange={setIsPrivate}
                                 trackColor={{ false: palette.elevated, true: '#D94444' + '80' }}
                                 thumbColor={isPrivate ? '#D94444' : palette.mutedText}
-                            />
-                        </SettingRow>
-
-                        <RNView style={styles.separator} />
-
-                        <SettingRow
-                            label="Voice Chat"
-                            sublabel="Talk with players in-game"
-                        >
-                            <Switch
-                                value={voiceEnable}
-                                onValueChange={setVoiceEnable}
-                                trackColor={{ false: palette.elevated, true: '#2DAA5C' + '80' }}
-                                thumbColor={'#2DAA5C'}
                             />
                         </SettingRow>
                     </RNView>
@@ -490,11 +474,6 @@ const styles = StyleSheet.create({
     settingSubLabel: {
         fontSize: 11,
         color: palette.mutedText,
-    },
-    separator: {
-        height: StyleSheet.hairlineWidth,
-        backgroundColor: palette.border,
-        marginLeft: 16,
     },
 
     // Info card

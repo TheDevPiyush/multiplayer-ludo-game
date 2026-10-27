@@ -5,21 +5,31 @@ import { requireAccount } from '../middleware/requireAccount.middleware';
 import { verifySupabaseToken } from '../middleware/tokenVerify.middleware';
 import {
     acceptRequest,
+    blockUser,
     getSummary,
     inviteToRoom,
+    listBlocks,
     listFriends,
     listNotifications,
     listRequests,
     markNotificationsRead,
     removeFriend,
+    reportUser,
     searchUsers,
     sendRequest,
+    unblockUser,
 } from './social.controller';
 
 const socialRouter = Router();
 socialRouter.use(verifySupabaseToken);
 // Badges for everyone (zeros for guests); everything else is for saved accounts.
 socialRouter.get('/summary', getSummary);
+// Blocking and reporting are for everyone: guests meet strangers in public rooms too.
+socialRouter.get('/blocks', listBlocks);
+const blockLimit = rateLimit('block', 20, 0.5);
+socialRouter.post('/blocks/:userId', blockLimit, blockUser);
+socialRouter.delete('/blocks/:userId', blockLimit, unblockUser);
+socialRouter.post('/reports', rateLimit('report', 5, 0.05), reportUser);
 socialRouter.use(requireAccount);
 
 socialRouter.get('/users/search', rateLimit('search', 10, 2), searchUsers);

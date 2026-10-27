@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { cryptoRng, GameService, ServiceError, type GameServiceOptions } from '../game/game-service';
+import { cryptoRng, GameService, ServiceError, type BotProfile, type GameServiceOptions } from '../game/game-service';
 import type { LiveRoom, RoomSync } from '../game/live-room';
 import type { Persistence } from '../game/persistence';
 
@@ -95,20 +95,6 @@ describe('lobby', () => {
         await expect(games.joinRoom('c', room.gameCode)).rejects.toThrow(ServiceError);
     });
 
-    test('public room list: only public, waiting rooms with a free seat', async () => {
-        const { games } = setup();
-        const open = await games.createRoom('a', { maxPlayers: 2, isPrivate: false });
-        const priv = await games.createRoom('b', { maxPlayers: 2, isPrivate: true });
-        const full = await games.createRoom('c', { maxPlayers: 2, isPrivate: false });
-        await games.joinRoom('d', full.gameCode);
-        const started = await games.createRoom('e', { maxPlayers: 3, isPrivate: false });
-        await games.joinRoom('f', started.gameCode);
-        await games.startGame('e', started.gameCode);
-
-        expect(games.openPublicRooms().map(r => r.gameCode)).toEqual([open.gameCode]);
-        expect(priv.isPrivate).toBe(true);
-    });
-
     test('finished or cancelled rooms cannot be joined, even by their own players', async () => {
         const { games } = setup();
         const done = await games.createRoom('a', { maxPlayers: 2 });
@@ -182,6 +168,144 @@ describe('gameplay', () => {
         expect(to).toBeGreaterThan(from);
         await games.stop();
     }, 30_000);
+});
+
+describe('public rooms: quick match, bots and auto-start', () => {
+    const bots: BotProfile[] = Array.from({ length: 6 }, (_, i) => ({ userId: `bot${i}`, username: `bot_${i}`, avatarUrl: null }));
+    const lobbyFast: Partial<GameServiceOptions> = {
+        ...fast,
+        turnMs: 60_000,
+        botFillMs: [40, 40],
+        botGapMs: [5, 5],
+        botThinkMs: [1, 2],
+        autoStartGraceMs: 40,
+        countdownMs: 30,
+        countdownPauseMs: 60,
+    };
+    function botSetup(opts: Partial<GameServiceOptions> = {}) {
+        const t = setup({ ...lobbyFast, ...opts });
+        t.games.setBots(bots);
+        return t;
+    }
+    async function until(check: () => boolean, ms = 1_000) {
+        const end = Date.now() + ms;
+        while (!check()) {
+            if (Date.now() > end) throw new Error('timed out');
+            await Bun.sleep(5);
+        }
+    }
+    const botsIn = (room: LiveRoom) => room.players.filter(p => p.userId.startsWith('bot')).length;
+
+    test('joins the open room with the most real players, never one with a blocked player', async () => {
+        const { games } = botSetup({ botFillMs: [60_000, 60_000] });
+        const one = await games.createRoom('a', { maxPlayers: 4 });
+        const two = await games.createRoom('b', { maxPlayers: 4 });
+        await games.joinRoom('c', two.gameCode);
+        await games.createRoom('p', { maxPlayers: 4, isPrivate: true });
+        await games.createRoom('q', { maxPlayers: 2 });
+
+        expect((await games.quickMatch('d', new Set())).room).toBe(two);
+        expect((await games.quickMatch('e', new Set(['c']))).room).toBe(one);
+        // Already waiting in one: pressing again keeps the seat.
+        expect((await games.quickMatch('d', new Set())).room).toBe(two);
+        await games.stop();
+    });
+
+    test('makes a new 4-player public room when nothing fits', async () => {
+        const { games } = botSetup();
+        const { room, player } = await games.quickMatch('a', new Set());
+        expect(room.maxPlayers).toBe(4);
+        expect(room.isPrivate).toBe(false);
+        expect(room.createdById).toBe('a');
+        expect(player.userId).toBe('a');
+        await games.stop();
+    });
+
+    test('bots fill the free seats once the host is here, then the game counts down and starts', async () => {
+        const { games, syncs } = botSetup();
+        const room = await games.createRoom('a', { maxPlayers: 4 });
+        await Bun.sleep(60);
+        expect(room.players).toHaveLength(1); // host not connected yet: nothing happens
+
+        games.setPresence(room, 'a', 'CONNECTED');
+        await until(() => room.status === 'PLAYING');
+        expect(botsIn(room)).toBe(3);
+        expect(new Set(room.players.map(p => p.color)).size).toBe(4);
+        expect(syncs.some(s => s.room.startsInMs !== null)).toBe(true);
+        expect(room.lobby).toBeUndefined();
+        await games.stop();
+    });
+
+    test('a real player takes a bot seat until the countdown starts', async () => {
+        const { games } = botSetup({ autoStartGraceMs: 150 });
+        const room = await games.createRoom('a', { maxPlayers: 4 });
+        games.setPresence(room, 'a', 'CONNECTED');
+        await until(() => room.players.length === 4);
+
+        const newest = [...room.players].sort((x, y) => y.joinedAt.localeCompare(x.joinedAt))[0]!;
+        const { player } = await games.joinRoom('h', room.gameCode);
+        expect(room.players).toHaveLength(4);
+        expect(botsIn(room)).toBe(2);
+        expect(room.players.some(p => p.id === newest.id)).toBe(false);
+        expect(player.color).toBe(newest.color);
+
+        await until(() => !!room.lobby?.startsAt);
+        await expect(games.joinRoom('i', room.gameCode)).rejects.toThrow('This game is about to start.');
+        await until(() => room.status === 'PLAYING');
+        await games.stop();
+    });
+
+    test('the host can stop the countdown; it comes back a little later', async () => {
+        const { games } = botSetup({ countdownMs: 60 });
+        const room = await games.createRoom('a', { maxPlayers: 4 });
+        games.setPresence(room, 'a', 'CONNECTED');
+        await until(() => !!room.lobby?.startsAt);
+
+        await expect(games.cancelCountdown('bot0', room.gameCode)).rejects.toThrow(ServiceError);
+        await games.cancelCountdown('a', room.gameCode);
+        expect(room.lobby?.startsAt).toBeNull();
+        await Bun.sleep(40);
+        expect(room.status).toBe('WAITING');
+        await until(() => room.status === 'PLAYING');
+        await games.stop();
+    });
+
+    test('a leaving host hands a public room to the next real player; bots alone close it', async () => {
+        const { games } = botSetup({ botFillMs: [60_000, 60_000] });
+        const room = await games.createRoom('a', { maxPlayers: 4 });
+        await games.joinRoom('b', room.gameCode);
+        await games.leaveRoom('a', room.gameCode);
+        expect(room.status).toBe('WAITING');
+        expect(room.createdById).toBe('b');
+
+        const quick = botSetup({ autoStartGraceMs: 60_000 }).games;
+        const lonely = await quick.createRoom('c', { maxPlayers: 4 });
+        quick.setPresence(lonely, 'c', 'CONNECTED');
+        await until(() => botsIn(lonely) > 0);
+        await quick.leaveRoom('c', lonely.gameCode);
+        expect(lonely.status).toBe('CANCELLED');
+        await quick.stop();
+
+        const priv = await games.createRoom('d', { maxPlayers: 4, isPrivate: true });
+        await games.joinRoom('e', priv.gameCode);
+        await games.leaveRoom('d', priv.gameCode);
+        expect(priv.status).toBe('CANCELLED');
+        await games.stop();
+    });
+
+    test('bots play their own turns, and a game with only bots left is abandoned', async () => {
+        // The host's own turns time out quickly, so the bots get theirs.
+        const { games, syncs } = botSetup({ turnMs: 5 });
+        const room = await games.createRoom('a', { maxPlayers: 4 });
+        games.setPresence(room, 'a', 'CONNECTED');
+        await until(() => room.status === 'PLAYING');
+
+        const botColors = new Set(room.players.filter(p => p.userId.startsWith('bot')).map(p => p.color));
+        await until(() => syncs.some(s => s.events.some(e => e.type === 'ROLLED' && botColors.has(e.color))));
+        await games.leaveRoom('a', room.gameCode);
+        expect(room.status).toBe('CANCELLED');
+        await games.stop();
+    });
 });
 
 describe('nobody watching', () => {

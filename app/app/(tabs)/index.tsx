@@ -131,14 +131,14 @@ export default function HomeTabScreen() {
                 <GameTile colors={['#FF5A5F', '#FF8A3D']} edge="#C2304A" contentStyle={styles.hero} radius={28} depth={7}>
                     <FloatingDiceArt style={styles.heroArt} />
                     <RNView style={styles.heroChip}>
-                        <MaterialCommunityIcons name="microphone" size={12} color="#FFFFFF" />
-                        <Text weight="bold" style={styles.heroChipText}>ONLINE · VOICE CHAT</Text>
+                        <MaterialCommunityIcons name="emoticon-excited" size={12} color="#FFFFFF" />
+                        <Text weight="bold" style={styles.heroChipText}>ONLINE · EMOTES & CHAT</Text>
                     </RNView>
                     <Text weight="bold" style={styles.heroTitle}>Play with{'\n'}Friends</Text>
                     <Text weight="medium" style={styles.heroSub}>Public or private rooms for 2–4 players</Text>
                     <RNView style={styles.heroBtns}>
                         <RNView style={styles.heroBtnRow}>
-                            <HeroButton label="Join Public" icon="earth" kind="public" onPress={() => router.push('/(game)/public-rooms')} />
+                            <HeroButton label="Join Public" icon="earth" kind="public" onPress={() => router.push('/(game)/quick-match')} />
                             <HeroButton label="Join Private" icon="lock" kind="private" onPress={() => router.push('/(game)/join-room')} />
                         </RNView>
                         <HeroButton label="Create room" icon="plus-circle" kind="create" onPress={() => router.push('/(game)/create-room')} />

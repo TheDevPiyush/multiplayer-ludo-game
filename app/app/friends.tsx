@@ -28,6 +28,7 @@ import {
 } from '@/apis/social-api';
 import AppDialog from '@/components/Dialog';
 import { AccountRequired } from '@/components/AccountRequired';
+import { PlayerSheet, type SheetPlayer } from '@/components/PlayerSheet';
 import { useSocial } from '@/components/SocialProvider';
 import { Text } from '@/components/Themed';
 import { UserAvatar } from '@/components/UserAvatar';
@@ -170,6 +171,7 @@ function FriendsSheet() {
     const searchSeq = useRef(0);
 
     const [busy, setBusy] = useState<Record<string, boolean>>({});
+    const [sheetPlayer, setSheetPlayer] = useState<SheetPlayer | null>(null);
     const [dialog, setDialog] = useState<{ title: string; message: string; confirm?: { label: string; run: () => void } } | null>(null);
 
     const close = useCallback(() => {
@@ -290,13 +292,20 @@ function FriendsSheet() {
         if (item.kind === 'header') return <Text weight="bold" style={styles.sectionHeader}>{item.title}</Text>;
         return (
             <RNView style={styles.row}>
-                <UserAvatar user={item.user} size={44} online={item.online} />
-                <RNView style={{ flex: 1 }}>
-                    <Text weight="bold" style={styles.username} numberOfLines={1}>@{item.user.username}</Text>
-                    <Text weight="medium" style={[styles.rowSub, item.online && { color: GREEN }]} numberOfLines={1}>
-                        {subtitleFor(item)}
-                    </Text>
-                </RNView>
+                {/* The person opens them: block or report. */}
+                <Pressable
+                    onPress={() => setSheetPlayer(item.user)}
+                    style={({ pressed }) => [styles.person, pressed && { opacity: 0.7 }]}
+                    accessibilityLabel={`@${item.user.username}`}
+                >
+                    <UserAvatar user={item.user} size={44} online={item.online} />
+                    <RNView style={{ flex: 1 }}>
+                        <Text weight="bold" style={styles.username} numberOfLines={1}>@{item.user.username}</Text>
+                        <Text weight="medium" style={[styles.rowSub, item.online && { color: GREEN }]} numberOfLines={1}>
+                            {subtitleFor(item)}
+                        </Text>
+                    </RNView>
+                </Pressable>
                 {actionsFor(item)}
             </RNView>
         );
@@ -396,6 +405,8 @@ function FriendsSheet() {
                     />
                 </Animated.View>
 
+                <PlayerSheet player={sheetPlayer} onClose={() => setSheetPlayer(null)} />
+
                 <AppDialog
                     visible={!!dialog}
                     title={dialog?.title ?? ''}
@@ -458,6 +469,7 @@ const styles = StyleSheet.create({
 
     sectionHeader: { fontSize: 12, color: MUTED, letterSpacing: 0.6, textTransform: 'uppercase', marginTop: 18, marginBottom: 2 },
     row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
+    person: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
     username: { fontSize: 15, color: INK },
     rowSub: { fontSize: 12, color: MUTED, marginTop: 2 },
     actions: { flexDirection: 'row', gap: 8 },

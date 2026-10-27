@@ -1,4 +1,5 @@
 import { memo } from 'react';
+import { View } from 'react-native';
 import Svg, { Circle, Defs, G, LinearGradient, Path, Polygon, RadialGradient, Rect, Stop } from 'react-native-svg';
 
 import {
@@ -24,6 +25,8 @@ const QUADRANTS = [
     { c: 'YELLOW' as const, bx: 0, by: 9, corner: 'bl' as const },
 ];
 const ENTRY_INDICES = new Set(Object.values(COLOR_ENTRY));
+/** Corner radius of the white board surface (and of the homes in its corners). */
+const SURFACE_RADIUS = 12;
 
 /** Quadrant rect with only its outer board corner rounded. */
 function quadrantPath(x: number, y: number, s: number, corner: 'tl' | 'tr' | 'bl' | 'br', r: number): string {
@@ -86,7 +89,7 @@ function LudoBoardSvg() {
             {/* Frame + board surface */}
             <Rect width={S} height={S} rx={20} fill="url(#frame)" />
             <Rect x={1} y={1} width={S - 2} height={S - 2} rx={19} fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth={1.5} />
-            <Rect x={BOARD_PAD} y={BOARD_PAD} width={inner} height={inner} rx={12} fill="#FFFFFF" />
+            <Rect x={BOARD_PAD} y={BOARD_PAD} width={inner} height={inner} rx={SURFACE_RADIUS} fill="#FFFFFF" />
 
             <G transform={`translate(${BOARD_PAD}, ${BOARD_PAD})`}>
                 {/* Track cells */}
@@ -149,7 +152,8 @@ function LudoBoardSvg() {
                 {/* Home bases */}
                 {QUADRANTS.map(({ c, bx, by, corner }) => (
                     <G key={`home-${c}`}>
-                        <Path d={quadrantPath(bx * C, by * C, 6 * C, corner, C * 0.9)} fill={`url(#q-${c})`} />
+                        {/* Same radius as the white surface, so none of it peeks out at the corner. */}
+                        <Path d={quadrantPath(bx * C, by * C, 6 * C, corner, SURFACE_RADIUS)} fill={`url(#q-${c})`} />
                         <Rect
                             x={(bx + 0.8) * C}
                             y={(by + 0.9) * C}
@@ -193,5 +197,16 @@ function LudoBoardSvg() {
     );
 }
 
-/** Static board art — memoized, it never re-renders during play. */
-export const LudoBoard = memo(LudoBoardSvg);
+/**
+ * Static board art, memoized: it never re-renders during play. `turns`
+ * (clockwise quarter turns) puts the local player's home bottom-right; the
+ * art looks the same from every side, and tokens are turned separately so
+ * they stay upright.
+ */
+export const LudoBoard = memo(function LudoBoard({ turns = 0 }: { turns?: number }) {
+    return (
+        <View style={turns % 4 ? { transform: [{ rotate: `${(turns % 4) * 90}deg` }] } : undefined}>
+            <LudoBoardSvg />
+        </View>
+    );
+});

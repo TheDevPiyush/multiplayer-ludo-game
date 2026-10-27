@@ -13,6 +13,18 @@ export interface LivePlayer {
     joinedAt: string;
     username: string;
     avatarUrl: string | null;
+    /** A server-played seat that fills public rooms. Never sent to clients. */
+    isBot?: boolean;
+}
+
+/** Public rooms fill their free seats with bots, then start themselves (epoch ms). */
+export interface LobbyAuto {
+    /** Every seat is filled by this time; bots join one by one in the seconds before. */
+    fillBy: number;
+    /** When a full room starts its countdown, unless the host starts first. */
+    countdownAt: number | null;
+    /** When a running countdown ends and the game starts. Seats are locked meanwhile. */
+    startsAt: number | null;
 }
 
 /**
@@ -44,6 +56,8 @@ export interface LiveRoom {
     timeouts: Record<string, number>;
     /** Every move this game, written to Postgres with the final result. */
     moveLog: MoveEntry[];
+    /** Public rooms in the lobby only. */
+    lobby?: LobbyAuto;
 }
 
 /** Shape the app renders (kept compatible with the previous REST payload). */
@@ -69,6 +83,8 @@ export function toRoomDto(room: LiveRoom) {
         turnEndsAt: room.turnEndsAt,
         /** Time left on the turn when this snapshot was made; clients time from this, not their own clock. */
         turnMsLeft: room.turnEndsAt === null ? null : Math.max(0, room.turnEndsAt - Date.now()),
+        /** Lobby countdown: the game starts in this many ms; null when no countdown runs. */
+        startsInMs: room.lobby?.startsAt ? Math.max(0, room.lobby.startsAt - Date.now()) : null,
         players: room.players.map(p => {
             const ps = g ? getPlayer(g, p.color) : undefined;
             return {

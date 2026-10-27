@@ -2,7 +2,7 @@
   "expo": {
     "name": "Simple Ludo",
     "slug": "simple-ludo",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "runtimeVersion": {
       "policy": "appVersion"
     },
@@ -20,10 +20,6 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.thedevpiyush.simpleludo",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Simple Ludo uses your microphone for in-game voice chat with other players.",
-        "UIBackgroundModes": [
-          "audio"
-        ],
         "ITSAppUsesNonExemptEncryption": false
       }
     },
@@ -35,12 +31,8 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.thedevpiyush.simpleludo",
-      "permissions": [
-        "android.permission.RECORD_AUDIO",
-        "android.permission.MODIFY_AUDIO_SETTINGS",
-        "android.permission.BLUETOOTH",
-        "android.permission.BLUETOOTH_CONNECT",
-        "android.permission.WAKE_LOCK"
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -51,13 +43,11 @@
     "plugins": [
       "expo-router",
       "expo-secure-store",
-      "expo-audio",
       [
-        "@livekit/react-native-expo-plugin",
+        "expo-audio",
         {
-          "android": {
-            "audioType": "communication"
-          }
+          "microphonePermission": false,
+          "recordAudioAndroid": false
         }
       ]
     ],

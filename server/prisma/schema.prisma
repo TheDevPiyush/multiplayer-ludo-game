@@ -42,6 +42,13 @@ enum FriendshipStatus {
   ACCEPTED
 }
 
+enum ReportReason {
+  ABUSE
+  CHEATING
+  USERNAME
+  OTHER
+}
+
 enum NotificationType {
   FRIEND_REQUEST
   FRIEND_ACCEPTED
@@ -51,18 +58,18 @@ enum NotificationType {
 // ─── Models ──────────────────────────────────────────────────────────────────
 
 model User {
-  id         String   @id @default(uuid())
-  username   String   @unique
-  isAdmin    Boolean  @default(false)
-  avatarUrl  String?
-  provider   String?
-  providerId String?
-  totalWins  Int      @default(0)
-  totalGames Int      @default(0)
+  id                String    @id @default(uuid())
+  username          String    @unique
+  isAdmin           Boolean   @default(false)
+  avatarUrl         String?
+  provider          String?
+  providerId        String?
+  totalWins         Int       @default(0)
+  totalGames        Int       @default(0)
   /// Last username change; changes are limited to one a week (the first is free).
   usernameChangedAt DateTime?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   gamePlayers  GamePlayer[]
   createdRooms GameRoom[]   @relation("RoomCreator")
@@ -72,6 +79,11 @@ model User {
   receivedFriendRequests Friendship[]   @relation("FriendAddressee")
   notifications          Notification[] @relation("NotificationRecipient")
   notificationsSent      Notification[] @relation("NotificationActor")
+
+  blocks       Block[]  @relation("Blocker")
+  blockedBy    Block[]  @relation("Blocked")
+  reportsMade  Report[] @relation("Reporter")
+  reportsAbout Report[] @relation("Reported")
 
   @@index([providerId])
   /// Prefix search ("pi" → piyush_1234); usernames are stored lowercase.
@@ -191,4 +203,42 @@ model Notification {
   @@index([userId, createdAt])
   @@index([userId, readAt])
   @@index([userId, actorId, gameCode])
+}
+
+/// `blocker` blocked `blocked`: neither sees the other's emotes or chat, and
+/// they can't friend or invite each other. Blocking also unfriends.
+model Block {
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+
+  blocker User @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@id([blockerId, blockedId])
+  @@index([blockedId])
+}
+
+/// A player report, reviewed by hand (no admin screen yet). `evidence` holds what the
+/// reported player said in the room at the time, as the server only keeps chat in memory.
+model Report {
+  id               String       @id @default(uuid())
+  reporterId       String
+  reportedId       String
+  reason           ReportReason
+  note             String?
+  /// The room it happened in, if any (no foreign key: rooms can be deleted).
+  gameRoomId       String?
+  /// Username at the time — they may change it.
+  reportedUsername String
+  evidence         Json?
+  createdAt        DateTime     @default(now())
+  resolvedAt       DateTime?
+
+  reporter User @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  reported User @relation("Reported", fields: [reportedId], references: [id], onDelete: Cascade)
+
+  @@index([reportedId, createdAt])
+  @@index([reporterId, reportedId, createdAt])
+  @@index([resolvedAt, createdAt])
 }

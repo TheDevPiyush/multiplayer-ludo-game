@@ -70,6 +70,7 @@ async function ensureUser(authUser: AuthUser): Promise<{ user: UserRow; created:
         if (existing.provider === GUEST_PROVIDER && !authUser.isAnonymous) {
             return { user: await upgradeGuest(existing, authUser), created: false };
         }
+        if (existing.provider === GUEST_PROVIDER) touchGuest(existing);
         return { user: existing, created: false };
     }
 
@@ -94,6 +95,19 @@ async function ensureUser(authUser: AuthUser): Promise<{ user: UserRow; created:
         }
     }
     throw new Error('Could not pick a unique username.');
+}
+
+const TOUCH_EVERY_MS = 24 * 60 * 60 * 1000;
+
+/** Marks a guest as active (at most daily), so the inactive-guest cleanup leaves them alone. */
+function touchGuest(row: UserRow) {
+    if (Date.now() - row.updatedAt.getTime() < TOUCH_EVERY_MS) return;
+    // Cached copy first, so parallel requests don't all write.
+    userRows.set(row.id, { ...row, updatedAt: new Date() });
+    prisma.user
+        .update({ where: { id: row.id }, data: { updatedAt: new Date() } })
+        .then(user => userRows.set(user.id, user))
+        .catch(e => log.error('touchGuest failed', { user: row.id, error: (e as Error)?.message }));
 }
 
 const upgrading = new Map<string, Promise<UserRow>>();
