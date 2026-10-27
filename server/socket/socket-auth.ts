@@ -6,6 +6,8 @@ import { log } from '../lib/logger';
 export interface SocketUser {
     id: string;
     email?: string;
+    /** Anonymous (guest) account: no social features or text chat. */
+    isGuest?: boolean;
 }
 
 /**
@@ -32,6 +34,6 @@ export async function socketAuth(socket: Socket, next: (err?: Error) => void): P
         return next(new Error('Invalid or expired token.'));
     }
 
-    socket.data.user = { id: user.id, email: user.email } satisfies SocketUser;
+    socket.data.user = { id: user.id, email: user.email, isGuest: user.isAnonymous } satisfies SocketUser;
     next();
 }

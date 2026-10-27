@@ -205,4 +205,47 @@ describe.skipIf(!hasDb)('friends & notifications', async () => {
         const after = (await api(bob.id, 'GET', '/notifications')).body.data.find((n: any) => n.type === 'ROOM_INVITE');
         expect(after.roomOpen).toBe(false);
     });
+
+    test('blocking unfriends, hides them from search and refuses their requests; unblocking undoes it', async () => {
+        const carol = { id: randomUUID(), username: `zzt_${tag}_carol` };
+        const dave = { id: randomUUID(), username: `zzt_${tag}_dave` };
+        extraIds.push(carol.id, dave.id);
+        await prisma.user.createMany({ data: [carol, dave] });
+        await api(carol.id, 'POST', `/friends/${dave.id}`);
+        await api(dave.id, 'POST', `/friends/${carol.id}/accept`);
+
+        const update = new Promise<any>(res => bobSocket.once('blocks:update', res));
+        expect((await api(bob.id, 'POST', `/blocks/${alice.id}`)).body.blocked).toBe(true);
+        await update;
+        // Twice is fine.
+        expect((await api(bob.id, 'POST', `/blocks/${alice.id}`)).status).toBe(200);
+
+        expect((await api(carol.id, 'POST', `/blocks/${dave.id}`)).body.blocked).toBe(true);
+        expect(await prisma.friendship.count({ where: { OR: [{ requesterId: carol.id }, { addresseeId: carol.id }] } })).toBe(0);
+        expect((await api(carol.id, 'GET', '/blocks')).body.data.map((b: any) => b.user.id)).toEqual([dave.id]);
+
+        // Either side: no search result, no request.
+        const found = async (as: string, q: string) => (await api(as, 'GET', `/users/search?q=${q}`)).body.data.map((r: any) => r.user.id);
+        expect(await found(dave.id, carol.username)).toEqual([]);
+        expect(await found(carol.id, dave.username)).toEqual([]);
+        expect((await api(dave.id, 'POST', `/friends/${carol.id}`)).status).toBe(404);
+
+        expect((await api(carol.id, 'DELETE', `/blocks/${dave.id}`)).body.blocked).toBe(false);
+        expect(await found(dave.id, carol.username)).toEqual([carol.id]);
+        expect((await api(dave.id, 'POST', `/friends/${carol.id}`)).body.relation).toBe('outgoing');
+
+        expect((await api(bob.id, 'POST', `/blocks/${bob.id}`)).status).toBe(400);
+        expect((await api(bob.id, 'POST', `/blocks/${randomUUID()}`)).status).toBe(404);
+        await api(bob.id, 'DELETE', `/blocks/${alice.id}`);
+    });
+
+    test('reports need a reason; reporting again the same day updates the one report', async () => {
+        expect((await api(bob.id, 'POST', '/reports', { userId: alice.id })).status).toBe(400);
+        expect((await api(bob.id, 'POST', '/reports', { userId: bob.id, reason: 'abuse' })).status).toBe(400);
+        expect((await api(bob.id, 'POST', '/reports', { userId: alice.id, reason: 'abuse', note: 'rude in chat' })).body.reported).toBe(true);
+        expect((await api(bob.id, 'POST', '/reports', { userId: alice.id, reason: 'username' })).body.reported).toBe(true);
+        const reports = await prisma.report.findMany({ where: { reporterId: bob.id } });
+        expect(reports).toHaveLength(1);
+        expect(reports[0]).toMatchObject({ reportedId: alice.id, reason: 'USERNAME', note: null, reportedUsername: alice.username });
+    });
 });

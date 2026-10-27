@@ -22,6 +22,7 @@ import {
     HOP_MS,
     cellCenter,
     posToCoord,
+    turnPoint,
 } from './geometry';
 
 const PAWN_W = CELL * 1.02;
@@ -80,11 +81,11 @@ export const Pawn = memo(function Pawn({ color, width }: { color: string; width:
 
 type Point = { x: number; y: number };
 
-function pathPoints(color: string, from: number, to: number, final: Point): Point[] {
+function pathPoints(color: string, from: number, to: number, final: Point, turns: number): Point[] {
     const pts: Point[] = [];
     for (let p = from + 1; p < to; p++) {
         const [c, r] = posToCoord(p, color);
-        pts.push(cellCenter(c, r));
+        pts.push(turnPoint(cellCenter(c, r), turns));
     }
     pts.push(final);
     return pts;
@@ -100,12 +101,14 @@ type TokenProps = {
     onPress?: (i: number) => void;
     canMove: boolean;
     captured: boolean;
+    /** Quarter turns of the board this token is drawn on (see `turnsFor`). */
+    turns?: number;
 };
 
 /** Re-render only when something visible changed (`coord` is a new object on every room update). */
 function sameToken(a: TokenProps, b: TokenProps): boolean {
     return a.coord.x === b.coord.x && a.coord.y === b.coord.y && a.pos === b.pos && a.color === b.color
-        && a.tokenIndex === b.tokenIndex && a.canMove === b.canMove && a.captured === b.captured && a.onPress === b.onPress;
+        && a.tokenIndex === b.tokenIndex && a.canMove === b.canMove && a.captured === b.captured && a.onPress === b.onPress && a.turns === b.turns;
 }
 
 export const Token = memo(function Token({
@@ -116,6 +119,7 @@ export const Token = memo(function Token({
     onPress,
     canMove,
     captured,
+    turns = 0,
 }: TokenProps) {
     const x = useSharedValue(coord.x);
     const y = useSharedValue(coord.y);
@@ -132,7 +136,7 @@ export const Token = memo(function Token({
 
         if (pos !== from && pos > from && from !== 0 && pos - from <= 6) {
             // Normal move: hop through every cell on the way.
-            const pts = pathPoints(color, from, pos, final);
+            const pts = pathPoints(color, from, pos, final, turns);
             const ease = Easing.inOut(Easing.quad);
             x.value = withSequence(...pts.map(p => withTiming(p.x, { duration: HOP_MS, easing: ease })) as [any, ...any[]]);
             y.value = withSequence(...pts.map(p => withTiming(p.y, { duration: HOP_MS, easing: ease })) as [any, ...any[]]);

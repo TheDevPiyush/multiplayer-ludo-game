@@ -1,7 +1,11 @@
 import { Router, type Request, type Response } from 'express';
 
 /**
- * Shareable room links: https://<host>/join/ABC123.
+ * Shareable room links: https://<host>/invite/ABC123 (and /join/ABC123 from older builds).
+ *
+ * In production the website (web/) serves the invite page and Caddy forwards its
+ * /.well-known/* here, so the verification files below live in one place. The
+ * page here is the fallback when the app's link domain is the API itself.
  *
  * With the app installed and the domain verified (assetlinks.json /
  * apple-app-site-association below), the OS opens the app straight away.
@@ -35,12 +39,12 @@ linksRouter.get('/.well-known/assetlinks.json', (_req: Request, res: Response) =
 linksRouter.get('/.well-known/apple-app-site-association', (_req: Request, res: Response) => {
     res.json({
         applinks: {
-            details: IOS_APP_ID ? [{ appIDs: [IOS_APP_ID], components: [{ '/': '/join/*' }, { '/': '/friends*' }] }] : [],
+            details: IOS_APP_ID ? [{ appIDs: [IOS_APP_ID], components: [{ '/': '/invite/*' }, { '/': '/join/*' }, { '/': '/friends*' }] }] : [],
         },
     });
 });
 
-linksRouter.get('/join/:code', (req: Request, res: Response) => {
+linksRouter.get(['/invite/:code', '/join/:code'], (req: Request, res: Response) => {
     const code = String(req.params.code ?? '').toUpperCase();
     if (!CODE_RE.test(code)) return res.status(404).type('html').send(page('Link not valid', 'This room link is broken.', null));
     res.type('html').send(page(`Join room ${code}`, 'You’ve been invited to a game of Ludo.', code));

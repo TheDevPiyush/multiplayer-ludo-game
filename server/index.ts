@@ -3,6 +3,8 @@ import express from 'express';
 import { createServer } from 'http';
 
 import authRouter from './auth/auth.routes.ts';
+import { startGuestCleanup } from './auth/guest-cleanup.ts';
+import { loadBotPool } from './game/bots.ts';
 import gameRouter from './game/game.routes.ts';
 import { games } from './game/services.ts';
 import { log, requestLogger } from './lib/logger.ts';
@@ -44,6 +46,10 @@ httpServer.listen(PORT, () => {
     log.info(`HTTP + Socket.io server running at :${PORT}`);
 });
 startNotificationCleanup();
+startGuestCleanup();
+loadBotPool()
+    .then(bots => games.setBots(bots))
+    .catch(e => log.error('loading bots failed, public rooms will wait for people', { error: (e as Error)?.message }));
 
 // Write buffered game state before the process exits (deploys, restarts).
 let shuttingDown = false;

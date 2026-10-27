@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, View as RNView, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
     Easing,
@@ -8,7 +8,7 @@ import Animated, {
     withTiming,
 } from 'react-native-reanimated';
 
-import { Dice3D } from './Dice';
+import { Dice3D, RollingDice } from './Dice';
 import { COLOR_HEX } from './geometry';
 import { Pawn } from './Token';
 
@@ -20,9 +20,41 @@ const SIZES = {
     large: { box: [200, 168], dice: 88, diceAt: { right: 56, top: 4 }, back: 50, backAt: { right: 18, top: 70 }, front: 58, frontAt: { right: 114, top: 82 }, lift: 10 },
 } as const;
 
-/** A red 3D dice and two pawns, gently floating (one shared animation, on the UI thread). */
-export function FloatingDiceArt({ size = 'medium', style }: { size?: keyof typeof SIZES; style?: StyleProp<ViewStyle> }) {
+/** Tumble, then rest on the new face, for a loading screen. */
+const ROLL_MS = 900;
+const REST_MS = 650;
+
+/** Rolls and lands over and over while mounted. */
+function useRollLoop(enabled: boolean) {
+    const [state, setState] = useState({ rolling: false, value: 6 });
+    useEffect(() => {
+        if (!enabled) return;
+        let t: ReturnType<typeof setTimeout>;
+        const roll = () => {
+            setState(s => ({ ...s, rolling: true }));
+            t = setTimeout(() => {
+                // A different face each time, so every landing reads as a new roll.
+                setState(s => ({ rolling: false, value: ((s.value + Math.floor(Math.random() * 5)) % 6) + 1 }));
+                t = setTimeout(roll, REST_MS);
+            }, ROLL_MS);
+        };
+        t = setTimeout(roll, REST_MS);
+        return () => clearTimeout(t);
+    }, [enabled]);
+    return state;
+}
+
+/**
+ * A red 3D dice and two pawns, gently floating (one shared animation, on the UI
+ * thread). `rolling`: the dice keeps rolling with a short pause between rolls.
+ */
+export function FloatingDiceArt({ size = 'medium', rolling = false, style }: {
+    size?: keyof typeof SIZES;
+    rolling?: boolean;
+    style?: StyleProp<ViewStyle>;
+}) {
     const s = SIZES[size];
+    const roll = useRollLoop(rolling);
     const float = useSharedValue(0);
     useEffect(() => {
         // Back and forth with no reset between loops, so the float never jumps.
@@ -39,10 +71,17 @@ export function FloatingDiceArt({ size = 'medium', style }: { size?: keyof typeo
                 <Pawn color="BLUE" width={s.back} />
             </Animated.View>
             <Animated.View style={[styles.abs, s.diceAt, diceStyle]}>
-                <Dice3D value={6} size={s.dice} color={COLOR_HEX.RED!} tilt={[-28, 34, 0]} />
+                {rolling ? (
+                    // RollingDice sits in a larger tap box; pull it back so the die stays in place.
+                    <RNView style={{ margin: -s.dice * 0.175 }}>
+                        <RollingDice value={roll.value} rolling={roll.rolling} color={COLOR_HEX.RED!} size={s.dice} disabled />
+                    </RNView>
+                ) : (
+                    <Dice3D value={6} size={s.dice} color={COLOR_HEX.RED!} tilt={[-28, 34, 0]} />
+                )}
             </Animated.View>
             <Animated.View style={[styles.abs, s.frontAt, pawnStyle]}>
-                <Pawn color="YELLOW" width={s.front} />
+                <Pawn color="RED" width={s.front} />
             </Animated.View>
         </RNView>
     );

@@ -1,16 +1,17 @@
 import type { Href } from 'expo-router';
 
-/** Host that serves /join/<code> and the app-link verification files. Set in .env; app.config.ts registers the same host with Android/iOS. */
+/** Host that serves /invite/<code> and the app-link verification files. Set in .env; app.config.ts registers the same host with Android/iOS. */
 const LINK_BASE = (process.env.EXPO_PUBLIC_LINK_URL || process.env.EXPO_PUBLIC_API_URL || '').trim().replace(/\/$/, '');
 
-const JOIN_RE = /(?:^|\/)join\/([A-Za-z0-9]{6})(?:[/?#]|$)/;
+/** /invite/ is the shared form; /join/ is the custom scheme's path and older shared links. */
+const JOIN_RE = /(?:^|\/)(?:join|invite)\/([A-Za-z0-9]{6})(?:[/?#]|$)/;
 
-/** https://…/join/ABC123 — opens the app when installed, a landing page otherwise. */
+/** https://…/invite/ABC123 — opens the app when installed, a landing page otherwise. */
 export function roomInviteUrl(gameCode: string): string {
-    return `${LINK_BASE}/join/${gameCode.toUpperCase()}`;
+    return `${LINK_BASE}/invite/${gameCode.toUpperCase()}`;
 }
 
-/** Room code from any link form: https://host/join/ABC123, simpleludo://join/ABC123, /join/ABC123. */
+/** Room code from any link form: https://host/invite/ABC123, https://host/join/ABC123, simpleludo://join/ABC123. */
 export function joinCodeFromUrl(url: string): string | null {
     const m = JOIN_RE.exec(url);
     return m ? m[1]!.toUpperCase() : null;

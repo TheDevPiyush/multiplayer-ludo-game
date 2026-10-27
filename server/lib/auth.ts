@@ -89,6 +89,18 @@ export async function verifyAccessToken(token: string): Promise<AuthUser | null>
     return user;
 }
 
+/** Whether accounts can be deleted from Supabase (needs the service role key). */
+export function canDeleteAuthUsers(): boolean {
+    return !!supabase;
+}
+
+/** Deletes a Supabase account. True once it's gone, including when it already was. */
+export async function deleteAuthUser(id: string): Promise<boolean> {
+    if (!supabase) return false;
+    const { error } = await supabase.auth.admin.deleteUser(id);
+    return !error || error.status === 404;
+}
+
 export function isAuthConfigured(): boolean {
     return !!(jwks || hsKey || supabase);
 }

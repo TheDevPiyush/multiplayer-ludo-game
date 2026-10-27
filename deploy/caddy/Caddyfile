@@ -1,0 +1,29 @@
+# HTTPS certificates are issued and renewed automatically once DNS points here.
+
+# Game API: REST + Socket.IO (WebSocket upgrades pass through reverse_proxy as-is).
+api.simple-ludo.thedevpiyush.com {
+	encode zstd gzip
+	reverse_proxy api:8080
+}
+
+# Website and invite pages.
+simple-ludo.thedevpiyush.com {
+	encode zstd gzip
+
+	# App link verification files come from the API (ANDROID_CERT_SHA256 / IOS_APP_ID in
+	# api.env), so this domain's /invite/* links open the installed app directly.
+	handle /.well-known/assetlinks.json {
+		reverse_proxy api:8080
+	}
+	handle /.well-known/apple-app-site-association {
+		reverse_proxy api:8080
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}
+
+www.simple-ludo.thedevpiyush.com {
+	redir https://simple-ludo.thedevpiyush.com{uri} permanent
+}

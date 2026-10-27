@@ -34,6 +34,8 @@ export type GameRoom = {
     turnEndsAt: number | null;
     /** Time left on the turn when the server sent this snapshot (immune to device clock skew). */
     turnMsLeft?: number | null;
+    /** Public lobbies: the game starts by itself in this many ms (from when the snapshot was sent); null when no countdown runs. */
+    startsInMs?: number | null;
 };
 
 type Color = RoomPlayer['color'];
@@ -90,6 +92,8 @@ interface UseGameRoomOpts {
 export function useGameRoom({ roomId, gameCode, onEvent, onEvents }: UseGameRoomOpts) {
     const { socket, isRealtimeReady, connectionPhase, connectGeneration } = useSocket();
     const [room, setRoom] = useState<GameRoom | null>(null);
+    /** Bumped each time this socket (re)joins the room: requests that need membership wait for it. */
+    const [joinCount, setJoinCount] = useState(0);
     const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
     const [joinError, setJoinError] = useState<string | null>(null);
     const [disconnectingPlayers, setDisconnectingPlayers] = useState<DisconnectingPlayer[]>([]);
@@ -141,6 +145,7 @@ export function useGameRoom({ roomId, gameCode, onEvent, onEvents }: UseGameRoom
         acceptRoom(res.data.room, true);
         setOnlineUserIds(res.data.onlineUserIds ?? []);
         hasJoinedRef.current = true;
+        setJoinCount(n => n + 1);
     }, [acceptRoom]);
 
     const refresh = useCallback(async () => {
@@ -177,7 +182,7 @@ export function useGameRoom({ roomId, gameCode, onEvent, onEvents }: UseGameRoom
     }, [isRealtimeReady, socket, connectGeneration, joinSocketRoom]);
 
     // Do NOT emit room:leave on unmount — lobby → board navigation would
-    // tear down voice and socket presence. Call leaveRoom() explicitly when
+    // tear down socket presence. Call leaveRoom() explicitly when
     // the user exits the game (lobby/board beforeRemove handlers).
     useEffect(() => {
         return () => {
@@ -304,6 +309,7 @@ export function useGameRoom({ roomId, gameCode, onEvent, onEvents }: UseGameRoom
 
     return {
         room,
+        joinCount,
         onlineUserIds,
         disconnectingPlayers,
         joinError,

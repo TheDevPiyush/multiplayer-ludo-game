@@ -93,6 +93,40 @@ export const HOME_TOKEN_SLOTS: Record<string, [number, number][]> = {
     YELLOW: [[2, 11], [4, 11], [2, 13], [4, 13]],
 };
 
+// ─────────────────────────────────────────────────────────────
+// TURNING THE BOARD (each player sees their own home bottom-right)
+// ─────────────────────────────────────────────────────────────
+
+/** Board corners, clockwise from top-left. */
+const CORNERS = ['tl', 'tr', 'br', 'bl'] as const;
+export type Corner = (typeof CORNERS)[number];
+/** Where each home sits on the unturned board (index into CORNERS). */
+const HOME_CORNER: Record<string, number> = { RED: 0, BLUE: 1, GREEN: 2, YELLOW: 3 };
+
+/** Clockwise quarter turns that bring `color`'s home to the bottom-right (0 for no color). */
+export function turnsFor(color: string | null | undefined): number {
+    const at = color ? HOME_CORNER[color] : undefined;
+    return at === undefined ? 0 : (2 - at + 4) % 4;
+}
+
+/** Where `color`'s home is once the board is turned. */
+export function cornerOf(color: string, turns: number): Corner {
+    return CORNERS[((HOME_CORNER[color] ?? 0) + turns) % 4]!;
+}
+
+/** A board pixel position after `turns` clockwise quarter turns about the board's centre. */
+export function turnPoint(p: { x: number; y: number }, turns: number): { x: number; y: number } {
+    let { x, y } = p;
+    for (let i = 0; i < turns % 4; i++) [x, y] = [BOARD_SIZE - y, x];
+    return { x, y };
+}
+
+/** Players for the strips above ([top-left, top-right]) and below ([bottom-left, bottom-right]) the board. */
+export function stripRows<T extends { color: string }>(items: T[], turns: number): [(T | null)[], (T | null)[]] {
+    const at = (corner: Corner) => items.find(i => cornerOf(i.color, turns) === corner) ?? null;
+    return [[at('tl'), at('tr')], [at('bl'), at('br')]];
+}
+
 export function posToCoord(pos: number, color: string): [number, number] {
     if (pos === 57) return CENTER;
     if (pos >= 52) return HOME_STRETCH[color]?.[pos - 52] ?? CENTER;
@@ -129,8 +163,8 @@ export type TokenLayout = {
     coord: { x: number; y: number };
 };
 
-/** Pixel position of every token; tokens sharing a square are fanned out. */
-export function layoutTokens(players: BoardPlayer[]): TokenLayout[] {
+/** Pixel position of every token (on a board turned `turns` quarter turns); tokens sharing a square are fanned out. */
+export function layoutTokens(players: BoardPlayer[], turns = 0): TokenLayout[] {
     const base: (TokenLayout & { cellKey: string | null })[] = [];
     for (const p of players) {
         p.tokens.forEach((pos, tokenIndex) => {
@@ -165,5 +199,5 @@ export function layoutTokens(players: BoardPlayer[]): TokenLayout[] {
             t.coord = { x: t.coord.x + off.dx, y: t.coord.y + off.dy };
         });
     }
-    return base.map(({ cellKey: _, ...t }) => t);
+    return base.map(({ cellKey: _, ...t }) => ({ ...t, coord: turnPoint(t.coord, turns) }));
 }

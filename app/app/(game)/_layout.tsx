@@ -11,7 +11,7 @@ export default function GameRoomLayout() {
         <Stack initialRouteName="create-room" screenOptions={{ headerShown: false }}>
             <Stack.Screen name="create-room" dangerouslySingular />
             <Stack.Screen name="join-room" dangerouslySingular />
-            <Stack.Screen name="public-rooms" dangerouslySingular />
+            <Stack.Screen name="quick-match" dangerouslySingular options={{ animation: 'fade' }} />
             <Stack.Screen name="lobby" dangerouslySingular />
             <Stack.Screen name="board" dangerouslySingular />
             <Stack.Screen name="local-setup" dangerouslySingular />

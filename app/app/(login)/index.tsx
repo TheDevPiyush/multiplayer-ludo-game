@@ -188,7 +188,7 @@ export default function AuthIndex() {
                     {/* Pills */}
                     <Animated.View style={[styles.pillRow, { opacity: fadePills }]}>
                         {[
-                            { icon: 'microphone', iconColor: '#2DAA5C', label: 'Voice Chat' },
+                            { icon: 'smile-o', iconColor: '#2DAA5C', label: 'Emotes & Chat' },
                             { dot: '#3B7DD8', label: '4 Players' },
                             { dot: '#E8A520', label: 'Real-time' },
                         ].map((p, i) => (

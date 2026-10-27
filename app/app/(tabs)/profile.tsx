@@ -297,7 +297,7 @@ export default function ProfileTabScreen() {
               <Text weight="bold" style={styles.saveTitle}>Save your progress</Text>
             </RNView>
             <Text weight="medium" style={styles.saveText}>
-              You're playing as a guest. Link Google or an email to keep your stats on any phone, add friends and use voice chat.
+              You're playing as a guest. Link Google or an email to keep your stats on any phone, add friends and chat in games. Guest accounts unused for 30 days are deleted.
             </Text>
             <RNView style={styles.saveButtons}>
               <TouchableOpacity
@@ -377,6 +377,8 @@ export default function ProfileTabScreen() {
         <Text weight="semiBold" style={styles.sectionTitle}>ACCOUNT</Text>
         <RNView style={styles.sectionCard}>
           <ActionRow icon="pencil" label="Edit Username" onPress={editUsername} />
+          <RNView style={styles.separator} />
+          <ActionRow icon="ban" label="Blocked Players" onPress={() => router.push('/blocked')} />
           {/* Guests can't be found or added, so there's nothing to share yet. */}
           {!guest && (
             <>

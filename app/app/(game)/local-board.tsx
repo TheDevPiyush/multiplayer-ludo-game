@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import AppDialog from '@/components/Dialog';
 import { RollingDice } from '@/components/ludo/Dice';
-import { BOARD_SIZE, COLOR_HEX, layoutTokens } from '@/components/ludo/geometry';
+import { BOARD_SIZE, COLOR_HEX, layoutTokens, stripRows, turnsFor } from '@/components/ludo/geometry';
 import { LudoBoard } from '@/components/ludo/LudoBoard';
 import { PlayerStrip, type PlayerStripProps } from '@/components/ludo/PlayerStrip';
 import { Token } from '@/components/ludo/Token';
@@ -98,14 +98,16 @@ export default function LocalBoardScreen() {
     };
 
     // ── Board data ──
+    // Vs Computer turns the board so your home is bottom-right; Pass & Play keeps it fixed for everyone at the phone.
+    const turns = humanCount === 1 ? turnsFor(config.seats.find(s => s.kind === 'human')?.color) : 0;
     const tokenItems = useMemo(() => {
-        const layout = layoutTokens(state.players.map(p => ({ color: p.color, tokens: p.tokens, owner: p.color })));
+        const layout = layoutTokens(state.players.map(p => ({ color: p.color, tokens: p.tokens, owner: p.color })), turns);
         return layout.map(t => ({
             ...t,
             canMove: t.color === state.turn && movable.includes(t.tokenIndex),
             captured: !!capturedKey && capturedKey.startsWith(`${t.color}:${t.tokenIndex}:`) && t.pos === 0,
         }));
-    }, [state, movable, capturedKey]);
+    }, [state, movable, capturedKey, turns]);
 
     const strips = useMemo(
         () =>
@@ -127,8 +129,13 @@ export default function LocalBoardScreen() {
             }),
         [state, isOver, game.seatOf],
     );
-    const topStrips = strips.filter(s => s.color === 'RED' || s.color === 'BLUE');
-    const bottomStrips = strips.filter(s => s.color === 'GREEN' || s.color === 'YELLOW');
+    // Each strip sits at its own home's corner (an empty cell keeps the other side in place).
+    const [topStrips, bottomStrips] = stripRows(strips, turns);
+    const stripCell = (strip: (typeof strips)[number] | null, i: number) => {
+        if (!strip) return <RNView key={`empty-${i}`} style={{ flex: 1 }} />;
+        const { key, ...rest } = strip;
+        return <PlayerStrip key={key} {...rest} />;
+    };
 
     const turnName = currentSeat?.name ?? state.turn;
     const turnLabel = humanCount === 1 && currentSeat?.kind === 'human' ? 'Your turn' : `${turnName}'s turn`;
@@ -169,14 +176,15 @@ export default function LocalBoardScreen() {
             {/* Strips + board, centred in the space between the top and bottom bars */}
             <RNView style={styles.arena}>
             <RNView style={styles.stripRow}>
-                {topStrips.map(({ key, ...s }) => <PlayerStrip key={key} {...s} />)}
+                {topStrips.map(stripCell)}
             </RNView>
 
             <RNView style={styles.boardWrap}>
                 <RNView style={styles.boardShadow} />
-                <LudoBoard />
+                <LudoBoard turns={turns} />
                 {tokenItems.map(t => (
                     <Token
+                        turns={turns}
                         key={t.key}
                         color={t.color}
                         coord={t.coord}
@@ -190,7 +198,7 @@ export default function LocalBoardScreen() {
             </RNView>
 
             <RNView style={styles.stripRow}>
-                {bottomStrips.map(({ key, ...s }) => <PlayerStrip key={key} {...s} />)}
+                {bottomStrips.map(stripCell)}
             </RNView>
             </RNView>
 

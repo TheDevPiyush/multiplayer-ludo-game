@@ -2,6 +2,7 @@ import { createGame, type Color, type GameState } from '@ludo/engine';
 
 import { prisma } from '../lib/prisma';
 import { redis } from '../lib/redis';
+import { BOT_PROVIDER } from './bots';
 import type { LivePlayer, LiveRoom, MoveEntry, RoomStatus } from './live-room';
 
 export interface Profile {
@@ -46,7 +47,7 @@ function findRoom(where: { id: string } | { gameCode: string }) {
         where,
         include: {
             players: {
-                include: { user: { select: { username: true, avatarUrl: true } } },
+                include: { user: { select: { username: true, avatarUrl: true, provider: true } } },
                 orderBy: { seatNumber: 'asc' },
             },
         },
@@ -87,11 +88,12 @@ function fromDb(db: DbRoom): LiveRoom {
             seatNumber: p.seatNumber,
             color: p.color as Color,
             // Presence is live-only; everyone starts offline until their socket joins.
-            status: p.status === 'LEFT' ? 'LEFT' : 'DISCONNECTED',
+            status: p.status === 'LEFT' ? 'LEFT' : p.user.provider === BOT_PROVIDER ? 'CONNECTED' : 'DISCONNECTED',
             isReady: p.isReady,
             joinedAt: p.joinedAt.toISOString(),
             username: p.user.username,
             avatarUrl: p.user.avatarUrl,
+            ...(p.user.provider === BOT_PROVIDER ? { isBot: true } : {}),
         })),
         game,
         version: db.stateVersion,
@@ -106,6 +108,8 @@ function roomColumns(room: LiveRoom) {
     const g = room.game;
     return {
         status: room.status,
+        // Changes when the host of a public room leaves and another player takes over.
+        createdById: room.createdById,
         startedAt: room.startedAt ? new Date(room.startedAt) : null,
         endedAt: room.endedAt ? new Date(room.endedAt) : null,
         winnerId: room.winnerId,

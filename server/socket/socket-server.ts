@@ -2,8 +2,10 @@ import type { Server as HttpServer } from 'http';
 import { Server, type Socket } from 'socket.io';
 
 import { ServiceError, type GameService } from '../game/game-service';
+import { RoomChat } from '../game/room-chat';
 import { log } from '../lib/logger';
 import { RateLimiter } from '../lib/rate-limit';
+import { blockedEither } from '../social/blocks';
 import { socketAuth, socketUser } from './socket-auth';
 import {
     addSocket,
@@ -27,6 +29,22 @@ const actionLimiter = new RateLimiter(8, 8);
 /** room:join / room:state per user — each may load a room from Redis / Postgres. */
 const roomLimiter = new RateLimiter(10, 2);
 
+/** Emotes, quick replies and text chat. A chat lock reaches all of the player's devices. */
+const chat = new RoomChat((userId, lockedUntil) => {
+    io?.to(`user:${userId}`).emit('chat:locked', { lockedUntil });
+});
+
+/** A room's recent chat (for reports, which save what the reported player said). */
+export function roomChatHistory(roomId: string) {
+    return chat.historyFor(roomId);
+}
+
+/** `user:<id>` channels of everyone in a block with this user, either way: they don't get each other's emotes or chat. */
+async function blockedChannels(userId: string): Promise<string[]> {
+    const ids = await blockedEither(userId).catch(() => new Set<string>());
+    return [...ids].map(id => `user:${id}`);
+}
+
 function corsOrigin(): string | string[] {
     const list = process.env.CORS_ORIGINS?.split(',').map(s => s.trim()).filter(Boolean);
     return list?.length ? list : '*';
@@ -46,7 +64,8 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
     io.use(socketAuth);
 
     io.on('connection', (socket: Socket) => {
-        const userId = socketUser(socket)?.id;
+        const user = socketUser(socket);
+        const userId = user?.id;
         if (!userId) {
             log.warn('socket without user, disconnecting', { socket: socket.id, recovered: socket.recovered });
             socket.disconnect(true);
@@ -68,7 +87,8 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
 
         const roomSnapshot = (roomId: string, room: Parameters<GameService['dto']>[0]) => ({
             room: games.dto(room),
-            onlineUserIds: getRoomPresence(roomId),
+            // Bots have no sockets but are always there.
+            onlineUserIds: [...getRoomPresence(roomId), ...games.botIds(room)],
         });
 
         // ─── room:join / room:rejoin ───────────────────────────────
@@ -143,6 +163,9 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
         socket.on('game:start', gameAction('game:start', async p => {
             await games.startGame(userId, p.gameCode);
         }));
+        socket.on('room:countdown-cancel', gameAction('room:countdown-cancel', async p => {
+            await games.cancelCountdown(userId, p.gameCode);
+        }));
         socket.on('game:roll-dice', gameAction('game:roll-dice', async p => {
             const r = await games.act(userId, p.gameCode, { kind: 'ROLL' });
             return { diceValue: r.diceValue };
@@ -155,6 +178,48 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
         socket.on('game:skip-turn', gameAction('game:skip-turn', async p => {
             await games.act(userId, p.gameCode, { kind: 'SKIP' });
         }));
+
+        // ─── Reactions & chat ──────────────────────────────────────
+        /** The room, when this socket joined it and the user still plays in it. */
+        const memberRoom = async (roomId: unknown) => {
+            if (typeof roomId !== 'string' || !joinedRooms.has(roomId)) return null;
+            const room = await games.getRoom({ id: roomId }).catch(() => null);
+            return room && games.isMember(room, userId) ? room : null;
+        };
+
+        socket.on('room:react', async (payload: { roomId?: string; kind?: string; id?: string }, ack?: Ack) => {
+            if (!(await memberRoom(payload?.roomId))) return ack?.({ ok: false, error: 'Not in this room.' });
+            const res = chat.react(userId, payload);
+            if (!res.ok) return ack?.(res);
+            // The sender shows their own bubble straight away.
+            socket.to(`room:${payload.roomId}`).except(await blockedChannels(userId)).emit('room:reaction', { userId, ...res.reaction });
+            ack?.({ ok: true });
+        });
+
+        socket.on('room:chat-history', async (payload: { roomId?: string }, ack?: Ack) => {
+            if (!(await memberRoom(payload?.roomId))) return ack?.({ ok: false, error: 'Not in this room.' });
+            const blocked = await blockedEither(userId).catch(() => new Set<string>());
+            ack?.({
+                ok: true,
+                data: {
+                    messages: chat.historyFor(payload.roomId!).filter(m => !blocked.has(m.userId)),
+                    lockedUntil: chat.lockedUntil(userId),
+                    canChat: !user!.isGuest,
+                },
+            });
+        });
+
+        socket.on('room:chat', async (payload: { roomId?: string; text?: string }, ack?: Ack) => {
+            if (user!.isGuest) return ack?.({ ok: false, error: 'Save your progress to chat.', code: 'account_required' });
+            if (!(await memberRoom(payload?.roomId))) return ack?.({ ok: false, error: 'Not in this room.' });
+            const res = chat.say(payload.roomId!, userId, payload.text);
+            if (!res.ok) {
+                if (res.code) log.info('chat locked', { user: userId });
+                return ack?.(res);
+            }
+            socket.to(`room:${payload.roomId}`).except(await blockedChannels(userId)).emit('room:chat', res.message);
+            ack?.({ ok: true, data: res.message });
+        });
 
         // ─── disconnect ────────────────────────────────────────────
         socket.on('disconnect', (reason) => {

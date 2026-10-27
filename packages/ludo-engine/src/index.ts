@@ -6,3 +6,4 @@ export * from './game';
 export * from './bot';
 export * from './driver';
 export * from './seating';
+export * from './reactions';

@@ -1,0 +1,168 @@
+# Tests, builds the API and website images, pushes them to GitHub Container Registry,
+# then deploys them to the DigitalOcean droplet over SSH. The droplet needs no manual
+# setup: the deploy installs Docker on first run and writes api.env from the API_ENV
+# secret. Setup: deploy/README.md.
+#
+# Rolling back: re-run the "deploy" job of an older successful run; it deploys that
+# run's image tag (the commit SHA).
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - server/**
+      - packages/ludo-engine/**
+      - web/**
+      - deploy/**
+      - .dockerignore
+      - .github/workflows/deploy.yml
+  workflow_dispatch:
+
+# One deploy at a time; a newer push waits instead of cancelling a deploy half-way.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+
+      - name: Engine tests
+        working-directory: packages/ludo-engine
+        run: bun test
+
+      - name: Install server dependencies
+        working-directory: server
+        run: bun install --frozen-lockfile
+
+      - name: Generate Prisma client
+        working-directory: server
+        # prisma.config.ts wants a URL; generating doesn't connect to it.
+        run: DATABASE_URL=postgresql://ci:ci@localhost:5432/ci bunx --bun prisma generate
+
+      - name: Typecheck server
+        working-directory: server
+        run: bun run typecheck
+
+      # The other server tests need a real database (DATABASE_URL) and run locally.
+      - name: Server tests (no database)
+        working-directory: server
+        run: bun test test/game-service.test.ts test/room-chat.test.ts
+
+  build:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - image: simple-ludo-api
+            dockerfile: server/Dockerfile
+          - image: simple-ludo-web
+            dockerfile: web/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      # Registry paths must be lowercase.
+      - name: Image prefix
+        run: echo "IMAGE_PREFIX=ghcr.io/${OWNER,,}" >> "$GITHUB_ENV"
+        env:
+          OWNER: ${{ github.repository_owner }}
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:${{ github.sha }}
+            ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:latest
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    env:
+      HOST: ${{ secrets.DROPLET_HOST }}
+      APP_DIR: /opt/simple-ludo
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secrets
+        env:
+          SSH_KEY: ${{ secrets.DROPLET_SSH_KEY }}
+          API_ENV: ${{ secrets.API_ENV }}
+        run: |
+          missing=""
+          [ -n "$HOST" ] || missing="$missing DROPLET_HOST"
+          [ -n "$SSH_KEY" ] || missing="$missing DROPLET_SSH_KEY"
+          [ -n "$API_ENV" ] || missing="$missing API_ENV"
+          if [ -n "$missing" ]; then
+            echo "::error::Add these secrets to the 'production' environment:$missing (see deploy/README.md)"
+            exit 1
+          fi
+
+      - name: Image prefix
+        run: echo "IMAGE_PREFIX=ghcr.io/${OWNER,,}" >> "$GITHUB_ENV"
+        env:
+          OWNER: ${{ github.repository_owner }}
+
+      - name: SSH key
+        env:
+          SSH_KEY: ${{ secrets.DROPLET_SSH_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -T 15 "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          printf 'Host droplet\n  HostName %s\n  User root\n  IdentityFile ~/.ssh/id_deploy\n  ServerAliveInterval 30\n' "$HOST" > ~/.ssh/config
+
+      # Docker, firewall and swap on a fresh droplet; skips what is already done.
+      - name: Prepare droplet
+        run: |
+          tar -C deploy -cf - docker-compose.yml caddy bootstrap.sh release.sh \
+            | ssh droplet "mkdir -p $APP_DIR && tar -C $APP_DIR -xf -"
+          ssh droplet "bash $APP_DIR/bootstrap.sh"
+
+      # Over stdin, so the secret never appears in a command line or a log.
+      - name: Write api.env
+        env:
+          API_ENV: ${{ secrets.API_ENV }}
+        run: printf '%s\n' "$API_ENV" | ssh droplet "umask 077 && cat > $APP_DIR/api.env"
+
+      - name: Release
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | ssh droplet \
+            "IMAGE_PREFIX='$IMAGE_PREFIX' IMAGE_TAG='$IMAGE_TAG' GHCR_USER='$GHCR_USER' bash $APP_DIR/release.sh"
+
+      - name: Clean up key
+        if: always()
+        run: rm -f ~/.ssh/id_deploy

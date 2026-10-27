@@ -1,12 +1,14 @@
 import type { Request, Response } from 'express';
 
 import { games } from '../game/services';
+import { BOT_PROVIDER } from '../game/bots';
 import { GUEST_PROVIDER } from '../lib/auth';
 import { prisma } from '../lib/prisma';
 import { log } from '../lib/logger';
 import { TtlCache } from '../lib/ttl-cache';
 import { afterCursor, pageParams, toPage } from '../lib/paging';
-import { getIO } from '../socket/socket-server';
+import { getIO, roomChatHistory } from '../socket/socket-server';
+import { blockedEither, blocksChanged, isBlockedEither } from './blocks';
 
 export type Relation = 'none' | 'friends' | 'outgoing' | 'incoming';
 
@@ -79,12 +81,13 @@ export const searchUsers = handle('searchUsers', async (req, res) => {
     const q = String(req.query.q ?? '').trim().toLowerCase().replace(/^@/, '').replace(/[^a-z0-9_]/g, '');
     if (q.length < 2) return res.status(200).json({ data: [] });
 
+    const blocked = await blockedEither(me);
     const users = await prisma.user.findMany({
-        // Guests can't have friends, so they don't show up here.
+        // Guests (and bots) can't have friends, so they don't show up here; nor do blocks either way.
         where: {
             username: { startsWith: q },
-            id: { not: me },
-            OR: [{ provider: null }, { provider: { not: GUEST_PROVIDER } }],
+            id: { notIn: [me, ...blocked] },
+            OR: [{ provider: null }, { provider: { notIn: [GUEST_PROVIDER, BOT_PROVIDER] } }],
         },
         orderBy: { username: 'asc' },
         take: 20,
@@ -201,7 +204,9 @@ export const sendRequest = handle('sendRequest', async (req, res) => {
     if (!otherId || otherId === me) return res.status(400).json({ message: "You can't add yourself." });
 
     const other = await prisma.user.findUnique({ where: { id: otherId }, select: { id: true, provider: true } });
-    if (!other || other.provider === GUEST_PROVIDER) return res.status(404).json({ message: 'Player not found.' });
+    if (!other || other.provider === GUEST_PROVIDER || other.provider === BOT_PROVIDER || (await isBlockedEither(me, otherId))) {
+        return res.status(404).json({ message: 'Player not found.' });
+    }
 
     const existing = await prisma.friendship.findFirst({ where: pairWhere(me, otherId) });
     if (existing) {
@@ -285,6 +290,109 @@ export const inviteToRoom = handle('inviteToRoom', async (req, res) => {
     const inviter = room.players.find(p => p.userId === me);
     notify(friendId, 'invite', me, { gameCode, username: inviter?.username });
     res.status(200).json({ invited: true });
+});
+
+// ─── Blocks & reports ────────────────────────────────────────────────────────
+
+/** Everyone I blocked, newest first. The app keeps the ids to label seats in rooms. */
+export const listBlocks = handle('listBlocks', async (req, res) => {
+    const rows = await prisma.block.findMany({
+        where: { blockerId: req.user!.id },
+        orderBy: { createdAt: 'desc' },
+        take: 500,
+        select: { createdAt: true, blocked: { select: userSummary } },
+    });
+    res.status(200).json({ data: rows.map(r => ({ user: r.blocked, createdAt: r.createdAt })) });
+});
+
+/** A user's other devices refresh their block list. */
+function blocksUpdated(userId: string) {
+    getIO()?.to(`user:${userId}`).emit('blocks:update');
+}
+
+/**
+ * Block someone (guests can too: they meet strangers in public rooms). Also
+ * unfriends, and drops requests and invites between the two.
+ */
+export const blockUser = handle('blockUser', async (req, res) => {
+    const me = req.user!.id;
+    const otherId = String(req.params.userId ?? '');
+    if (!otherId || otherId === me) return res.status(400).json({ message: "You can't block yourself." });
+    const other = await prisma.user.findUnique({ where: { id: otherId }, select: { id: true } });
+    if (!other) return res.status(404).json({ message: 'Player not found.' });
+
+    const [, friendships, notifications] = await prisma.$transaction([
+        prisma.block.createMany({ data: [{ blockerId: me, blockedId: otherId }], skipDuplicates: true }),
+        prisma.friendship.deleteMany({ where: pairWhere(me, otherId) }),
+        prisma.notification.deleteMany({
+            where: { OR: [{ userId: me, actorId: otherId }, { userId: otherId, actorId: me }] },
+        }),
+    ]);
+    blocksChanged(me, otherId);
+    blocksUpdated(me);
+    summaryChanged(me);
+    if (friendships.count > 0 || notifications.count > 0) notify(otherId, 'removed', me);
+    log.info('player blocked', { user: me, blocked: otherId });
+    res.status(200).json({ blocked: true });
+});
+
+export const unblockUser = handle('unblockUser', async (req, res) => {
+    const me = req.user!.id;
+    const otherId = String(req.params.userId ?? '');
+    const { count } = await prisma.block.deleteMany({ where: { blockerId: me, blockedId: otherId } });
+    if (count > 0) {
+        blocksChanged(me, otherId);
+        blocksUpdated(me);
+    }
+    res.status(200).json({ blocked: false });
+});
+
+const REPORT_REASONS = { abuse: 'ABUSE', cheating: 'CHEATING', username: 'USERNAME', other: 'OTHER' } as const;
+const REPORT_NOTE_MAX = 500;
+/** Reporting the same player again within this window updates the one report. */
+const REPORT_DEDUPE_MS = 24 * 60 * 60 * 1000;
+/** What the reported player said in the room, kept with the report. */
+const EVIDENCE_MESSAGES = 15;
+
+/**
+ * Report a player, optionally from a room. When both are in that room, the
+ * reported player's recent messages there are saved with it: chat isn't
+ * stored anywhere else.
+ */
+export const reportUser = handle('reportUser', async (req, res) => {
+    const me = req.user!.id;
+    const otherId = String(req.body?.userId ?? '');
+    const reason = REPORT_REASONS[String(req.body?.reason ?? '') as keyof typeof REPORT_REASONS];
+    if (!otherId || otherId === me) return res.status(400).json({ message: "You can't report yourself." });
+    if (!reason) return res.status(400).json({ message: 'Pick a reason.' });
+    const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, REPORT_NOTE_MAX) || null : null;
+
+    const other = await prisma.user.findUnique({ where: { id: otherId }, select: { username: true } });
+    if (!other) return res.status(404).json({ message: 'Player not found.' });
+
+    let gameRoomId: string | null = null;
+    let evidence: { gameCode: string; status: string; messages: { text: string; at: number }[] } | null = null;
+    if (typeof req.body?.roomId === 'string') {
+        const room = await games.getRoom({ id: req.body.roomId }).catch(() => null);
+        if (room && games.isMember(room, me) && games.isMember(room, otherId)) {
+            gameRoomId = room.id;
+            const messages = roomChatHistory(room.id)
+                .filter(m => m.userId === otherId)
+                .slice(-EVIDENCE_MESSAGES)
+                .map(m => ({ text: m.text, at: m.at }));
+            evidence = { gameCode: room.gameCode, status: room.status, messages };
+        }
+    }
+
+    const data = { reason, note, gameRoomId, reportedUsername: other.username, ...(evidence ? { evidence } : {}) };
+    const recent = await prisma.report.findFirst({
+        where: { reporterId: me, reportedId: otherId, createdAt: { gte: new Date(Date.now() - REPORT_DEDUPE_MS) } },
+        select: { id: true },
+    });
+    if (recent) await prisma.report.update({ where: { id: recent.id }, data });
+    else await prisma.report.create({ data: { ...data, reporterId: me, reportedId: otherId } });
+    log.warn('player reported', { reporter: me, reported: otherId, reason, room: gameRoomId, repeat: !!recent });
+    res.status(200).json({ reported: true });
 });
 
 // ─── Notifications ───────────────────────────────────────────────────────────

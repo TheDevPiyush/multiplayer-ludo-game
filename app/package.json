@@ -10,9 +10,6 @@
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
-    "@livekit/react-native": "^3.1.0",
-    "@livekit/react-native-expo-plugin": "^1.1.0",
-    "@livekit/react-native-webrtc": "^150.1.0",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/netinfo": "^12.0.1",
     "@react-navigation/bottom-tabs": "^7.15.13",
@@ -35,7 +32,6 @@
     "expo-system-ui": "~6.0.9",
     "expo-updates": "~29.0.20",
     "expo-web-browser": "~15.0.10",
-    "livekit-client": "^2.23.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.5",

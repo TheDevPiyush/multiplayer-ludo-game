@@ -17,6 +17,7 @@ import { TtlCache } from '../lib/ttl-cache';
 import {
     toRoomDto,
     userIdOf,
+    type LobbyAuto,
     type LivePlayer,
     type LiveRoom,
     type MoveEntry,
@@ -62,7 +63,25 @@ export interface GameServiceOptions {
     /** With nobody connected this long, the game is ended as abandoned (no stats). */
     abandonMs: number;
     balanceStrength: number;
+    /** Public rooms: every free seat has a bot this long after the room opens (a random time in the range). */
+    botFillMs: [number, number];
+    /** Time between one bot joining and the next. */
+    botGapMs: [number, number];
+    /** How long a bot takes to roll or move. */
+    botThinkMs: [number, number];
+    /** A full public room waits this long for the host to start before counting down. */
+    autoStartGraceMs: number;
+    countdownMs: number;
+    /** After the host stops a countdown, the next one starts this much later. */
+    countdownPauseMs: number;
     rng: Rng;
+}
+
+/** A server-played user from the bot pool. */
+export interface BotProfile {
+    userId: string;
+    username: string;
+    avatarUrl: string | null;
 }
 
 /** Crypto-backed uniform float in [0, 1) with 53 bits of precision. */
@@ -80,8 +99,19 @@ export const DEFAULT_OPTIONS: GameServiceOptions = {
     unwatchedPauseMs: Number(process.env.UNWATCHED_PAUSE_MS ?? 60_000),
     abandonMs: Number(process.env.ABANDON_MS ?? 10 * 60_000),
     balanceStrength: Number(process.env.DICE_BALANCE_STRENGTH ?? 0.6),
+    botFillMs: [15_000, 20_000],
+    botGapMs: [1_500, 3_500],
+    botThinkMs: [700, 1_700],
+    autoStartGraceMs: 5_000,
+    countdownMs: 3_000,
+    countdownPauseMs: 10_000,
     rng: cryptoRng,
 };
+
+/** Join Public only matches (and makes) rooms of this size. */
+export const QUICK_MATCH_SEATS = 4;
+/** A new room's host may not have connected yet; it can still be matched into meanwhile. */
+const NEW_ROOM_GRACE_MS = 15_000;
 
 const AFK_AFTER_TIMEOUTS = 3;
 const SNAPSHOT_DEBOUNCE_MS = 1_000;
@@ -100,6 +130,9 @@ export class GameService {
     /** Lobby seat / color writes per room, run one at a time in the order they happened in memory. */
     private lobbyWrites = new Map<string, Promise<unknown>>();
     private timers = new Map<string, ReturnType<typeof setTimeout>>();
+    /** Public lobbies: the next bot joining, countdown starting, or game starting. */
+    private lobbyTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    private bots: BotProfile[] = [];
     private snapshotTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private dirty = new Set<string>();
     /** Finished rooms whose final write is in flight. */
@@ -140,6 +173,8 @@ export class GameService {
         if (this.flushTimer) clearInterval(this.flushTimer);
         for (const t of this.timers.values()) clearTimeout(t);
         this.timers.clear();
+        for (const t of this.lobbyTimers.values()) clearTimeout(t);
+        this.lobbyTimers.clear();
         await this.flush(true);
     }
 
@@ -181,8 +216,10 @@ export class GameService {
                 const existing = this.rooms.get(room.id);
                 if (existing) return existing;
                 room.turnEndsAt = null;
-                // Presence is live-only; players reappear as their sockets rejoin.
-                for (const p of room.players) if (p.status !== 'LEFT') p.status = 'DISCONNECTED';
+                // Presence is live-only; players reappear as their sockets rejoin. Bots are always there.
+                for (const p of room.players) if (p.status !== 'LEFT') p.status = p.isBot ? 'CONNECTED' : 'DISCONNECTED';
+                // Lobby timings don't survive a restart: give the room a fresh fill window.
+                room.lobby = room.status === 'WAITING' && !room.isPrivate ? this.newLobby() : undefined;
                 this.cache(room);
                 if (room.status === 'PLAYING') this.scheduleTurn(room);
                 return room;
@@ -276,6 +313,7 @@ export class GameService {
             turnEndsAt: null,
             timeouts: {},
             moveLog: [],
+            ...(input.isPrivate ? {} : { lobby: this.newLobby() }),
         };
         await this.db.createRoom(room);
         this.cache(room);
@@ -297,11 +335,21 @@ export class GameService {
             return { room, player: room.players.find(p => p.userId === userId)! };
         }
         if (room.status !== 'WAITING') throw new ServiceError(400, closedMessage(room.status));
-        if (room.players.length >= room.maxPlayers) throw new ServiceError(400, 'Room is full.');
+
+        // A full public room: a real player takes the newest bot's seat, until the countdown starts.
+        let replaced: LivePlayer | undefined;
+        if (room.players.length >= room.maxPlayers) {
+            if (room.lobby?.startsAt) throw new ServiceError(400, 'This game is about to start.');
+            replaced = room.lobby
+                ? room.players.filter(p => p.isBot).sort((a, b) => b.joinedAt.localeCompare(a.joinedAt))[0]
+                : undefined;
+            if (!replaced) throw new ServiceError(400, 'Room is full.');
+            room.players = room.players.filter(p => p.id !== replaced!.id);
+        }
 
         const takenSeats = new Set(room.players.map(p => p.seatNumber));
-        const seatNumber = [0, 1, 2, 3].find(s => !takenSeats.has(s))!;
-        const color = nextColor(room.maxPlayers, room.players);
+        const seatNumber = replaced?.seatNumber ?? [0, 1, 2, 3].find(s => !takenSeats.has(s))!;
+        const color = replaced?.color ?? nextColor(room.maxPlayers, room.players);
         if (!color) throw new ServiceError(400, 'Room is full.');
         const player: LivePlayer = {
             id: randomUUID(),
@@ -316,14 +364,67 @@ export class GameService {
         room.players.push(player);
         room.players.sort((a, b) => a.seatNumber - b.seatNumber);
 
+        let botRemoved = false;
         try {
-            await this.lobbyWrite(room, () => this.db.addPlayer(room, player));
+            await this.lobbyWrite(room, async () => {
+                if (replaced) {
+                    await this.db.removePlayer(room, replaced);
+                    botRemoved = true;
+                }
+                await this.db.addPlayer(room, player);
+            });
         } catch (e) {
             room.players = room.players.filter(p => p.id !== player.id);
+            // Still saved, so it keeps its seat; otherwise the seat is free and the lobby refills it.
+            if (replaced && !botRemoved) {
+                room.players.push(replaced);
+                room.players.sort((a, b) => a.seatNumber - b.seatNumber);
+            }
+            this.scheduleLobby(room);
             throw e;
         }
-        this.commit(room, [{ type: 'PLAYER_JOINED', userId }], { persist: false });
+        const events: SyncEvent[] = replaced ? [{ type: 'PLAYER_LEFT', userId: replaced.userId }] : [];
+        this.commit(room, [...events, { type: 'PLAYER_JOINED', userId }], { persist: false });
+        this.rosterChanged(room);
         return { room, player };
+    }
+
+    /**
+     * Join Public: the open public room with the most real players (the oldest
+     * on a tie), or a new room when none fits. Never seats the player with
+     * anyone in `avoid` (blocks, either way).
+     */
+    async quickMatch(userId: string, avoid: Set<string>): Promise<{ room: LiveRoom; player: LivePlayer }> {
+        const rooms = [...this.rooms.values()];
+        // Pressed again, or back from Home: stay in the public room you're already waiting in.
+        const waiting = rooms.find(r => r.status === 'WAITING' && r.lobby && this.isMember(r, userId));
+        if (waiting) return { room: waiting, player: waiting.players.find(p => p.userId === userId)! };
+
+        const now = Date.now();
+        const humans = (r: LiveRoom) => r.players.filter(p => !p.isBot).length;
+        const candidates = rooms
+            .filter(r =>
+                r.status === 'WAITING'
+                && r.lobby
+                && !r.lobby.startsAt
+                && r.maxPlayers === QUICK_MATCH_SEATS
+                && (r.players.length < r.maxPlayers || r.players.some(p => p.isBot))
+                && !r.players.some(p => avoid.has(p.userId))
+                // An offline host's room isn't going anywhere.
+                && (r.players.find(p => p.userId === r.createdById)?.status === 'CONNECTED'
+                    || now - Date.parse(r.createdAt) < NEW_ROOM_GRACE_MS))
+            .sort((a, b) => humans(b) - humans(a) || a.createdAt.localeCompare(b.createdAt));
+
+        for (const r of candidates) {
+            try {
+                return await this.joinRoom(userId, r.gameCode);
+            } catch (e) {
+                // Filled or started since the list was made: try the next one.
+                if (!(e instanceof ServiceError) || e.status >= 500) throw e;
+            }
+        }
+        const room = await this.createRoom(userId, { maxPlayers: QUICK_MATCH_SEATS, isPrivate: false });
+        return { room, player: room.players[0]! };
     }
 
     async leaveRoom(userId: string, gameCode: string): Promise<string> {
@@ -335,6 +436,8 @@ export class GameService {
             if (player.status !== 'LEFT') {
                 player.status = 'LEFT';
                 this.apply(room, { type: 'LEAVE', color: player.color }, 'player');
+                // Nobody real left to play with: end it without stats rather than let bots finish it.
+                if (room.status === 'PLAYING' && !room.players.some(p => !p.isBot && p.status !== 'LEFT')) void this.abandon(room);
             }
             return 'Left game.';
         }
@@ -344,7 +447,20 @@ export class GameService {
         room.players = room.players.filter(p => p.id !== player.id);
         await this.lobbyWrite(room, () => this.db.removePlayer(room, player));
 
+        // A public room carries on under the player who has waited longest; bots alone don't keep it open.
+        const heir = room.createdById === userId && room.lobby
+            ? room.players.filter(p => !p.isBot).sort((a, b) => a.joinedAt.localeCompare(b.joinedAt))[0]
+            : undefined;
+        if (heir) {
+            room.createdById = heir.userId;
+            this.commit(room, [{ type: 'PLAYER_LEFT', userId }], { persist: false });
+            this.rosterChanged(room);
+            await this.lobbyWrite(room, () => this.db.saveRoom(room));
+            return 'Left room.';
+        }
+
         if (room.createdById === userId) {
+            this.clearLobbyTimer(room.id);
             room.status = 'CANCELLED';
             room.endedAt = new Date().toISOString();
             await this.db.saveRoom(room);
@@ -353,6 +469,7 @@ export class GameService {
             return 'Host left. Room cancelled.';
         }
         this.commit(room, [{ type: 'PLAYER_LEFT', userId }], { persist: false });
+        this.rosterChanged(room);
         return 'Left room.';
     }
 
@@ -414,6 +531,7 @@ export class GameService {
         const room = await this.requireRoom({ gameCode: normalizeCode(gameCode) });
         if (room.status !== 'WAITING') throw new ServiceError(400, `Room is already ${room.status}.`);
         if (room.createdById !== userId) throw new ServiceError(403, 'Only host can cancel the room.');
+        this.clearLobbyTimer(room.id);
         room.status = 'CANCELLED';
         room.endedAt = new Date().toISOString();
         await this.db.saveRoom(room);
@@ -440,6 +558,8 @@ export class GameService {
             colors: room.players.map(p => p.color),
             balance: { enabled: this.opts.balanceStrength > 0, strength: this.opts.balanceStrength },
         });
+        this.clearLobbyTimer(room.id);
+        room.lobby = undefined;
         room.status = 'PLAYING';
         room.startedAt = new Date().toISOString();
         this.lastWatched.set(room.id, Date.now());
@@ -448,6 +568,155 @@ export class GameService {
         await this.db.saveRoom(room);
         this.commit(room, [{ type: 'STARTED' }, { type: 'TURN', color: room.game.turn, reason: 'next' }], { persist: false });
         return room;
+    }
+
+    // ─── Public lobbies: bots and auto-start ─────────────────────────────────
+
+    /** The bot pool (loaded from the database at startup). Without it rooms just wait for people. */
+    setBots(bots: BotProfile[]) {
+        this.bots = bots;
+    }
+
+    private between([min, max]: [number, number]): number {
+        return min + this.opts.rng() * (max - min);
+    }
+
+    private newLobby(): LobbyAuto {
+        return { fillBy: Date.now() + this.between(this.opts.botFillMs), countdownAt: null, startsAt: null };
+    }
+
+    private clearLobbyTimer(roomId: string) {
+        const t = this.lobbyTimers.get(roomId);
+        if (t) clearTimeout(t);
+        this.lobbyTimers.delete(roomId);
+    }
+
+    private lobbyTimer(room: LiveRoom, at: number, run: () => void) {
+        this.lobbyTimers.set(room.id, setTimeout(() => {
+            this.lobbyTimers.delete(room.id);
+            if (this.rooms.get(room.id) === room && room.status === 'WAITING') run();
+        }, Math.max(0, at - Date.now())));
+    }
+
+    /** Someone joined or left: a full room waits the full grace again before counting down. */
+    private rosterChanged(room: LiveRoom) {
+        if (!room.lobby) return;
+        if (!room.lobby.startsAt) room.lobby.countdownAt = null;
+        this.scheduleLobby(room);
+    }
+
+    /**
+     * Drives a public lobby. Bots take the free seats one by one so the room is
+     * full by `fillBy`; a full room counts down once the host has had
+     * `autoStartGraceMs` to start, and the countdown starts the game. All of it
+     * waits while the host is offline. Re-run after every lobby change.
+     */
+    private scheduleLobby(room: LiveRoom) {
+        this.clearLobbyTimer(room.id);
+        const auto = room.lobby;
+        if (!auto || room.status !== 'WAITING') return;
+        const hostHere = room.players.find(p => p.userId === room.createdById)?.status === 'CONNECTED';
+        const full = room.players.length >= room.maxPlayers;
+
+        if (!full || !hostHere) {
+            const stopped = auto.startsAt !== null;
+            auto.countdownAt = null;
+            auto.startsAt = null;
+            if (stopped) this.commit(room, [], { persist: false });
+            if (full || !hostHere || this.bots.length === 0) return;
+            // Bots arrive in the last seconds before fillBy, so real players get the seats first.
+            const free = room.maxPlayers - room.players.length;
+            const gap = this.between(this.opts.botGapMs);
+            const at = Math.max(Date.now() + gap / 2, auto.fillBy - (free - 1) * gap);
+            this.lobbyTimer(room, at, () => void this.addBot(room));
+            return;
+        }
+
+        if (auto.startsAt) {
+            this.lobbyTimer(room, auto.startsAt, () => void this.autoStart(room));
+            return;
+        }
+        auto.countdownAt ??= Date.now() + this.opts.autoStartGraceMs;
+        this.lobbyTimer(room, auto.countdownAt, () => {
+            auto.countdownAt = null;
+            auto.startsAt = Date.now() + this.opts.countdownMs;
+            this.commit(room, [], { persist: false });
+            this.scheduleLobby(room);
+        });
+    }
+
+    /** A random bot not already playing (when the pool runs short, one that isn't in this room). */
+    private pickBot(room: LiveRoom): BotProfile | null {
+        const busy = new Set<string>();
+        for (const r of this.rooms.values()) {
+            if (r.status === 'WAITING' || r.status === 'PLAYING') for (const p of r.players) if (p.isBot) busy.add(p.userId);
+        }
+        let pool = this.bots.filter(b => !busy.has(b.userId));
+        if (pool.length === 0) pool = this.bots.filter(b => !room.players.some(p => p.userId === b.userId));
+        return pool.length ? pool[Math.floor(this.opts.rng() * pool.length)]! : null;
+    }
+
+    private async addBot(room: LiveRoom) {
+        if (!room.lobby || room.players.length >= room.maxPlayers) return;
+        const bot = this.pickBot(room);
+        const color = nextColor(room.maxPlayers, room.players);
+        if (!bot || !color) return;
+        const takenSeats = new Set(room.players.map(p => p.seatNumber));
+        const player: LivePlayer = {
+            id: randomUUID(),
+            userId: bot.userId,
+            seatNumber: [0, 1, 2, 3].find(s => !takenSeats.has(s))!,
+            color,
+            status: 'CONNECTED',
+            isReady: true,
+            joinedAt: new Date().toISOString(),
+            username: bot.username,
+            avatarUrl: bot.avatarUrl,
+            isBot: true,
+        };
+        room.players.push(player);
+        room.players.sort((a, b) => a.seatNumber - b.seatNumber);
+        try {
+            await this.lobbyWrite(room, () => this.db.addPlayer(room, player));
+        } catch (e) {
+            log.error('adding bot failed', { room: room.gameCode, error: (e as Error)?.message });
+            room.players = room.players.filter(p => p.id !== player.id);
+            this.scheduleLobby(room);
+            return;
+        }
+        this.commit(room, [{ type: 'PLAYER_JOINED', userId: bot.userId }], { persist: false });
+        // Lobbies show who's online from presence; a bot is online from the moment it sits down.
+        this.out.toRoom(room.id, 'presence:connected', { userId: bot.userId });
+        this.rosterChanged(room);
+    }
+
+    private async autoStart(room: LiveRoom) {
+        try {
+            await this.startGame(room.createdById, room.gameCode);
+            log.info('game auto-started', { room: room.gameCode });
+        } catch (e) {
+            // The host started it a moment earlier, or someone left: the lobby carries on.
+            log.warn('auto-start skipped', { room: room.gameCode, error: (e as Error)?.message });
+            this.scheduleLobby(room);
+        }
+    }
+
+    /** Host only: stop the countdown; the next one starts `countdownPauseMs` later. */
+    async cancelCountdown(userId: string, gameCode: string): Promise<LiveRoom> {
+        const room = await this.requireRoom({ gameCode: normalizeCode(gameCode) });
+        if (room.createdById !== userId) throw new ServiceError(403, 'Only the host can stop the countdown.');
+        const auto = room.lobby;
+        if (room.status !== 'WAITING' || !auto?.startsAt) return room;
+        auto.startsAt = null;
+        auto.countdownAt = Date.now() + this.opts.countdownPauseMs;
+        this.commit(room, [], { persist: false });
+        this.scheduleLobby(room);
+        return room;
+    }
+
+    /** Bot user ids in the room, for presence lists (bots have no sockets). */
+    botIds(room: LiveRoom): string[] {
+        return room.players.filter(p => p.isBot).map(p => p.userId);
     }
 
     // ─── Gameplay ────────────────────────────────────────────────────────────
@@ -474,7 +743,7 @@ export class GameService {
     }
 
     /** Applies an engine action and broadcasts. Synchronous by design. */
-    private apply(room: LiveRoom, action: Action, by: 'player' | 'auto' | 'timeout'): GameEvent[] {
+    private apply(room: LiveRoom, action: Action, by: 'player' | 'auto' | 'timeout' | 'bot'): GameEvent[] {
         const game = room.game!;
         const r = reduce(game, action, this.opts.rng);
         if (!r.ok) throw new ServiceError(400, r.message);
@@ -594,13 +863,19 @@ export class GameService {
 
         const userId = userIdOf(room, g.turn);
         const player = room.players.find(p => p.userId === userId);
+        if (player?.isBot) {
+            // The usual turn timer shows, but the bot plays after a human-like pause.
+            room.turnEndsAt = Date.now() + this.opts.turnMs;
+            this.timers.set(room.id, setTimeout(() => this.runTimer(room.id, null, 'bot'), this.between(this.opts.botThinkMs)));
+            return;
+        }
         const afk = !player || player.status !== 'CONNECTED' || (room.timeouts[player.userId] ?? 0) >= AFK_AFTER_TIMEOUTS;
         const ms = afk ? this.opts.afkTurnMs : this.opts.turnMs;
         room.turnEndsAt = Date.now() + ms;
         this.timers.set(room.id, setTimeout(() => this.runTimer(room.id, null, 'timeout'), ms));
     }
 
-    private runTimer(roomId: string, auto: Action | null, by: 'auto' | 'timeout') {
+    private runTimer(roomId: string, auto: Action | null, by: 'auto' | 'timeout' | 'bot') {
         this.timers.delete(roomId);
         const room = this.rooms.get(roomId);
         const g = room?.game;
@@ -617,7 +892,8 @@ export class GameService {
         if (!action) {
             if (g.phase === 'ROLL') action = { type: 'ROLL', color: g.turn };
             else {
-                const token = chooseMove(g, 'hard', this.opts.rng);
+                // Bots play well, but not perfectly; autopilot for an absent player plays its best.
+                const token = chooseMove(g, by === 'bot' ? 'medium' : 'hard', this.opts.rng);
                 action = token === null ? { type: 'PASS', color: g.turn, reason: 'timeout' } : { type: 'MOVE', color: g.turn, token };
             }
         }
@@ -634,6 +910,8 @@ export class GameService {
         if (!p || p.status === 'LEFT' || p.status === status) return;
         p.status = status;
         this.touch(room.id);
+        // The host coming and going pauses and resumes the lobby's bots and countdown.
+        if (room.status === 'WAITING' && userId === room.createdById) this.scheduleLobby(room);
         if (status === 'CONNECTED') {
             room.timeouts[userId] = 0;
             this.lastWatched.set(room.id, Date.now());
@@ -707,19 +985,13 @@ export class GameService {
             const ended = room.status === 'FINISHED' || room.status === 'CANCELLED';
             if (idleFor < (ended ? 5 * 60_000 : this.opts.idleEvictMs)) continue;
             this.clearTimer(id);
+            this.clearLobbyTimer(id);
             this.rooms.delete(id);
             this.codeToId.delete(room.gameCode);
             this.lastActive.delete(id);
             this.lastWatched.delete(id);
             this.paused.delete(id);
         }
-    }
-
-    /** Public rooms still waiting for players, with a free seat. Live rooms only (memory). */
-    openPublicRooms(): LiveRoom[] {
-        return [...this.rooms.values()].filter(
-            r => r.status === 'WAITING' && !r.isPrivate && r.players.length < r.maxPlayers,
-        );
     }
 
     /** For tests / metrics. */

@@ -1,0 +1,60 @@
+# Production stack on the droplet, in /opt/simple-ludo (see deploy/README.md).
+# GitHub Actions copies this folder there, writes api.env from the API_ENV secret
+# and .env with the image tags, then runs release.sh.
+name: simple-ludo
+
+services:
+  api:
+    image: ${IMAGE_PREFIX}/simple-ludo-api:${IMAGE_TAG:-latest}
+    env_file: ./api.env
+    environment:
+      PORT: 8080
+      # Caddy is the one proxy in front, so req.ip is the player's address.
+      TRUST_PROXY_HOPS: 1
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+    restart: unless-stopped
+    # Bun as PID 1 gets SIGTERM, flushes live games to Postgres/Redis, then exits.
+    init: true
+    stop_grace_period: 30s
+    logging: &logging
+      driver: json-file
+      options: { max-size: 10m, max-file: '5' }
+
+  web:
+    image: ${IMAGE_PREFIX}/simple-ludo-web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    logging: *logging
+
+  # Live game snapshots, so games survive API restarts and deploys.
+  redis:
+    image: redis:8.2.3-alpine
+    command: ['redis-server', '--save', '60', '1', '--maxmemory', '256mb', '--maxmemory-policy', 'allkeys-lru']
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    logging: *logging
+
+  caddy:
+    image: caddy:2.11.6-alpine
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      # The folder, not the file: a replaced file wouldn't show up in a single-file mount.
+      - ./caddy:/etc/caddy:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+      - web
+    restart: unless-stopped
+    logging: *logging
+
+volumes:
+  redis-data:
+  # TLS certificates; keep this volume so Caddy doesn't re-issue on every restart.
+  caddy-data:
+  caddy-config:

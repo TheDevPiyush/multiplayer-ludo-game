@@ -1,7 +1,9 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+    Pressable,
     StyleSheet,
     TouchableOpacity,
     View as RNView,
@@ -9,21 +11,24 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { leaveRoom } from '@/apis/game-api';
+import { ChatSheet } from '@/components/chat/ChatSheet';
+import { ReactionBubble } from '@/components/chat/ReactionBubble';
+import { ReactionPicker } from '@/components/chat/ReactionPicker';
 import AppDialog from '@/components/Dialog';
 import { RollingDice } from '@/components/ludo/Dice';
-import { BOARD_SIZE, COLOR_HEX, layoutTokens } from '@/components/ludo/geometry';
+import { BOARD_SIZE, COLOR_HEX, layoutTokens, stripRows, turnsFor } from '@/components/ludo/geometry';
 import { LudoBoard } from '@/components/ludo/LudoBoard';
 import { PlayerStrip, type PlayerStripProps } from '@/components/ludo/PlayerStrip';
+import { PlayerSheet, type SheetPlayer } from '@/components/PlayerSheet';
 import { Token } from '@/components/ludo/Token';
 import type { TurnDeadline } from '@/components/ludo/TurnTimer';
 import { Text } from '@/components/Themed';
-import { AudioOutputButton, MicButton } from '@/components/VoiceButtons';
 import Colors from '@/constants/Colors';
 import { useGameActions } from '@/hooks/useGameActions';
 import { useGameRoom } from '@/hooks/useGameRoom';
+import { useRoomChat } from '@/hooks/useRoomChat';
 import { markHistoryStale } from '@/util/history-cache';
 import { useSocket } from '@/components/SocketProvider';
-import { useVoiceRoom } from '@/components/VoiceRoomProvider';
 import { setActiveRoom } from '@/util/active-room';
 import { playEffect } from '@/util/audio';
 import { feedbackForEvents, haptic } from '@/util/feedback';
@@ -56,7 +61,6 @@ export default function GameBoardScreen() {
     const roomId = typeof rawRoomId === 'string' ? rawRoomId : String(rawRoomId?.[0] ?? '');
 
     const { connectionPhase, isRealtimeReady } = useSocket();
-    const voice = useVoiceRoom();
     const { rollDice, moveToken } = useGameActions(gameCode);
 
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -68,6 +72,9 @@ export default function GameBoardScreen() {
     const [disconnectingIds, setDisconnectingIds] = useState<Set<string>>(new Set());
     const [capturedKey, setCapturedKey] = useState<string | null>(null);
     const [winnerInfo, setWinnerInfo] = useState<{ winnerId: string; winnerColor: string } | null>(null);
+    const [pickerOpen, setPickerOpen] = useState(false);
+    const [chatOpen, setChatOpen] = useState(false);
+    const [sheetPlayer, setSheetPlayer] = useState<SheetPlayer | null>(null);
     const [dialog, setDialog] = useState({
         visible: false, title: '', message: '' as string | undefined,
         actions: undefined as undefined | { label: string; onPress: () => void }[],
@@ -84,7 +91,7 @@ export default function GameBoardScreen() {
     currentUserIdRef.current = currentUserId;
     rollingRef.current = rolling;
 
-    const { room } = useGameRoom({
+    const { room, joinCount } = useGameRoom({
         roomId,
         gameCode,
         onEvents: (events) => feedbackForEvents(events, color => color === myColorRef.current),
@@ -132,6 +139,15 @@ export default function GameBoardScreen() {
     });
 
     const players = room?.players ?? [];
+    const chat = useRoomChat(roomId, currentUserId, joinCount);
+    const chatPlayers = useMemo(
+        () => players.map(p => ({ userId: p.userId, username: p.user.username, color: p.color })),
+        [players],
+    );
+    const openPlayer = (userId: string) => {
+        const p = players.find(x => x.userId === userId);
+        if (p && userId !== currentUserId) setSheetPlayer({ id: p.userId, username: p.user.username, avatarUrl: p.user.avatarUrl });
+    };
     const currentColor = room?.currentTurnColor ?? 'RED';
     const diceValue = room?.currentDice ?? null;
 
@@ -173,20 +189,6 @@ export default function GameBoardScreen() {
             setCurrentUserId(data.session?.user.id ?? null);
         });
     }, []);
-
-    // Voice carries over from the lobby; it is opt-in (mic button), so only
-    // reconnect it here for a player who was already in it.
-    const voiceSyncedRef = useRef(false);
-    useEffect(() => {
-        voiceSyncedRef.current = false;
-    }, [roomId]);
-
-    useEffect(() => {
-        if (!room?.voiceEnabled || !roomId || !isRealtimeReady || room?.status !== 'PLAYING') return;
-        if (voiceSyncedRef.current) return;
-        voiceSyncedRef.current = true;
-        if (voice.inRoom && voice.roomId === roomId) voice.resync();
-    }, [room?.voiceEnabled, roomId, room?.status, isRealtimeReady, voice.inRoom, voice.roomId, voice.resync]);
 
     // Remember every rolled value so it stays visible after the turn advances.
     useEffect(() => {
@@ -274,27 +276,32 @@ export default function GameBoardScreen() {
         await s.moveToken(tokenIndex);
     }, []);
 
+    /** Turns the board so your own home is bottom-right on your phone. */
+    const myColor = players.find(p => p.userId === currentUserId)?.color;
+    const turns = turnsFor(myColor);
+
     // Token coords & stacking
     const tokenItems = useMemo(() => {
-        const layout = layoutTokens(players.map(p => ({ color: p.color, tokens: p.tokenPositions ?? [], owner: p.userId })));
+        const layout = layoutTokens(players.map(p => ({ color: p.color, tokens: p.tokenPositions ?? [], owner: p.userId })), turns);
         return layout.map(t => ({
             ...t,
             userId: t.owner,
             canMove: isMyTurn && t.owner === currentUserId && diceValue !== null && movable.includes(t.tokenIndex),
             captured: !!capturedKey && capturedKey.startsWith(`${t.owner}:${t.tokenIndex}:`) && t.pos === 0,
         }));
-    }, [players, isMyTurn, diceValue, currentUserId, capturedKey, movable]);
+    }, [players, isMyTurn, diceValue, currentUserId, capturedKey, movable, turns]);
 
     // ── Strip data ──
     const stripPlayers = useMemo(
         () =>
             players.map(p => {
                 const isMe = p.userId === currentUserId;
-                const inVoice = voice.peers.some(vp => vp.userId === p.userId) || (isMe && voice.inRoom);
-                const muted = isMe ? voice.isMuted : (voice.peers.find(vp => vp.userId === p.userId)?.muted ?? false);
+                const muted = chat.muted.has(p.userId);
+                const blocked = chat.blocked.has(p.userId);
                 const isOnline = p.status === 'CONNECTED' || isMe;
-                const strip: PlayerStripProps & { id: string } = {
+                const strip: PlayerStripProps & { id: string; userId: string } = {
                     id: p.id,
+                    userId: p.userId,
                     color: p.color,
                     name: isMe ? 'You' : `@${p.user.username}`,
                     initials: p.user.username.slice(0, 2).toUpperCase(),
@@ -304,17 +311,17 @@ export default function GameBoardScreen() {
                         ? disconnectingIds.has(p.userId) ? 'reconnecting…' : 'offline'
                         : p.rank ? `#${p.rank} finished` : p.color.toLowerCase(),
                     subtitleColor: !isOnline ? '#E8A520' : p.rank ? '#37BD6A' : undefined,
-                    statusIcon: inVoice ? (muted ? 'microphone-slash' : 'microphone') : undefined,
+                    statusIcon: blocked ? 'user-times' : muted ? 'ban' : undefined,
                     statusIconColor: muted ? palette.mutedText : undefined,
                     turnDeadline: p.color === currentColor ? turnDeadline : null,
                 };
                 return strip;
             }),
-        [players, currentColor, currentUserId, voice.peers, voice.inRoom, voice.isMuted, disconnectingIds, room?.status, turnDeadline],
+        [players, currentColor, currentUserId, chat.muted, chat.blocked, disconnectingIds, room?.status, turnDeadline],
     );
 
-    const topPlayers = stripPlayers.filter(p => p.color === 'RED' || p.color === 'BLUE');
-    const bottomPlayers = stripPlayers.filter(p => p.color === 'GREEN' || p.color === 'YELLOW');
+    // Each strip sits at its own home's corner (an empty cell keeps the other side in place).
+    const [topPlayers, bottomPlayers] = stripRows(stripPlayers, turns);
 
     const hideDialog = () => setDialog(p => ({ ...p, visible: false }));
     const showError = (title: string, message: string) =>
@@ -340,7 +347,6 @@ export default function GameBoardScreen() {
                     onPress: () => {
                         void (async () => {
                             await notifyServerLeave();
-                            voice.leave();
                             await setActiveRoom(null);
                             leftRef.current = true;
                             hideDialog();
@@ -367,7 +373,6 @@ export default function GameBoardScreen() {
     // Win screen handlers
     const closeWin = () => {
         void (async () => {
-            voice.leave();
             await setActiveRoom(null);
             leftRef.current = true;
             await notifyServerLeave();
@@ -395,29 +400,35 @@ export default function GameBoardScreen() {
                          'Connection lost'}
                     </Text>
                 </RNView>
-                {room?.voiceEnabled ? (
-                    <RNView style={styles.voiceRow}>
-                        <MicButton roomId={roomId} />
-                        <AudioOutputButton />
-                    </RNView>
-                ) : (
-                    <RNView style={{ width: 36 }} />
-                )}
+                <TouchableOpacity onPress={() => setChatOpen(true)} style={styles.iconBtnSmall} accessibilityLabel="Room chat">
+                    <MaterialCommunityIcons name="chat-processing-outline" size={18} color={palette.text} />
+                    {chat.unread > 0 && (
+                        <RNView style={styles.unread}>
+                            <Text weight="bold" style={styles.unreadText}>{chat.unread > 9 ? '9+' : chat.unread}</Text>
+                        </RNView>
+                    )}
+                </TouchableOpacity>
             </RNView>
 
             {/* TOP STRIP */}
             {/* Strips + board, centred in the space between the top and bottom bars */}
             <RNView style={styles.arena}>
             <RNView style={styles.stripRow}>
-                {topPlayers.map(p => <PlayerStrip key={p.id} {...p} />)}
+                {topPlayers.map((p, i) => p ? (
+                    <Pressable key={p.id} style={styles.stripCell} onPress={() => openPlayer(p.userId)} disabled={p.userId === currentUserId}>
+                        <PlayerStrip {...p} />
+                        <ReactionBubble bubble={chat.bubbles[p.userId]} placement="below" />
+                    </Pressable>
+                ) : <RNView key={`empty-${i}`} style={styles.stripCell} />)}
             </RNView>
 
             {/* BOARD */}
             <RNView style={styles.boardWrap}>
                 <RNView style={styles.boardShadow} />
-                <LudoBoard />
+                <LudoBoard turns={turns} />
                 {tokenItems.map(t => (
                     <Token
+                        turns={turns}
                         key={t.key}
                         color={t.color}
                         coord={t.coord}
@@ -432,7 +443,12 @@ export default function GameBoardScreen() {
 
             {/* BOTTOM STRIP */}
             <RNView style={styles.stripRow}>
-                {bottomPlayers.map(p => <PlayerStrip key={p.id} {...p} />)}
+                {bottomPlayers.map((p, i) => p ? (
+                    <Pressable key={p.id} style={styles.stripCell} onPress={() => openPlayer(p.userId)} disabled={p.userId === currentUserId}>
+                        <PlayerStrip {...p} />
+                        <ReactionBubble bubble={chat.bubbles[p.userId]} placement="above" />
+                    </Pressable>
+                ) : <RNView key={`empty-${i}`} style={styles.stripCell} />)}
             </RNView>
             </RNView>
 
@@ -470,7 +486,17 @@ export default function GameBoardScreen() {
                     </Text>
                 </RNView>
 
-                <RNView style={styles.bottomActions} />
+                <RNView style={styles.bottomActions}>
+                    <TouchableOpacity
+                        onPress={() => setPickerOpen(true)}
+                        disabled={!isRealtimeReady}
+                        style={[styles.emoteBtn, !isRealtimeReady && { opacity: 0.5 }]}
+                        activeOpacity={0.8}
+                        accessibilityLabel="Emotes and quick replies"
+                    >
+                        <MaterialCommunityIcons name="emoticon-happy-outline" size={26} color="#FFFFFF" />
+                    </TouchableOpacity>
+                </RNView>
                 </RNView>
             </RNView>
 
@@ -506,6 +532,31 @@ export default function GameBoardScreen() {
                     </RNView>
                 </RNView>
             )}
+
+            <ReactionPicker
+                visible={pickerOpen}
+                onClose={() => setPickerOpen(false)}
+                onPick={chat.react}
+                anchor={{ bottom: insets.bottom + 92, right: 14 }}
+            />
+            <ChatSheet
+                visible={chatOpen}
+                onClose={() => setChatOpen(false)}
+                chat={chat}
+                players={chatPlayers}
+                currentUserId={currentUserId}
+                onPlayerPress={userId => {
+                    setChatOpen(false);
+                    openPlayer(userId);
+                }}
+            />
+            <PlayerSheet
+                player={sheetPlayer}
+                onClose={() => setSheetPlayer(null)}
+                roomId={roomId}
+                muted={!!sheetPlayer && chat.mutedHere.has(sheetPlayer.id)}
+                onToggleMute={sheetPlayer ? () => chat.toggleMute(sheetPlayer.id) : undefined}
+            />
 
             <AppDialog
                 visible={dialog.visible}
@@ -554,6 +605,8 @@ const styles = StyleSheet.create({
         gap: 8,
         paddingHorizontal: 12,
         paddingVertical: 6,
+        // Reaction bubbles overlap the board.
+        zIndex: 10,
     },
 
     boardWrap: {
@@ -592,10 +645,34 @@ const styles = StyleSheet.create({
     },
     turnDot: { width: 8, height: 8, borderRadius: 4 },
     turnText: { fontSize: 12, color: palette.text },
-    voiceRow: { flexDirection: 'row', gap: 8 },
     diceWrap: { alignItems: 'center', gap: 6 },
     diceHint: { fontSize: 11, color: palette.mutedText },
-    bottomActions: { width: 80, height: 1 },
+    bottomActions: { width: 80, alignItems: 'flex-end' },
+    emoteBtn: {
+        width: 52,
+        height: 52,
+        borderRadius: 26,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(255,255,255,0.16)',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.28)',
+    },
+    /** Holds a strip (it flexes along the row) and its reaction bubble. */
+    stripCell: { flex: 1, flexDirection: 'row' },
+    unread: {
+        position: 'absolute',
+        top: -5,
+        right: -5,
+        minWidth: 18,
+        height: 18,
+        paddingHorizontal: 4,
+        borderRadius: 9,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#FF4D5E',
+    },
+    unreadText: { fontSize: 10, color: '#FFFFFF' },
 
     banner: {
         position: 'absolute',
