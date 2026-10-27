@@ -1,13 +1,16 @@
 # Deploying Simple Ludo
 
-One DigitalOcean droplet runs everything with Docker Compose:
+Simple Ludo runs with Docker Compose on the same droplet as the ERP stack:
 
 | Service | What | Public at |
 |---|---|---|
-| `caddy` | HTTPS (automatic Let's Encrypt certificates) and routing | ports 80 / 443 |
 | `api` | Game server (`server/`, Bun + Express + Socket.IO) | `https://api.simple-ludo.thedevpiyush.com` |
 | `web` | Website and invite pages (`web/`, Next.js) | `https://simple-ludo.thedevpiyush.com` |
 | `redis` | Live game snapshots, so games survive deploys | internal only |
+
+There is no proxy in this stack. The ERP's Caddy (`erp-prod-proxy-1`) already owns
+ports 80/443, so it serves our domains too (HTTPS certificates included): see
+[Shared Caddy](#shared-caddy).
 
 `https://simple-ludo.thedevpiyush.com/.well-known/*` is answered by the API, so app-link
 verification is configured in one place (`ANDROID_CERT_SHA256`, `IOS_APP_ID`).
@@ -22,12 +25,14 @@ A push to `main` that touches `server/`, `packages/ludo-engine/`, `web/` or `dep
    Registry (`ghcr.io/thedevpiyush/simple-ludo-api` / `-web`), tagged with the commit SHA.
 3. **deploy**, over SSH as `root`:
    - copies this folder to `/opt/simple-ludo`;
-   - runs `bootstrap.sh`: installs Docker, turns on the firewall (22, 80, 443) and adds
-     2 GB of swap, skipping whatever is already done;
+   - runs `bootstrap.sh`: installs Docker and adds 2 GB of swap if the server has
+     none, skipping whatever is already done (it leaves the firewall alone);
    - writes `/opt/simple-ludo/api.env` from the `API_ENV` secret (sent over stdin, file
      mode 600);
    - runs `release.sh`: pulls the images, runs `prisma migrate deploy`, starts the stack,
-     reloads Caddy and waits for the API's healthcheck.
+     waits for the API's healthcheck, then copies `caddy/simple-ludo.caddy` to
+     `/opt/caddy-sites/` and reloads the shared Caddy. If Caddy rejects the file, the
+     previous one is put back and the deploy fails; the running config never changes.
 
 The droplet keeps no GitHub credentials: the registry login uses the workflow's own
 short-lived token and logs out straight after the pull.
@@ -104,3 +109,21 @@ domains), so this needs a new native build, not just an EAS Update.
   flushed on shutdown and come back from Redis; the app reconnects by itself.
 - **Logs**, if you do log in: `ssh root@<droplet-ip>`, then
   `cd /opt/simple-ludo && docker compose ps` / `docker compose logs -f api`.
+
+## Shared Caddy
+
+One Caddy per server owns ports 80/443; here it is the ERP stack's `proxy` service
+(`erp_mono_repo`). It is set up to serve other apps too:
+
+- its Caddyfile ends with `import /etc/caddy/sites/*.caddy`;
+- it mounts `/opt/caddy-sites` (host) at `/etc/caddy/sites`, read-only;
+- it joins the external Docker network `edge`, where this stack's containers have the
+  aliases `simple-ludo-api` and `simple-ludo-web`.
+
+`release.sh` finds that Caddy by its `/etc/caddy/sites` mount, so nothing here names the
+ERP's containers. If the deploy says "No running Caddy mounts /opt/caddy-sites", the
+ERP proxy hasn't been redeployed with that setup yet: deploy the ERP, then re-run this
+deploy.
+
+Another app on this server joins the same way: put its containers on `edge` with unique
+aliases and drop a `<app>.caddy` file into `/opt/caddy-sites`.

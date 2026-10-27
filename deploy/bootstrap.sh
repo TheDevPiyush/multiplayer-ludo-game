@@ -17,15 +17,8 @@ if ! command -v docker >/dev/null; then
 fi
 systemctl enable --now docker >/dev/null
 
-# Firewall: SSH and web only (443/udp is HTTP/3). SSH is allowed before enabling.
-if command -v ufw >/dev/null && ! ufw status | grep -q "Status: active"; then
-    echo "enabling firewall"
-    ufw allow OpenSSH >/dev/null
-    ufw allow 80/tcp >/dev/null
-    ufw allow 443/tcp >/dev/null
-    ufw allow 443/udp >/dev/null
-    ufw --force enable >/dev/null
-fi
+# No firewall changes here: the server may host other apps with their own ports
+# (the ERP's device gateway on 3002). Use a DigitalOcean cloud firewall instead.
 
 # Small droplets have little RAM; swap keeps memory spikes from OOM-killing the API.
 if ! swapon --show | grep -q .; then
