@@ -5,6 +5,7 @@ import { prisma } from '../lib/prisma.ts';
 import { games } from '../game/services.ts';
 import { getUserRow, userRows, type UserRow } from '../game/user-cache.ts';
 import { log } from '../lib/logger.ts';
+import { isPushToken, removePushTokens, savePushToken } from '../notifications/push.ts';
 
 const USERNAME_RE = /^[a-z0-9_]{3,20}$/;
 /** After the first (free) rename, one change per this long. */
@@ -197,5 +198,31 @@ export async function updateUsername(req: Request, res: Response) {
         if ((error as { code?: string })?.code === 'P2002') return res.status(409).json({ message: 'That username is taken.' });
         log.error('updateUsername failed', { user: req.user?.id, error: (error as Error)?.message });
         return res.status(500).json({ message: 'Failed to update username' });
+    }
+}
+
+/** The app sends its push token on every Home visit: this device becomes the user's newest. */
+export async function savePushTokenHandler(req: Request, res: Response) {
+    try {
+        const token = req.body?.token;
+        if (!isPushToken(token)) return res.status(400).json({ message: 'Invalid push token.' });
+        await savePushToken(req.user!.id, token);
+        return res.status(200).json({ saved: true });
+    } catch (error) {
+        log.error('savePushToken failed', { user: req.user?.id, error: (error as Error)?.message });
+        return res.status(500).json({ message: 'Failed to save push token' });
+    }
+}
+
+/** Signing out: this device stops getting the account's notifications. */
+export async function removePushTokenHandler(req: Request, res: Response) {
+    try {
+        const token = req.body?.token;
+        if (!isPushToken(token)) return res.status(400).json({ message: 'Invalid push token.' });
+        await removePushTokens([token], req.user!.id);
+        return res.status(200).json({ removed: true });
+    } catch (error) {
+        log.error('removePushToken failed', { user: req.user?.id, error: (error as Error)?.message });
+        return res.status(500).json({ message: 'Failed to remove push token' });
     }
 }

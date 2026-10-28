@@ -68,6 +68,12 @@ model User {
   totalGames        Int       @default(0)
   /// Last username change; changes are limited to one a week (the first is free).
   usernameChangedAt DateTime?
+  /// Expo push tokens of the user's most recent devices, newest first (at most 3).
+  pushTokens        String[]  @default([])
+  /// Last time the app synced its push token (each Home visit): activity, for reminders.
+  lastSeenAt        DateTime?
+  /// Last "come and play" reminder, so a restart near a send time doesn't send it twice.
+  lastReminderAt    DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
@@ -86,6 +92,7 @@ model User {
   reportsAbout Report[] @relation("Reported")
 
   @@index([providerId])
+  @@index([lastSeenAt])
   /// Prefix search ("pi" → piyush_1234); usernames are stored lowercase.
   @@index([username(ops: raw("text_pattern_ops"))], map: "User_username_pattern_idx")
 }

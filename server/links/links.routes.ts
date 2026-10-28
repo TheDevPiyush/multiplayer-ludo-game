@@ -29,7 +29,8 @@ linksRouter.get('/.well-known/assetlinks.json', (_req: Request, res: Response) =
     res.json(
         ANDROID_CERTS.length
             ? [{
-                relation: ['delegate_permission/common.handle_all_urls'],
+                // App Links, plus credential sharing (Play Console's "website association" checks for both).
+                relation: ['delegate_permission/common.handle_all_urls', 'delegate_permission/common.get_login_creds'],
                 target: { namespace: 'android_app', package_name: ANDROID_PACKAGE, sha256_cert_fingerprints: ANDROID_CERTS },
             }]
             : [],

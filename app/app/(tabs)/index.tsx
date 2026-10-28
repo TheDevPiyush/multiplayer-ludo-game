@@ -1,5 +1,6 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback } from 'react';
 import { Pressable, ScrollView, StyleSheet, View as RNView } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -12,6 +13,7 @@ import { FloatingDiceArt } from '@/components/ludo/FloatingDiceArt';
 import { Text } from '@/components/Themed';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { friendsHref } from '@/util/links';
+import { syncPushToken } from '@/util/push';
 
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 
@@ -77,6 +79,9 @@ export default function HomeTabScreen() {
     const { connectionPhase } = useSocket();
     const connected = connectionPhase === 'connected';
     const requests = summary.incomingRequests;
+
+    // Every visit: keeps the server's list of this account's devices current.
+    useFocusEffect(useCallback(() => void syncPushToken(), []));
 
     const username = user?.username ?? 'player';
     const games = user?.totalGames ?? 0;

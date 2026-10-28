@@ -1,3 +1,4 @@
+import { existsSync } from 'fs';
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
 /**
@@ -19,9 +20,20 @@ function linkHost(): string | null {
     return m ? m[1]!.toLowerCase() : null;
 }
 
+/**
+ * Firebase config for Android push (FCM). Locally: app/google-services.json. On EAS:
+ * a file environment variable named GOOGLE_SERVICES_JSON (its value is the file's path).
+ * Without it the app still builds, but can't get a push token.
+ */
+function googleServicesFile(): string | undefined {
+    const file = process.env.GOOGLE_SERVICES_JSON || './google-services.json';
+    return existsSync(file) ? file : undefined;
+}
+
 export default ({ config }: ConfigContext): ExpoConfig => {
     const host = linkHost();
-    if (!host) return config as ExpoConfig;
+    const android = { ...config.android, googleServicesFile: googleServicesFile() };
+    if (!host) return { ...(config as ExpoConfig), android };
 
     return {
         ...(config as ExpoConfig),
@@ -30,7 +42,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
             associatedDomains: [`applinks:${host}`],
         },
         android: {
-            ...config.android,
+            ...android,
             intentFilters: [
                 {
                     action: 'VIEW',

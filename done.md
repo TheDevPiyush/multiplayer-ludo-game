@@ -71,6 +71,12 @@
   - Reports go to the `Report` table with a reason, an optional note and the reported player's recent messages in that room. Review them in Supabase and set `resolvedAt`.
 - **Guest clean-up**: once a day, guests unused for 30 days (`GUEST_RETENTION_DAYS`) are deleted, both the Supabase user and their row. Rooms they made alone go too; shared rooms are handed to another player. Opening the app marks a guest as active.
 - **App icons**: compressed from 1 MB to about 300 KB each.
+- **Push notifications** (Expo push, needs a native build with `google-services.json`):
+  - Sent for game invites, friend requests, accepted requests, and "@friend is online" (only to friends who aren't in the app).
+  - Limits: at most 6 social pushes per user, refilling one every 10 minutes. "Online" goes out only after 30 minutes away, at most every 6 hours per person, and each person hears about online friends at most every 3 hours. There's a 5-minute quiet period after a deploy.
+  - "Come and play" reminders at 13:00 and 19:30 IST (`REMINDER_TIMES`). They go to people who opened the app in the last 30 days but not in the last 3 hours, and aren't online.
+  - Each Home visit syncs the device's token. The server keeps each user's 3 newest devices. A device that signs into another account moves to it, signing out removes it, and tokens Expo reports as dead are dropped.
+  - Android channels: Game invites, Friends and Game reminders, each of which people can turn off separately. Tapping a notification opens the invite's room or the friends screen.
 
 ## Supabase settings for guests
 - Authentication → Sign In / Providers: turn on **Allow anonymous sign-ins** and **Allow manual linking**.
@@ -80,6 +86,5 @@
 - A way to review reports beyond the Supabase table editor, once there are many.
 - Hinglish and other non-English abuse words for the chat filter.
 - Add the release/Play signing SHA256s and `IOS_APP_ID` for verified links.
-- Push notifications for offline invites and requests.
 - Guests:
   - Turn on CAPTCHA (Cloudflare Turnstile) for anonymous sign-ins, because guests are cheap to create in bulk.

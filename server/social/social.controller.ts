@@ -2,12 +2,14 @@ import type { Request, Response } from 'express';
 
 import { games } from '../game/services';
 import { BOT_PROVIDER } from '../game/bots';
+import { getUserRow } from '../game/user-cache';
 import { GUEST_PROVIDER } from '../lib/auth';
 import { prisma } from '../lib/prisma';
 import { log } from '../lib/logger';
 import { TtlCache } from '../lib/ttl-cache';
 import { afterCursor, pageParams, toPage } from '../lib/paging';
-import { getIO, roomChatHistory } from '../socket/socket-server';
+import { pushTo } from '../notifications/push';
+import { getIO, isUserOnline, roomChatHistory } from '../socket/socket-server';
 import { blockedEither, blocksChanged, isBlockedEither } from './blocks';
 
 export type Relation = 'none' | 'friends' | 'outgoing' | 'incoming';
@@ -34,10 +36,6 @@ function handle(name: string, fn: (req: Request, res: Response) => Promise<unkno
             return res.status(500).json({ message: 'Something went wrong.' });
         }
     };
-}
-
-function isOnline(userId: string): boolean {
-    return (getIO()?.sockets.adapter.rooms.get(`user:${userId}`)?.size ?? 0) > 0;
 }
 
 type Summary = { unreadNotifications: number; incomingRequests: number; outgoingRequests: number; friends: number };
@@ -135,7 +133,7 @@ export const listFriends = handle('listFriends', async (req, res) => {
     res.status(200).json({
         data: rows.map(r => {
             const user = r.requesterId === me ? r.addressee : r.requester;
-            return { user, online: isOnline(user.id), since: r.respondedAt };
+            return { user, online: isUserOnline(user.id), since: r.respondedAt };
         }),
         nextCursor,
     });
@@ -194,6 +192,8 @@ async function acceptFrom(me: string, otherId: string): Promise<boolean> {
     ]);
     notify(otherId, 'accepted', me);
     notify(me, 'accepted', otherId);
+    const name = (await getUserRow(me))?.username;
+    if (name) pushTo(otherId, 'friend', { title: 'Friend request accepted', body: `You and @${name} are friends now. Invite them to a game!`, url: '/friends' });
     return true;
 }
 
@@ -226,6 +226,8 @@ export const sendRequest = handle('sendRequest', async (req, res) => {
         await prisma.notification.create({
             data: { userId: otherId, type: 'FRIEND_REQUEST', actorId: me, friendshipId: friendship.id },
         });
+        const name = (await getUserRow(me))?.username;
+        if (name) pushTo(otherId, 'friend', { title: 'New friend request', body: `@${name} wants to be friends.`, url: '/friends?tab=requests' });
     } catch (e) {
         // Double tap: the request already exists.
         if ((e as { code?: string })?.code !== 'P2002') throw e;
@@ -289,6 +291,11 @@ export const inviteToRoom = handle('inviteToRoom', async (req, res) => {
 
     const inviter = room.players.find(p => p.userId === me);
     notify(friendId, 'invite', me, { gameCode, username: inviter?.username });
+    pushTo(friendId, 'invite', {
+        title: `@${inviter?.username ?? 'A friend'} invited you to play`,
+        body: `Tap to join their Ludo table (${room.players.length}/${room.maxPlayers} players).`,
+        url: `/join/${gameCode}`,
+    });
     res.status(200).json({ invited: true });
 });
 

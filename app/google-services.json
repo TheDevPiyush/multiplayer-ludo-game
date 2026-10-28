@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "919225910851",
+    "project_id": "thedevpiyush-simple-ludo",
+    "storage_bucket": "thedevpiyush-simple-ludo.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:919225910851:android:c51a04573a2cd23d2a76f6",
+        "android_client_info": {
+          "package_name": "com.thedevpiyush.simpleludo"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBmuxZIQ5zCR-TChtceZb-7XKLsLZdKNyA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
