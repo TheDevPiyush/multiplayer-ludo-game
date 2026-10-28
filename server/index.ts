@@ -9,11 +9,12 @@ import gameRouter from './game/game.routes.ts';
 import { games } from './game/services.ts';
 import { log, requestLogger } from './lib/logger.ts';
 import { rateLimit } from './lib/rate-limit.ts';
+import { startReminders } from './notifications/reminders.ts';
 import linksRouter from './links/links.routes.ts';
 import rtcRouter from './rtc/rtc.routes.ts';
 import { startNotificationCleanup } from './social/social.controller.ts';
 import socialRouter from './social/social.routes.ts';
-import { attachSocketServer } from './socket/socket-server.ts';
+import { attachSocketServer, isUserOnline } from './socket/socket-server.ts';
 
 const app = express();
 // One proxy hop (tunnel / load balancer) in front, so req.ip is the client's address.
@@ -47,6 +48,7 @@ httpServer.listen(PORT, () => {
 });
 startNotificationCleanup();
 startGuestCleanup();
+startReminders(isUserOnline);
 loadBotPool()
     .then(bots => games.setBots(bots))
     .catch(e => log.error('loading bots failed, public rooms will wait for people', { error: (e as Error)?.message }));

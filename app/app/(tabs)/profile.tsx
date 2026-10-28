@@ -27,6 +27,7 @@ import { useIsGuest } from '@/hooks/useIsGuest';
 import { leaveGuest, LEAVE_GUEST_DIALOG, takenDialog } from '@/util/guest';
 import { VolumeSlider } from '@/components/VolumeSlider';
 import { playEffect, setAudioSettings, useAudioSettings } from '@/util/audio';
+import { forgetPushToken } from '@/util/push';
 import { supabase } from '@/util/supabase-client';
 
 type DialogAction = {
@@ -262,6 +263,7 @@ export default function ProfileTabScreen() {
           label: 'Sign Out',
           onPress: async () => {
             hideDialog();
+            await forgetPushToken();
             await supabase.auth.signOut();
             router.replace('/(login)');
           },

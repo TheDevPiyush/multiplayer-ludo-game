@@ -233,7 +233,8 @@ export function useGameRoom({ roomId, gameCode, onEvent, onEvents }: UseGameRoom
         };
         // One authoritative stream: full room snapshot + the events that produced it.
         const onSync = (sync: RoomSync) => {
-            if (!sync?.room || sync.version <= versionRef.current) return;
+            // The socket stays subscribed to rooms this player left: only this screen's room counts.
+            if (!sync?.room || sync.room.id !== roomIdRef.current || sync.version <= versionRef.current) return;
             const players = sync.room.players;
             const userOf = (color: string) => players.find(p => p.color === color)?.userId ?? '';
             const lastDice = sync.events.find(e => e.type === 'ROLLED');

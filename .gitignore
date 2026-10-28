@@ -35,3 +35,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Production secrets live only on the droplet (deploy/README.md)
 deploy/api.env
+
+# Firebase service account keys (secret: they live in EAS credentials, never in git)
+*firebase-adminsdk*.json
+
+# Store graphics: generated HTML (the PNGs in branding/store/out are kept)
+branding/store/build/

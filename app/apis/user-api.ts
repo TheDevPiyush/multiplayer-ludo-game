@@ -44,3 +44,12 @@ export async function fetchGameHistory(
 ): Promise<Result<{ data: GameHistoryEntry[]; nextCursor: string | null }>> {
     return apiFetch(accessToken, `/game/history${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`);
 }
+
+/** This device's Expo push token; the server keeps the user's 3 most recent devices. */
+export async function savePushToken(accessToken: string, token: string): Promise<Result<{ saved: boolean }>> {
+    return apiFetch(accessToken, '/auth/push-token', { method: 'POST', body: JSON.stringify({ token }) });
+}
+
+export async function removePushToken(accessToken: string, token: string): Promise<Result<{ removed: boolean }>> {
+    return apiFetch(accessToken, '/auth/push-token', { method: 'DELETE', body: JSON.stringify({ token }) }, 4_000);
+}

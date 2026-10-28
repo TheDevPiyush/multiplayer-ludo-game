@@ -4,6 +4,7 @@ import { Server, type Socket } from 'socket.io';
 import { ServiceError, type GameService } from '../game/game-service';
 import { RoomChat } from '../game/room-chat';
 import { log } from '../lib/logger';
+import { friendCameOnline, friendWentOffline } from '../notifications/friend-online';
 import { RateLimiter } from '../lib/rate-limit';
 import { blockedEither } from '../social/blocks';
 import { socketAuth, socketUser } from './socket-auth';
@@ -20,6 +21,11 @@ let io: Server | null = null;
 
 export function getIO(): Server | null {
     return io;
+}
+
+/** Has at least one connected device (the app open, or just backgrounded). */
+export function isUserOnline(userId: string): boolean {
+    return (io?.sockets.adapter.rooms.get(`user:${userId}`)?.size ?? 0) > 0;
 }
 
 type Ack = (res: unknown) => void;
@@ -74,6 +80,10 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
 
         // Personal channel: friend requests, notifications, online status.
         socket.join(`user:${userId}`);
+        // First device in, and not a blip the connection recovered from: tell their friends.
+        if (!socket.recovered && io!.sockets.adapter.rooms.get(`user:${userId}`)?.size === 1) {
+            friendCameOnline(userId, isUserOnline);
+        }
 
         const joinedRooms = new Set<string>();
         log.info('socket connected', { user: userId, socket: socket.id, recovered: socket.recovered || undefined });
@@ -224,6 +234,7 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
         // ─── disconnect ────────────────────────────────────────────
         socket.on('disconnect', (reason) => {
             log.info('socket disconnected', { user: userId, socket: socket.id, reason });
+            if (!isUserOnline(userId)) friendWentOffline(userId);
             for (const roomId of joinedRooms) {
                 if (!removeSocket(roomId, userId, socket.id)) continue;
                 io!.to(`room:${roomId}`).emit('presence:disconnecting', { userId, graceMs: GRACE_MS });

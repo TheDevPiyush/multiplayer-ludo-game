@@ -19,6 +19,7 @@ import { SocialProvider } from '@/components/SocialProvider';
 import { InviteBanner } from '@/components/InviteBanner';
 import { AudioDirector } from '@/components/AudioDirector';
 import { friendsHref, takePendingLink } from '@/util/links';
+import { listenForNotificationTaps } from '@/util/push';
 
 export {
   ErrorBoundary,
@@ -54,6 +55,9 @@ export default function RootLayout() {
     }
   }, [loaded]);
 
+
+  // Notification taps. Before the sign-in routing below: a tap that launched the app becomes its pending link.
+  useEffect(() => listenForNotificationTaps(router), []);
 
   // getting session from supabase + auto-resume active room
   useEffect(() => {

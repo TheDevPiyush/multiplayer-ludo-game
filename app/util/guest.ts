@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { setActiveRoom } from '@/util/active-room';
+import { forgetPushToken } from '@/util/push';
 import { supabase } from '@/util/supabase-client';
 
 // Shared wording and actions for guests saving (or leaving) their progress.
@@ -24,6 +25,7 @@ export const LEAVE_GUEST_DIALOG = {
 /** Signs the guest out (the root layout then shows sign-in). Their guest account is left behind for good. */
 export async function leaveGuest() {
     await setActiveRoom(null);
+    await forgetPushToken();
     await supabase.auth.signOut();
     await AsyncStorage.setItem('user', 'null');
 }
