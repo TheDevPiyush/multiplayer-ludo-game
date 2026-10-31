@@ -62,7 +62,8 @@ export function PlayerStrip(p: PlayerStripProps) {
     return (
         <GlassPanel
             intensity="medium"
-            style={[styles.strip, p.isActive && { borderColor: color, borderWidth: 2, backgroundColor: 'rgba(255,255,255,0.16)' }]}
+            // Same border width either way (only colours change), so a turn switch never resizes the strip and nudges the board.
+            style={[styles.strip, p.isActive && { borderColor: color, backgroundColor: 'rgba(255,255,255,0.16)' }]}
         >
             <RNView style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center' }}>
                 {p.isActive && p.turnDeadline ? (
@@ -89,7 +90,8 @@ export function PlayerStrip(p: PlayerStripProps) {
                     </Text>
                 </RNView>
             </RNView>
-            {p.isActive && <RNView style={[styles.activeDot, { backgroundColor: color }]} />}
+            {/* Always laid out (hidden when inactive), so the name doesn't reflow on a switch. */}
+            <RNView style={[styles.activeDot, { backgroundColor: color, opacity: p.isActive ? 1 : 0 }]} />
         </GlassPanel>
     );
 }
@@ -103,6 +105,9 @@ const styles = StyleSheet.create({
         borderRadius: 14,
         paddingVertical: 8,
         paddingHorizontal: 10,
+        // Room for the active border at all times; inactive strips keep GlassPanel's inner outline.
+        borderWidth: 2,
+        borderColor: 'transparent',
     },
     avatar: {
         width: 30, height: 30,

@@ -1,0 +1,107 @@
+/*
+ * Admin console only. Tailwind scans just the console and components/ui, so the
+ * public site's CSS is untouched. Tokens are prefixed (--a-*) because globals.css
+ * already uses --card, --accent and --radius for the site.
+ */
+@import 'tailwindcss' source(none);
+@source './';
+@source '../../components/ui';
+
+:root {
+    --a-radius: 0.625rem;
+    --a-background: oklch(0.982 0.004 280);
+    --a-foreground: oklch(0.2 0.03 280);
+    --a-card: oklch(1 0 0);
+    --a-card-foreground: oklch(0.2 0.03 280);
+    --a-popover: oklch(1 0 0);
+    --a-popover-foreground: oklch(0.2 0.03 280);
+    /* The app's indigo (#4B3BF2). */
+    --a-primary: oklch(0.51 0.24 276);
+    --a-primary-foreground: oklch(0.99 0 0);
+    --a-secondary: oklch(0.965 0.008 280);
+    --a-secondary-foreground: oklch(0.3 0.04 280);
+    --a-muted: oklch(0.968 0.006 280);
+    --a-muted-foreground: oklch(0.52 0.025 280);
+    --a-accent: oklch(0.955 0.03 280);
+    --a-accent-foreground: oklch(0.42 0.2 276);
+    --a-destructive: oklch(0.58 0.22 25);
+    --a-success: oklch(0.6 0.15 152);
+    --a-warning: oklch(0.72 0.15 70);
+    --a-info: oklch(0.6 0.14 240);
+    --a-border: oklch(0.925 0.008 280);
+    --a-input: oklch(0.9 0.01 280);
+    --a-ring: oklch(0.51 0.24 276 / 55%);
+    --a-sidebar: oklch(0.995 0.002 280);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --a-background: oklch(0.155 0.018 280);
+        --a-foreground: oklch(0.96 0.005 280);
+        --a-card: oklch(0.195 0.02 280);
+        --a-card-foreground: oklch(0.96 0.005 280);
+        --a-popover: oklch(0.215 0.022 280);
+        --a-popover-foreground: oklch(0.96 0.005 280);
+        --a-primary: oklch(0.64 0.2 276);
+        --a-primary-foreground: oklch(0.99 0 0);
+        --a-secondary: oklch(0.255 0.022 280);
+        --a-secondary-foreground: oklch(0.94 0.005 280);
+        --a-muted: oklch(0.24 0.02 280);
+        --a-muted-foreground: oklch(0.72 0.02 280);
+        --a-accent: oklch(0.28 0.06 276);
+        --a-accent-foreground: oklch(0.86 0.09 276);
+        --a-destructive: oklch(0.68 0.19 22);
+        --a-success: oklch(0.72 0.15 152);
+        --a-warning: oklch(0.8 0.14 75);
+        --a-info: oklch(0.72 0.12 240);
+        --a-border: oklch(1 0 0 / 9%);
+        --a-input: oklch(1 0 0 / 14%);
+        --a-ring: oklch(0.64 0.2 276 / 55%);
+        --a-sidebar: oklch(0.175 0.02 280);
+    }
+}
+
+@theme inline {
+    --color-background: var(--a-background);
+    --color-foreground: var(--a-foreground);
+    --color-card: var(--a-card);
+    --color-card-foreground: var(--a-card-foreground);
+    --color-popover: var(--a-popover);
+    --color-popover-foreground: var(--a-popover-foreground);
+    --color-primary: var(--a-primary);
+    --color-primary-foreground: var(--a-primary-foreground);
+    --color-secondary: var(--a-secondary);
+    --color-secondary-foreground: var(--a-secondary-foreground);
+    --color-muted: var(--a-muted);
+    --color-muted-foreground: var(--a-muted-foreground);
+    --color-accent: var(--a-accent);
+    --color-accent-foreground: var(--a-accent-foreground);
+    --color-destructive: var(--a-destructive);
+    --color-success: var(--a-success);
+    --color-warning: var(--a-warning);
+    --color-info: var(--a-info);
+    --color-sidebar: var(--a-sidebar);
+    --color-border: var(--a-border);
+    --color-input: var(--a-input);
+    --color-ring: var(--a-ring);
+    --radius-sm: calc(var(--a-radius) - 4px);
+    --radius-md: calc(var(--a-radius) - 2px);
+    --radius-lg: var(--a-radius);
+    --radius-xl: calc(var(--a-radius) + 4px);
+    --radius-2xl: calc(var(--a-radius) + 8px);
+}
+
+@layer base {
+    * {
+        @apply border-border outline-ring/50;
+    }
+}
+
+/* The site's body has a gradient, white text and a tall line height. */
+body:has(.admin-root) {
+    background: var(--a-background);
+    background-image: none;
+    color: var(--a-foreground);
+    line-height: 1.5;
+    overflow-x: visible;
+}

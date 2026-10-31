@@ -72,6 +72,7 @@ Repo → Settings → Environments → **New environment** `production` → add:
 | `DROPLET_HOST` | droplet IP |
 | `DROPLET_SSH_KEY` | contents of `simple-ludo-deploy` (the private key, all lines) |
 | `API_ENV` | the API's environment file: `api.env.example` filled in from your `server/.env` |
+| `WEB_ENV` | optional, for the admin console: `web.env.example` filled in (Supabase URL + publishable key) |
 
 Then delete the local key files. To change an API setting later, edit `API_ENV` and
 re-run the workflow.
@@ -127,3 +128,30 @@ deploy.
 
 Another app on this server joins the same way: put its containers on `edge` with unique
 aliases and drop a `<app>.caddy` file into `/opt/caddy-sites`.
+
+## Admin console
+
+`https://simple-ludo.thedevpiyush.com/admin-console` (users, live games, push notifications).
+
+- Sign-in is Supabase email OTP, for existing accounts only. An account gets in when its
+  `User.isAdmin` is true; admins grant or remove it for others on the console's Users page.
+  The first admin is set by hand, in Supabase → SQL editor:
+  `UPDATE "User" SET "isAdmin" = true WHERE username = 'your_username';`
+- The website reads `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` from the `WEB_ENV`
+  secret when a page is served (see `web.env.example`); no rebuild is needed to change them.
+- The browser calls the API's `/admin` routes; `ADMIN_ORIGINS` lists the allowed origins
+  (production site and `http://localhost:3000` by default).
+- Local: put the same keys in `web/.env.local` (plus `API_URL=http://localhost:8080`) and
+  run `npm run dev` in `web/`.
+
+## Database security (Supabase)
+
+Supabase serves every table in `public` over its REST/GraphQL API to anyone holding the
+publishable key, which ships inside the app. Nothing uses that: the app and website only
+use Supabase for sign-in, and all data goes through the game server (Prisma, connecting as
+the tables' owner, which RLS doesn't restrict). So every table has row level security on
+with no policies, and `anon` / `authenticated` have no grants on them
+(`server/prisma/migrations/20261031130000_lock_public_tables`).
+
+A migration that adds a table must also run `ALTER TABLE "Name" ENABLE ROW LEVEL SECURITY;`.
+The server logs a warning at startup for any `public` table without it.

@@ -18,8 +18,9 @@ import { getActiveRoom } from '@/util/active-room';
 import { SocialProvider } from '@/components/SocialProvider';
 import { InviteBanner } from '@/components/InviteBanner';
 import { AudioDirector } from '@/components/AudioDirector';
-import { friendsHref, takePendingLink } from '@/util/links';
-import { listenForNotificationTaps } from '@/util/push';
+import { AnnouncementsHost } from '@/components/AnnouncementsHost';
+import { friendsHref, setInitialRouteDone, takePendingLink } from '@/util/links';
+import { listenForNotificationTaps, startPushTokenSync } from '@/util/push';
 
 export {
   ErrorBoundary,
@@ -59,15 +60,23 @@ export default function RootLayout() {
   // Notification taps. Before the sign-in routing below: a tap that launched the app becomes its pending link.
   useEffect(() => listenForNotificationTaps(router), []);
 
+  // Push token to the server on every app open, sign-in and token change (newest 3 devices are kept).
+  useEffect(() => startPushTokenSync(), []);
+
   // getting session from supabase + auto-resume active room
   useEffect(() => {
     const resume = async (loggedIn: boolean) => {
       if (!loggedIn) {
+        setInitialRouteDone(false);
         router.replace('/(login)');
         return;
       }
-      // A link opened the app (or arrived while signed out): go there now.
+      const active = await getActiveRoom();
+      // From here to the routing below runs in one go (no await), so a link is either
+      // pending by now and followed here, or arrives after and is opened directly.
+      // A link opened the app (or arrived while signed out): go there.
       const link = takePendingLink();
+      setInitialRouteDone(true);
       if (link?.kind === 'join') {
         router.replace({ pathname: '/join/[code]', params: { code: link.code } });
         return;
@@ -77,7 +86,6 @@ export default function RootLayout() {
         router.push(friendsHref(link.tab));
         return;
       }
-      const active = await getActiveRoom();
       if (active && active.roomId && active.gameCode) {
         if (active.screen === 'board') {
           router.replace({
@@ -177,6 +185,7 @@ function RootLayoutNav() {
               </Stack>
               <InviteBanner />
               <AudioDirector />
+              <AnnouncementsHost />
             </LudoBackground>
           </ThemeProvider>
         </SocialProvider>

@@ -34,6 +34,8 @@ type Ack = (res: unknown) => void;
 const actionLimiter = new RateLimiter(8, 8);
 /** room:join / room:state per user — each may load a room from Redis / Postgres. */
 const roomLimiter = new RateLimiter(10, 2);
+/** Board heartbeats per socket: one every few seconds, answered from memory. */
+const pingLimiter = new RateLimiter(6, 2);
 
 /** Emotes, quick replies and text chat. A chat lock reaches all of the player's devices. */
 const chat = new RoomChat((userId, lockedUntil) => {
@@ -135,6 +137,16 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
             ack?.({ ok: true, data: roomSnapshot(room.id, room) });
         });
 
+        // Heartbeat from the board: clock sync (server time) and a version check, so a
+        // client that missed an update (or holds a half-dead connection) notices in seconds.
+        socket.on('room:ping', (payload: { roomId?: string }, ack?: Ack) => {
+            if (typeof ack !== 'function') return;
+            if (!pingLimiter.take(socket.id)) return ack({ ok: false, error: 'Slow down.' });
+            const roomId = payload?.roomId;
+            const room = typeof roomId === 'string' && joinedRooms.has(roomId) ? games.peek({ id: roomId }) : undefined;
+            ack({ ok: true, now: Date.now(), version: room?.version ?? null });
+        });
+
         socket.on('room:leave', (payload: { roomId: string }, ack?: Ack) => {
             const { roomId } = payload || {};
             if (!roomId || !joinedRooms.has(roomId)) return ack?.({ ok: false });
@@ -147,7 +159,11 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
         });
 
         // ─── Gameplay ──────────────────────────────────────────────
-        const gameAction = (event: string, run: (payload: any) => Promise<unknown>) =>
+        /**
+         * `withRoom`: a rejected action answers with the room as the server has it, so a
+         * client that acted on stale state (e.g. "not your turn") corrects itself at once.
+         */
+        const gameAction = (event: string, run: (payload: any) => Promise<unknown>, withRoom = false) =>
             async (payload: any, ack?: Ack) => {
                 const start = performance.now();
                 const fields = () => ({ user: userId, room: payload?.gameCode, ms: (performance.now() - start).toFixed(1) });
@@ -162,7 +178,12 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
                 } catch (e) {
                     const known = e instanceof ServiceError;
                     (known ? log.warn : log.error)(`socket ${event} rejected`, { ...fields(), error: (e as Error)?.message });
-                    ack?.({ ok: false, error: known ? (e as Error).message : 'Something went wrong.' });
+                    const room = withRoom && typeof payload?.gameCode === 'string' ? games.peek({ gameCode: payload.gameCode }) : undefined;
+                    ack?.({
+                        ok: false,
+                        error: known ? (e as Error).message : 'Something went wrong.',
+                        ...(room && games.isMember(room, userId) ? { room: games.dto(room) } : {}),
+                    });
                 }
             };
 
@@ -179,15 +200,15 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
         socket.on('game:roll-dice', gameAction('game:roll-dice', async p => {
             const r = await games.act(userId, p.gameCode, { kind: 'ROLL' });
             return { diceValue: r.diceValue };
-        }));
+        }, true));
         socket.on('game:move-token', gameAction('game:move-token', async p => {
             const token = Number(p.tokenIndex);
             if (!Number.isInteger(token) || token < 0 || token > 3) throw new ServiceError(400, 'tokenIndex must be 0..3.');
             await games.act(userId, p.gameCode, { kind: 'MOVE', token });
-        }));
+        }, true));
         socket.on('game:skip-turn', gameAction('game:skip-turn', async p => {
             await games.act(userId, p.gameCode, { kind: 'SKIP' });
-        }));
+        }, true));
 
         // ─── Reactions & chat ──────────────────────────────────────
         /** The room, when this socket joined it and the user still plays in it. */

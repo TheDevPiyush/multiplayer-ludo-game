@@ -80,8 +80,9 @@ export default function HomeTabScreen() {
     const connected = connectionPhase === 'connected';
     const requests = summary.incomingRequests;
 
-    // Every visit: keeps the server's list of this account's devices current.
-    useFocusEffect(useCallback(() => void syncPushToken(), []));
+    // Home is where we ask for notification permission; once granted, the token is also
+    // synced on every app open (startPushTokenSync in the root layout).
+    useFocusEffect(useCallback(() => void syncPushToken({ prompt: true }), []));
 
     const username = user?.username ?? 'player';
     const games = user?.totalGames ?? 0;

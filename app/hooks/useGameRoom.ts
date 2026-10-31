@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
+
 import { useSocket } from '@/components/SocketProvider';
+import { serverClock } from '@/util/server-clock';
+
+/** Board heartbeat: clock sync + "did I miss an update?" check. */
+const HEARTBEAT_MS = 4_000;
+const HEARTBEAT_TIMEOUT_MS = 3_000;
+/** Missed heartbeats in a row before the connection is treated as dead and replaced. */
+const HEARTBEAT_MAX_MISSES = 2;
 
 export type RoomPlayer = {
     id: string;
@@ -36,6 +45,16 @@ export type GameRoom = {
     turnMsLeft?: number | null;
     /** Public lobbies: the game starts by itself in this many ms (from when the snapshot was sent); null when no countdown runs. */
     startsInMs?: number | null;
+    /** Server epoch ms when the current turn starts (clients finish showing the last action until then). */
+    turnStartsAt?: number | null;
+    /** Same, relative to when the snapshot was sent. */
+    turnStartsInMs?: number;
+    /** Server clock when the snapshot was made. */
+    serverNow?: number;
+    /** Set on arrival: `turnEndsAt` in this device's clock (null when no timer runs). */
+    localTurnEndsAt?: number | null;
+    /** Set on arrival: `turnStartsAt` in this device's clock. */
+    localTurnStartsAt?: number;
 };
 
 type Color = RoomPlayer['color'];
@@ -128,7 +147,7 @@ export function useGameRoom({ roomId, gameCode, onEvent, onEvents }: UseGameRoom
         if (!next) return false;
         if (!force && (next.version ?? 0) < versionRef.current) return false;
         versionRef.current = next.version ?? 0;
-        setRoom(next);
+        setRoom(withLocalTimes(next));
         return true;
     }, []);
 
@@ -298,6 +317,51 @@ export function useGameRoom({ roomId, gameCode, onEvent, onEvents }: UseGameRoom
         };
     }, [socket, fire, acceptRoom]);
 
+    // Heartbeat while in the room: keeps the server clock estimate fresh, catches
+    // missed updates (version behind → fetch the room), and replaces a connection
+    // that still looks open but no longer delivers anything.
+    useEffect(() => {
+        if (!socket || !isRealtimeReady || joinCount === 0) return;
+        let misses = 0;
+        let alive = true;
+        const beat = () => {
+            const rid = roomIdRef.current;
+            if (!rid || !socket.connected) return;
+            const sentAt = Date.now();
+            socket.timeout(HEARTBEAT_TIMEOUT_MS).emit('room:ping', { roomId: rid }, (err: unknown, res: any) => {
+                if (!alive) return;
+                if (err) {
+                    misses += 1;
+                    if (misses >= HEARTBEAT_MAX_MISSES) {
+                        misses = 0;
+                        // Closing the transport makes Socket.IO reconnect (and the room rejoin) at once.
+                        socket.io.engine?.close();
+                    }
+                    return;
+                }
+                misses = 0;
+                if (!res?.ok) return;
+                serverClock.sample(sentAt, res.now, Date.now());
+                // Behind: an update went missing. Ahead: the server restarted from a snapshot.
+                if (typeof res.version === 'number' && res.version !== versionRef.current) void refresh();
+            });
+        };
+        beat();
+        const t = setInterval(beat, HEARTBEAT_MS);
+        return () => {
+            alive = false;
+            clearInterval(t);
+        };
+    }, [socket, isRealtimeReady, joinCount, refresh]);
+
+    // Back from the background: fetch the room straight away instead of waiting for the next update.
+    useEffect(() => {
+        const sub = AppState.addEventListener('change', next => {
+            if (next === 'active' && hasJoinedRef.current) void refresh();
+        });
+        return () => sub.remove();
+    }, [refresh]);
+
     // Prune expired disconnecting grace entries
     useEffect(() => {
         if (disconnectingPlayers.length === 0) return;
@@ -315,6 +379,10 @@ export function useGameRoom({ roomId, gameCode, onEvent, onEvents }: UseGameRoom
         disconnectingPlayers,
         joinError,
         refresh,
+        /** A room snapshot from outside the sync stream (e.g. a rejected action's answer). */
+        applySnapshot: useCallback((next: GameRoom | undefined | null) => {
+            if (next && next.id === roomIdRef.current) acceptRoom(next);
+        }, [acceptRoom]),
         connectionPhase,
         isRealtimeReady,
         leaveRoom: useCallback(() => {
@@ -327,4 +395,29 @@ export function useGameRoom({ roomId, gameCode, onEvent, onEvents }: UseGameRoom
             hasJoinedRef.current = false;
         }, [socket]),
     };
+}
+
+/**
+ * Converts the snapshot's server deadlines to this device's clock: with the
+ * heartbeat's clock estimate when there is one (exact even on a slow network),
+ * otherwise from the relative times as the snapshot arrives.
+ */
+function withLocalTimes(room: GameRoom): GameRoom {
+    const now = Date.now();
+    const local = (serverMs: number | null | undefined, relMs: number | null | undefined): number | null => {
+        if (serverMs == null) return null;
+        return serverClock.toLocal(serverMs) ?? now + (relMs ?? 0);
+    };
+    return {
+        ...room,
+        localTurnEndsAt: local(room.turnEndsAt, room.turnMsLeft),
+        localTurnStartsAt: local(room.turnStartsAt, room.turnStartsInMs) ?? now,
+    };
+}
+
+/** Round trip to the server in ms (from the board heartbeat), null until measured. */
+export function useRoundTrip(): number | null {
+    const [rtt, setRtt] = useState<number | null>(serverClock.rtt());
+    useEffect(() => serverClock.subscribe(setRtt), []);
+    return rtt;
 }

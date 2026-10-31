@@ -53,6 +53,21 @@ export function takePendingLink(): PendingLink | null {
     return link;
 }
 
+/**
+ * Whether the root layout has done its sign-in routing. Until then a link that
+ * arrives (e.g. the notification tap that launched the app) must wait as the
+ * pending link: navigating to it directly would be replaced by that routing.
+ */
+let initialRouteDone = false;
+
+export function setInitialRouteDone(done: boolean) {
+    initialRouteDone = done;
+}
+
+export function isInitialRouteDone(): boolean {
+    return initialRouteDone;
+}
+
 /** Forget a pending join once the join screen has dealt with it. */
 export function clearPendingJoin(code: string) {
     if (pendingLink?.kind === 'join' && pendingLink.code === code) pendingLink = null;

@@ -4,6 +4,7 @@ import Animated, {
     Easing,
     useAnimatedProps,
     useSharedValue,
+    withDelay,
     withTiming,
 } from 'react-native-reanimated';
 import Svg, { Circle, G } from 'react-native-svg';
@@ -33,8 +34,10 @@ export function TurnTimer({ deadline, size, strokeWidth = 3, color }: {
 
     useEffect(() => {
         const remaining = Math.max(0, endsAt - Date.now());
+        // A turn that hasn't started yet (handoff pause) holds a full ring until it does.
+        const hold = Math.max(0, remaining - totalMs);
         left.value = Math.min(1, remaining / totalMs);
-        left.value = withTiming(0, { duration: remaining, easing: Easing.linear });
+        left.value = withDelay(hold, withTiming(0, { duration: remaining - hold, easing: Easing.linear }));
         return () => cancelAnimation(left);
     }, [endsAt, totalMs, left]);
 

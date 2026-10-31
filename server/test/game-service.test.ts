@@ -30,6 +30,12 @@ const fast: Partial<GameServiceOptions> = {
     turnMs: 5,
     afkTurnMs: 2,
     autoDelayMs: 1,
+    rollAnimMs: 0,
+    hopMs: 0,
+    captureAnimMs: 0,
+    handoffMs: 0,
+    startPauseMs: 0,
+    lagGraceMs: 0,
     flushMs: 60_000,
     idleEvictMs: 60_000,
     balanceStrength: 0.6,
@@ -168,6 +174,65 @@ describe('gameplay', () => {
         expect(to).toBeGreaterThan(from);
         await games.stop();
     }, 30_000);
+});
+
+describe('turn pacing', () => {
+    async function until(check: () => boolean, ms = 1_000) {
+        const end = Date.now() + ms;
+        while (!check()) {
+            if (Date.now() > end) throw new Error('timed out');
+            await Bun.sleep(5);
+        }
+    }
+    async function started(opts: Partial<GameServiceOptions>) {
+        const t = setup({ ...fast, ...opts });
+        t.games.start(() => 1);
+        const room = await t.games.createRoom('a', { maxPlayers: 2 });
+        await t.games.joinRoom('b', room.gameCode);
+        // Connected players get the full turn (and the lag grace).
+        for (const p of room.players) p.status = 'CONNECTED';
+        await t.games.startGame('a', room.gameCode);
+        return { ...t, room };
+    }
+    const userOnTurn = (room: LiveRoom) => room.players.find(p => p.color === room.game!.turn)!.userId;
+
+    test('each turn starts after the last action has played out on clients', async () => {
+        const { games, room, syncs } = await started({ turnMs: 60_000, startPauseMs: 200, rollAnimMs: 300, handoffMs: 150 });
+        const startSync = syncs.at(-1)!;
+        expect(startSync.room.turnStartsInMs).toBeGreaterThan(150);
+        // The deadline clients see counts from the turn's start, not from now.
+        expect(room.turnEndsAt! - room.turnStartsAt!).toBe(60_000);
+
+        const before = Date.now();
+        await games.act(userOnTurn(room), room.gameCode, { kind: 'ROLL' });
+        expect(room.turnStartsAt!).toBeGreaterThanOrEqual(before + 300);
+        expect(syncs.at(-1)!.room.serverNow).toBeGreaterThanOrEqual(before);
+        await games.stop();
+    });
+
+    test('a pass to the next player adds the handoff pause', async () => {
+        const { games, room, syncs } = await started({ turnMs: 60_000, rollAnimMs: 100, handoffMs: 250, autoDelayMs: 1 });
+        const first = room.game!.turn;
+        const roller = userOnTurn(room);
+        // All tokens in base: anything but a six passes the turn on (a six is a 1-in-6 skip).
+        const r = await games.act(roller, room.gameCode, { kind: 'ROLL' });
+        if (r.diceValue !== 6) {
+            await until(() => room.game!.turn !== first, 2_000);
+            const turnSync = syncs.findLast(s => s.events.some(e => e.type === 'TURN' && e.reason !== 'extra-roll'))!;
+            expect(turnSync.room.turnStartsInMs).toBeGreaterThan(200);
+        }
+        await games.stop();
+    });
+
+    test('a connected player gets the lag grace past the deadline before autopilot plays', async () => {
+        const { games, room } = await started({ turnMs: 30, lagGraceMs: 150 });
+        const v = room.version;
+        await Bun.sleep(80);
+        // Past the shown deadline, still inside the grace: nothing auto-played yet.
+        expect(room.version).toBe(v);
+        await until(() => room.version > v, 1_000);
+        await games.stop();
+    });
 });
 
 describe('public rooms: quick match, bots and auto-start', () => {

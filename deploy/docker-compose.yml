@@ -31,6 +31,11 @@ services:
 
   web:
     image: ${IMAGE_PREFIX}/simple-ludo-web:${IMAGE_TAG:-latest}
+    # Admin console settings (Supabase URL + publishable key), read at request time.
+    # Written from the optional WEB_ENV secret; without it the console says it isn't configured.
+    env_file:
+      - path: ./web.env
+        required: false
     networks:
       default:
       edge:

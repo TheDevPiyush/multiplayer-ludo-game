@@ -1,0 +1,13 @@
+{
+  "name": "simple-ludo-root",
+  "private": true,
+  "description": "Shortcuts for running each service from the repo root (each folder keeps its own dependencies).",
+  "scripts": {
+    "app": "cd app && npm run start",
+    "android": "cd app && npm run android",
+    "web": "cd web && npm run dev",
+    "api": "cd server && bun run dev",
+    "build:ios": "cd app && eas build --platform ios --profile ios-sideload",
+    "build:android": "cd app && eas build --platform android --profile production"
+  }
+}

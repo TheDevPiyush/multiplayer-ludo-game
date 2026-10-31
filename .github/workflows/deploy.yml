@@ -154,6 +154,15 @@ jobs:
           API_ENV: ${{ secrets.API_ENV }}
         run: printf '%s\n' "$API_ENV" | ssh droplet "umask 077 && cat > $APP_DIR/api.env"
 
+      # Optional: the website's admin console settings (see deploy/web.env.example).
+      - name: Write web.env
+        env:
+          WEB_ENV: ${{ secrets.WEB_ENV }}
+        run: |
+          if [ -n "$WEB_ENV" ]; then
+            printf '%s\n' "$WEB_ENV" | ssh droplet "umask 077 && cat > $APP_DIR/web.env"
+          fi
+
       - name: Release
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}

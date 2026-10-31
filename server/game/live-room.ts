@@ -52,6 +52,12 @@ export interface LiveRoom {
     version: number;
     /** Epoch ms when the current turn auto-plays, null when no timer runs. */
     turnEndsAt: number | null;
+    /**
+     * Epoch ms when the current turn starts: until then clients are still showing
+     * the last action (dice landing, tokens hopping, the handoff pause).
+     * Optional: snapshots from before it existed.
+     */
+    turnStartsAt?: number | null;
     /** Consecutive timed-out turns per user — 3+ switches them to autopilot. */
     timeouts: Record<string, number>;
     /** Every move this game, written to Postgres with the final result. */
@@ -63,6 +69,7 @@ export interface LiveRoom {
 /** Shape the app renders (kept compatible with the previous REST payload). */
 export function toRoomDto(room: LiveRoom) {
     const g = room.game;
+    const now = Date.now();
     return {
         id: room.id,
         gameCode: room.gameCode,
@@ -82,9 +89,14 @@ export function toRoomDto(room: LiveRoom) {
         movableTokens: g ? legalMoves(g) : [],
         turnEndsAt: room.turnEndsAt,
         /** Time left on the turn when this snapshot was made; clients time from this, not their own clock. */
-        turnMsLeft: room.turnEndsAt === null ? null : Math.max(0, room.turnEndsAt - Date.now()),
+        turnMsLeft: room.turnEndsAt === null ? null : Math.max(0, room.turnEndsAt - now),
+        turnStartsAt: room.turnStartsAt ?? null,
+        /** Until the turn starts (0 once it has): clients keep the dice and tokens still meanwhile. */
+        turnStartsInMs: room.turnStartsAt == null ? 0 : Math.max(0, room.turnStartsAt - now),
+        /** Server clock when this snapshot was made, for clients' clock-offset estimate. */
+        serverNow: now,
         /** Lobby countdown: the game starts in this many ms; null when no countdown runs. */
-        startsInMs: room.lobby?.startsAt ? Math.max(0, room.lobby.startsAt - Date.now()) : null,
+        startsInMs: room.lobby?.startsAt ? Math.max(0, room.lobby.startsAt - now) : null,
         players: room.players.map(p => {
             const ps = g ? getPlayer(g, p.color) : undefined;
             return {

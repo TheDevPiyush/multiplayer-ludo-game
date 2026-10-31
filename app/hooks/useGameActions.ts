@@ -3,7 +3,8 @@ import { useSocket } from '@/components/SocketProvider';
 
 export type GameActionResult<T = unknown> =
     | { ok: true; data?: T; message?: string }
-    | { ok: false; error: string };
+    /** `room`: the server's current room, when it rejected the action (it acted on stale state). */
+    | { ok: false; error: string; room?: import('./useGameRoom').GameRoom };
 
 function emitWithAck<T>(
     socket: ReturnType<typeof useSocket>['socket'],

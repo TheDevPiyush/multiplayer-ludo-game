@@ -249,3 +249,50 @@ model Report {
   @@index([reporterId, reportedId, createdAt])
   @@index([resolvedAt, createdAt])
 }
+
+/// A push sent from the admin console, kept as an audit log.
+model AdminBroadcast {
+  id         String   @id @default(uuid())
+  title      String
+  body       String
+  /// App route opened on tap ("/" = home).
+  url        String   @default("/")
+  /// "all", or "users" for a hand-picked list.
+  audience   String
+  /// Users that had a device to send to.
+  recipients Int      @default(0)
+  /// Devices Expo accepted the push for.
+  devices    Int      @default(0)
+  sentById   String
+  sentBy     String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+/// A notice shown in the app (a modal, on opening and after sign-in) between `startsAt` and `endsAt`.
+model Announcement {
+  id          String   @id @default(uuid())
+  /// Shown in the modal's header.
+  title       String
+  /// Body, as HTML from the admin console's editor (rendered in a WebView).
+  html        String
+  startsAt    DateTime
+  endsAt      DateTime
+  /// "all", "accounts" (signed-in, not guests), "guests", or "users" (only `userIds`).
+  audience    String   @default("all")
+  userIds     String[] @default([])
+  /// Shown again on every app open while live; otherwise once per device.
+  everyOpen   Boolean  @default(false)
+  /// Higher shows first when several are live.
+  priority    Int      @default(0)
+  /// Paused announcements are never shown, whatever the dates.
+  active      Boolean  @default(true)
+  createdById String
+  createdBy   String?
+  updatedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([active, startsAt, endsAt])
+}

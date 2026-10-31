@@ -16,11 +16,18 @@ const RECEIPT_CHUNK = 300;
 const RECEIPT_DELAY_MS = 15 * 60_000;
 
 /**
- * What a push is about. Each has its own Android channel (the app creates them),
- * so people can turn reminders off and keep invites.
+ * What a push is about. Each has its own Android channel (app/util/push.ts creates
+ * them, all set to pop up with sound), so people can turn reminders off and keep invites.
+ * An app too old to have a channel shows the push on its fallback channel, which also pops up.
  */
-export type PushKind = 'invite' | 'friend' | 'online' | 'reminder';
-const CHANNEL: Record<PushKind, string> = { invite: 'invites', friend: 'friends', online: 'friends', reminder: 'reminders' };
+export type PushKind = 'invite' | 'friend' | 'online' | 'reminder' | 'announcement';
+const CHANNEL: Record<PushKind, string> = {
+    invite: 'invites',
+    friend: 'friend-alerts',
+    online: 'friend-alerts',
+    reminder: 'game-reminders',
+    announcement: 'announcements',
+};
 
 export interface PushMessage {
     title: string;
@@ -63,7 +70,7 @@ type ExpoMessage = {
     data: { url: string; kind: PushKind };
     channelId: string;
     sound: 'default';
-    priority: 'high' | 'normal';
+    priority: 'high';
 };
 type Ticket = { status: 'ok'; id: string } | { status: 'error'; message?: string; details?: { error?: string } };
 type Receipt = { status: 'ok' } | { status: 'error'; message?: string; details?: { error?: string } };
@@ -114,8 +121,17 @@ async function checkReceipts(byId: Map<string, string>) {
     if (dead.length) await removePushTokens(dead);
 }
 
+export interface PushResult {
+    /** Devices Expo accepted the push for. */
+    sent: number;
+    /** Devices whose app is gone (their tokens are removed). */
+    dead: number;
+    /** Devices in batches Expo couldn't be reached for. */
+    failed: number;
+}
+
 /** Sends to every device of every user given; drops tokens Expo says are dead. */
-export async function sendPushes(items: { userId: string; tokens: string[]; message: PushMessage }[], kind: PushKind) {
+export async function sendPushes(items: { userId: string; tokens: string[]; message: PushMessage }[], kind: PushKind): Promise<PushResult> {
     const messages: ExpoMessage[] = items.flatMap(({ tokens, message }) =>
         tokens.map(to => ({
             to,
@@ -124,11 +140,14 @@ export async function sendPushes(items: { userId: string; tokens: string[]; mess
             data: { url: message.url, kind },
             channelId: CHANNEL[kind],
             sound: 'default' as const,
-            priority: kind === 'invite' ? ('high' as const) : ('normal' as const),
+            // Every push is shown to the person, so high priority is what FCM expects: it is
+            // delivered right away, even to a phone in Doze, instead of when it next wakes.
+            priority: 'high' as const,
         })),
     );
     const dead: string[] = [];
     const pending = new Map<string, string>();
+    let failed = 0;
     for (let i = 0; i < messages.length; i += SEND_CHUNK) {
         const chunk = messages.slice(i, i + SEND_CHUNK);
         let tickets: Ticket[];
@@ -136,6 +155,7 @@ export async function sendPushes(items: { userId: string; tokens: string[]; mess
             tickets = await transport.send(chunk);
         } catch (e) {
             log.error('push send failed', { kind, count: chunk.length, error: (e as Error)?.message });
+            failed += chunk.length;
             continue;
         }
         tickets.forEach((t, j) => {
@@ -151,6 +171,7 @@ export async function sendPushes(items: { userId: string; tokens: string[]; mess
         }, RECEIPT_DELAY_MS).unref?.();
     }
     log.info('push sent', { kind, users: items.length, devices: messages.length, dead: dead.length || undefined });
+    return { sent: pending.size, dead: dead.length, failed };
 }
 
 /**

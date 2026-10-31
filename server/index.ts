@@ -2,11 +2,14 @@ import type { Request, Response } from 'express';
 import express from 'express';
 import { createServer } from 'http';
 
+import adminRouter from './admin/admin.routes.ts';
+import announcementsRouter from './announcements/announcements.routes.ts';
 import authRouter from './auth/auth.routes.ts';
 import { startGuestCleanup } from './auth/guest-cleanup.ts';
 import { loadBotPool } from './game/bots.ts';
 import gameRouter from './game/game.routes.ts';
 import { games } from './game/services.ts';
+import { warnAboutOpenTables } from './lib/db-security.ts';
 import { log, requestLogger } from './lib/logger.ts';
 import { rateLimit } from './lib/rate-limit.ts';
 import { startReminders } from './notifications/reminders.ts';
@@ -23,7 +26,9 @@ app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS ?? 1));
 app.use(requestLogger);
 // Per IP and generous: many mobile users can share one carrier IP. Per-user limits sit behind auth.
 app.use(rateLimit('ip', 300, 50));
-app.use(express.json({ limit: '16kb' }));
+const json = express.json({ limit: '16kb' });
+// Admin announcements carry HTML: their router parses the body itself, with a larger limit.
+app.use((req, res, next) => (req.path.startsWith('/admin/announcements') ? next() : json(req, res, next)));
 
 app.get('/', (_: Request, res: Response) => {
     res.send('Server is Live');
@@ -33,6 +38,8 @@ app.get('/health', (_: Request, res: Response) => {
     res.json({ ok: true, ...games.stats() });
 });
 
+app.use('/admin', adminRouter);
+app.use('/announcements', announcementsRouter);
 app.use('/auth', authRouter);
 app.use('/game', gameRouter);
 app.use('/rtc', rtcRouter);
@@ -46,6 +53,7 @@ const PORT = process.env.PORT || 8080;
 httpServer.listen(PORT, () => {
     log.info(`HTTP + Socket.io server running at :${PORT}`);
 });
+void warnAboutOpenTables();
 startNotificationCleanup();
 startGuestCleanup();
 startReminders(isUserOnline);

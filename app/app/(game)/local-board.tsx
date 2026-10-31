@@ -72,7 +72,9 @@ export default function LocalBoardScreen() {
         wasRolling.current = rolling;
     }, [rolling]);
     const isOver = state.phase === 'OVER';
-    const turnHex = COLOR_HEX[state.turn] ?? '#fff';
+    // The turn as shown: the previous player keeps it until their token has stopped (see useLocalGame).
+    const { shownTurn, shownSeat } = game;
+    const turnHex = COLOR_HEX[shownTurn] ?? '#fff';
     const humanCount = config.seats.filter(s => s.kind === 'human').length;
 
     const [lastDice, setLastDice] = useState<number | null>(null);
@@ -121,13 +123,13 @@ export default function LocalBoardScreen() {
                     name: seat?.name ?? p.color,
                     initials: (seat?.name ?? p.color).slice(0, 2).toUpperCase(),
                     avatarIcon: isBot ? 'laptop' : undefined,
-                    isActive: !isOver && p.color === state.turn,
+                    isActive: !isOver && p.color === shownTurn,
                     subtitle: p.rank ? `${RANK_LABEL[p.rank - 1]} place` : `${home}/4 home${isBot ? ` · ${seat?.level}` : ''}`,
                     subtitleColor: p.rank ? '#37BD6A' : undefined,
                 };
                 return strip;
             }),
-        [state, isOver, game.seatOf],
+        [state, isOver, shownTurn, game.seatOf],
     );
     // Each strip sits at its own home's corner (an empty cell keeps the other side in place).
     const [topStrips, bottomStrips] = stripRows(strips, turns);
@@ -137,17 +139,21 @@ export default function LocalBoardScreen() {
         return <PlayerStrip key={key} {...rest} />;
     };
 
-    const turnName = currentSeat?.name ?? state.turn;
-    const turnLabel = humanCount === 1 && currentSeat?.kind === 'human' ? 'Your turn' : `${turnName}'s turn`;
+    const turnName = shownSeat?.name ?? shownTurn;
+    const turnLabel = humanCount === 1 && shownSeat?.kind === 'human' ? 'Your turn' : `${turnName}'s turn`;
     const hint = rolling
         ? 'Rolling…'
-        : currentSeat?.kind === 'bot'
-            ? `${turnName} is thinking…`
-            : state.phase === 'ROLL'
-                ? 'Tap to roll'
-                : movable.length > 0
-                    ? 'Tap a token to move'
-                    : 'No moves…';
+        : !game.turnLive && shownTurn !== state.turn
+            ? 'Next turn…'
+            : shownSeat?.kind === 'bot'
+                ? `${turnName} is thinking…`
+                : !game.turnLive
+                    ? 'Get ready…'
+                    : state.phase === 'ROLL'
+                        ? 'Tap to roll'
+                        : movable.length > 0
+                            ? 'Tap a token to move'
+                            : 'No moves…';
 
 
     const ranking = isOver
@@ -212,6 +218,8 @@ export default function LocalBoardScreen() {
                     <RollingDice
                         value={state.dice ?? lastDice ?? 6}
                         rolling={rolling}
+                        result={game.rollResult}
+                        onSettled={game.diceSettled}
                         color={turnHex}
                         waiting={canRoll}
                         disabled={!canRoll}

@@ -15,7 +15,7 @@ import { ChatSheet } from '@/components/chat/ChatSheet';
 import { ReactionBubble } from '@/components/chat/ReactionBubble';
 import { ReactionPicker } from '@/components/chat/ReactionPicker';
 import AppDialog from '@/components/Dialog';
-import { RollingDice } from '@/components/ludo/Dice';
+import { DICE_ROLL_MS, RollingDice } from '@/components/ludo/Dice';
 import { BOARD_SIZE, COLOR_HEX, layoutTokens, stripRows, turnsFor } from '@/components/ludo/geometry';
 import { LudoBoard } from '@/components/ludo/LudoBoard';
 import { PlayerStrip, type PlayerStripProps } from '@/components/ludo/PlayerStrip';
@@ -25,7 +25,7 @@ import type { TurnDeadline } from '@/components/ludo/TurnTimer';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
 import { useGameActions } from '@/hooks/useGameActions';
-import { useGameRoom } from '@/hooks/useGameRoom';
+import { useGameRoom, useRoundTrip } from '@/hooks/useGameRoom';
 import { useRoomChat } from '@/hooks/useRoomChat';
 import { markHistoryStale } from '@/util/history-cache';
 import { useSocket } from '@/components/SocketProvider';
@@ -35,15 +35,14 @@ import { feedbackForEvents, haptic } from '@/util/feedback';
 import { supabase } from '@/util/supabase-client';
 
 
-const ROLL_ANIM_MS = 800;
+/** A roll stops waiting for the die to report it has landed after this long. */
+const DICE_WAIT_MS = DICE_ROLL_MS + 700;
 /** Autopilot turns for offline players (~2.5 s) are too short to be worth a ring. */
 const MIN_TIMER_RING_MS = 4_000;
 /** The last seconds of your turn tick (sound + haptic) before autopilot plays. */
 const TICK_SECONDS = 5;
-
-function sleep(ms: number) {
-    return new Promise<void>(resolve => setTimeout(resolve, ms));
-}
+/** Round trips above this turn the connection dot amber. */
+const SLOW_RTT_MS = 350;
 
 const palette = Colors['dark'];
 
@@ -65,6 +64,8 @@ export default function GameBoardScreen() {
 
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [rolling, setRolling] = useState(false);
+    /** The value the rolling die lands on, once known (it then lands by itself). */
+    const [rollResult, setRollResult] = useState<number | null>(null);
     /** Last rolled value — kept visible after turn changes until the next roll. */
     const [lastShownDice, setLastShownDice] = useState<number | null>(null);
     /** Color of the player whose roll is animating (for opponent rolls). */
@@ -91,7 +92,7 @@ export default function GameBoardScreen() {
     currentUserIdRef.current = currentUserId;
     rollingRef.current = rolling;
 
-    const { room, joinCount } = useGameRoom({
+    const { room, joinCount, refresh, applySnapshot } = useGameRoom({
         roomId,
         gameCode,
         onEvents: (events) => feedbackForEvents(events, color => color === myColorRef.current),
@@ -162,14 +163,39 @@ export default function GameBoardScreen() {
     // Music has faded out with the lobby; the game opens with its intro, once.
     useEffect(() => playEffect('intro'), []);
 
-    // The server restarts the turn timer whenever `turnEndsAt` changes; time it from
-    // `turnMsLeft` on arrival so a phone with a wrong clock still counts down right.
+    // The server restarts the turn timer whenever `turnEndsAt` changes. Its deadline is
+    // converted to this phone's clock on arrival (server clock sync), so a wrong device
+    // clock or a slow network doesn't make the ring run late.
     const turnEndsAt = room?.turnEndsAt ?? null;
+    const turnStartsAt = room?.turnStartsAt ?? null;
     const turnDeadline = useMemo<TurnDeadline | null>(() => {
-        const left = room?.turnMsLeft;
-        if (turnEndsAt === null || left == null || left < MIN_TIMER_RING_MS) return null;
-        return { endsAt: Date.now() + left, totalMs: left };
+        const endsAt = room?.localTurnEndsAt;
+        if (turnEndsAt === null || endsAt == null) return null;
+        const totalMs = turnStartsAt !== null ? turnEndsAt - turnStartsAt : room?.turnMsLeft ?? 0;
+        if (totalMs < MIN_TIMER_RING_MS) return null;
+        return { endsAt, totalMs };
     }, [turnEndsAt]);
+
+    // Between turns the server leaves a short pause (the last move finishing on every
+    // device, then the handoff). The dice and tokens wake up when the turn starts.
+    // Worked out during render (not in an effect), so the new turn never shows for a frame early.
+    const [, setTurnTick] = useState(0);
+    const localTurnStartsAt = room?.localTurnStartsAt ?? 0;
+    const turnLive = localTurnStartsAt <= Date.now();
+    useEffect(() => {
+        const wait = localTurnStartsAt - Date.now();
+        if (wait <= 0) return;
+        const t = setTimeout(() => setTurnTick(n => n + 1), wait);
+        return () => clearTimeout(t);
+    }, [localTurnStartsAt]);
+
+    // The turn as players see it: the previous player keeps it (pill, strip, dice colour)
+    // until their token has stopped and the handoff pause is over.
+    const shownTurnRef = useRef<string | null>(null);
+    if (turnLive || shownTurnRef.current === null) shownTurnRef.current = currentColor;
+    const shownColor = shownTurnRef.current as typeof currentColor;
+    const shownIsMine = !!selfPlayer && selfPlayer.color === shownColor && room?.status === 'PLAYING';
+    const rtt = useRoundTrip();
 
     // Persist active room
     useEffect(() => {
@@ -211,21 +237,38 @@ export default function GameBoardScreen() {
     }, [isMyTurn, turnDeadline]);
 
     // ── Dice animation ──
+    // The die lands by itself once it has the result and reports when it is at rest;
+    // `rolling` stays on until then, so the screen doesn't re-render under it mid-air.
+    const diceWaiter = useRef<(() => void) | null>(null);
+    const waitForDice = useCallback(() => new Promise<void>(resolve => {
+        const done = () => {
+            clearTimeout(timer);
+            if (diceWaiter.current === done) diceWaiter.current = null;
+            resolve();
+        };
+        const timer = setTimeout(done, DICE_WAIT_MS);
+        diceWaiter.current = done;
+    }), []);
+    const onDiceSettled = useCallback(() => diceWaiter.current?.(), []);
+
     const runRollAnimation = useCallback(async (finalValue: number, rollerColor: string) => {
         if (rollingRef.current) return;
 
         playEffect('roll');
+        const settled = waitForDice();
+        setRollResult(finalValue);
         setRolling(true);
         setRollingColor(rollerColor);
         rollingRef.current = true;
 
-        await sleep(ROLL_ANIM_MS);
+        await settled;
 
         setLastShownDice(finalValue);
         setRolling(false);
+        setRollResult(null);
         setRollingColor(null);
         rollingRef.current = false;
-    }, []);
+    }, [waitForDice]);
 
     runRollAnimationRef.current = runRollAnimation;
 
@@ -233,47 +276,61 @@ export default function GameBoardScreen() {
         if (!isMyTurn || rolling || diceValue !== null || !isRealtimeReady || !selfPlayer) return;
 
         playEffect('roll');
+        setRollResult(null);
         setRolling(true);
         setRollingColor(selfPlayer.color);
         rollingRef.current = true;
 
         try {
-            const [result] = await Promise.all([rollDice(), sleep(ROLL_ANIM_MS)]);
+            const result = await rollDice();
 
             if (!result.ok) {
                 console.warn('[board] rollDice failed:', result.error);
-                setDialog({
-                    visible: true,
-                    title: 'Could not roll',
-                    message: result.error,
-                    actions: undefined,
-                });
+                // Rejected because this phone was behind (e.g. the turn had already passed):
+                // take the server's room and carry on, no dialog. Otherwise fetch it.
+                if (result.room) applySnapshot(result.room);
+                else void refresh();
+                if (!result.room && !isRealtimeReady) {
+                    setDialog({ visible: true, title: 'Could not roll', message: result.error, actions: undefined });
+                }
                 return;
             }
-            setLastShownDice(result.data?.diceValue ?? null);
+            const value = result.data?.diceValue ?? null;
+            if (value !== null) {
+                const settled = waitForDice();
+                setRollResult(value);
+                await settled;
+            }
+            setLastShownDice(value);
             haptic.medium();
         } finally {
             setRolling(false);
+            setRollResult(null);
             setRollingColor(null);
             rollingRef.current = false;
         }
     };
 
     const visibleDice = diceValue ?? lastShownDice;
-    const canRoll = isMyTurn && diceValue === null && !rolling && isRealtimeReady;
+    const canRoll = isMyTurn && diceValue === null && !rolling && isRealtimeReady && turnLive;
 
     // No-move passes and single-option moves are played by the server
     // (after a short pause so the dice result stays visible).
     const movable = room?.movableTokens ?? [];
 
     // Stable identity so memoised tokens don't re-render on every update; reads the latest state from a ref.
-    const pressStateRef = useRef({ isMyTurn, diceValue, selfPlayer, movable, moveToken });
-    pressStateRef.current = { isMyTurn, diceValue, selfPlayer, movable, moveToken };
+    const pressStateRef = useRef({ isMyTurn, diceValue, selfPlayer, movable, moveToken, applySnapshot, refresh });
+    pressStateRef.current = { isMyTurn, diceValue, selfPlayer, movable, moveToken, applySnapshot, refresh };
     const handleTokenPress = useCallback(async (tokenIndex: number) => {
         const s = pressStateRef.current;
         if (!s.isMyTurn || s.diceValue === null || !s.selfPlayer) return;
         if (!s.movable.includes(tokenIndex)) return;
-        await s.moveToken(tokenIndex);
+        const result = await s.moveToken(tokenIndex);
+        if (!result.ok) {
+            // Stale state (the server auto-played, or the turn passed): resync instead of erroring.
+            if (result.room) s.applySnapshot(result.room);
+            else void s.refresh();
+        }
     }, []);
 
     /** Turns the board so your own home is bottom-right on your phone. */
@@ -286,10 +343,10 @@ export default function GameBoardScreen() {
         return layout.map(t => ({
             ...t,
             userId: t.owner,
-            canMove: isMyTurn && t.owner === currentUserId && diceValue !== null && movable.includes(t.tokenIndex),
+            canMove: isMyTurn && turnLive && !rolling && t.owner === currentUserId && diceValue !== null && movable.includes(t.tokenIndex),
             captured: !!capturedKey && capturedKey.startsWith(`${t.owner}:${t.tokenIndex}:`) && t.pos === 0,
         }));
-    }, [players, isMyTurn, diceValue, currentUserId, capturedKey, movable, turns]);
+    }, [players, isMyTurn, turnLive, rolling, diceValue, currentUserId, capturedKey, movable, turns]);
 
     // ── Strip data ──
     const stripPlayers = useMemo(
@@ -305,7 +362,7 @@ export default function GameBoardScreen() {
                     color: p.color,
                     name: isMe ? 'You' : `@${p.user.username}`,
                     initials: p.user.username.slice(0, 2).toUpperCase(),
-                    isActive: p.color === currentColor && room?.status === 'PLAYING',
+                    isActive: p.color === shownColor && room?.status === 'PLAYING',
                     dimmed: !isOnline,
                     subtitle: !isOnline
                         ? disconnectingIds.has(p.userId) ? 'reconnecting…' : 'offline'
@@ -313,11 +370,12 @@ export default function GameBoardScreen() {
                     subtitleColor: !isOnline ? '#E8A520' : p.rank ? '#37BD6A' : undefined,
                     statusIcon: blocked ? 'user-times' : muted ? 'ban' : undefined,
                     statusIconColor: muted ? palette.mutedText : undefined,
-                    turnDeadline: p.color === currentColor ? turnDeadline : null,
+                    // The new player's ring appears with their turn, not during the handoff.
+                    turnDeadline: p.color === currentColor && p.color === shownColor ? turnDeadline : null,
                 };
                 return strip;
             }),
-        [players, currentColor, currentUserId, chat.muted, chat.blocked, disconnectingIds, room?.status, turnDeadline],
+        [players, currentColor, shownColor, currentUserId, chat.muted, chat.blocked, disconnectingIds, room?.status, turnDeadline],
     );
 
     // Each strip sits at its own home's corner (an empty cell keeps the other side in place).
@@ -390,10 +448,10 @@ export default function GameBoardScreen() {
                 <RNView style={styles.statusChip}>
                     <RNView style={[
                         styles.statusDot,
-                        { backgroundColor: isRealtimeReady ? '#37BD6A' : '#E8A520' },
+                        { backgroundColor: !isRealtimeReady ? '#E8A520' : rtt !== null && rtt > SLOW_RTT_MS ? '#E8A520' : '#37BD6A' },
                     ]} />
                     <Text weight="medium" style={styles.statusText}>
-                        {connectionPhase === 'connected' ? 'Live' :
+                        {connectionPhase === 'connected' ? (rtt !== null ? `Live · ${rtt} ms` : 'Live') :
                          connectionPhase === 'offline' ? 'No network' :
                          connectionPhase === 'reconnecting' ? 'Reconnecting…' :
                          connectionPhase === 'connecting' ? 'Connecting…' :
@@ -456,9 +514,9 @@ export default function GameBoardScreen() {
             <RNView style={{ paddingBottom: insets.bottom + 10 }}>
                 <RNView style={styles.bottomBar}>
                 <RNView style={styles.turnPill}>
-                    <RNView style={[styles.turnDot, { backgroundColor: COLOR_HEX[currentColor] ?? '#fff' }]} />
+                    <RNView style={[styles.turnDot, { backgroundColor: COLOR_HEX[shownColor] ?? '#fff' }]} />
                     <Text weight="semiBold" style={styles.turnText}>
-                        {isMyTurn ? 'Your turn' : `${currentColor[0]}${currentColor.slice(1).toLowerCase()}'s turn`}
+                        {shownIsMine ? 'Your turn' : `${shownColor[0]}${shownColor.slice(1).toLowerCase()}'s turn`}
                     </Text>
                 </RNView>
 
@@ -466,13 +524,17 @@ export default function GameBoardScreen() {
                     <RollingDice
                         value={visibleDice ?? 6}
                         rolling={rolling}
-                        color={COLOR_HEX[rolling ? rollingColor ?? currentColor : currentColor] ?? '#888'}
+                        result={rollResult}
+                        onSettled={onDiceSettled}
+                        color={COLOR_HEX[rolling ? rollingColor ?? shownColor : shownColor] ?? '#888'}
                         waiting={canRoll}
                         disabled={!canRoll}
                         onPress={handleRollDice}
                     />
                     <Text weight="medium" style={styles.diceHint}>
-                        {!isMyTurn
+                        {!turnLive && shownColor !== currentColor && !rolling
+                            ? 'Next turn…'
+                            : !shownIsMine
                             ? rolling
                                 ? 'Rolling…'
                                 : diceValue !== null
@@ -480,9 +542,12 @@ export default function GameBoardScreen() {
                                     : 'Waiting…'
                             : rolling
                                 ? 'Rolling…'
-                                : diceValue !== null
-                                    ? 'Tap a token to move'
-                                    : 'Tap to roll'}
+                                : !turnLive
+                                    // Your own roll still landing, or a bonus turn about to start.
+                                    ? diceValue !== null ? 'Rolling…' : 'Get ready…'
+                                    : diceValue !== null
+                                        ? 'Tap a token to move'
+                                        : 'Tap to roll'}
                     </Text>
                 </RNView>
 

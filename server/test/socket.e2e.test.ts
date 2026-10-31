@@ -21,7 +21,7 @@ const db: Persistence = {
 };
 
 const games = new GameService(db, null, { toRoom: (id, ev, p) => getIO()?.to(`room:${id}`).emit(ev, p) }, {
-    turnMs: 60_000, afkTurnMs: 60_000, autoDelayMs: 1, flushMs: 60_000, idleEvictMs: 60_000,
+    turnMs: 60_000, afkTurnMs: 60_000, autoDelayMs: 1, rollAnimMs: 0, hopMs: 0, captureAnimMs: 0, handoffMs: 0, startPauseMs: 0, lagGraceMs: 0, flushMs: 60_000, idleEvictMs: 60_000,
     balanceStrength: 0.6, rng: Math.random,
 });
 
@@ -96,6 +96,32 @@ test('two players: join, start, roll — both receive the same versioned state',
     expect(rolled).toBeDefined();
     expect(rolled!.room.status).toBe('PLAYING');
     for (let i = 1; i < syncsB.length; i++) expect(syncsB[i]!.version).toBeGreaterThan(syncsB[i - 1]!.version);
+});
+
+test('heartbeat reports server time and room version; a rejected roll carries the current room', async () => {
+    const room = await games.createRoom('hana', { maxPlayers: 2 });
+    await games.joinRoom('ivan', room.gameCode);
+    const [h, i] = await Promise.all([client('hana'), client('ivan')]);
+    await ask(h, 'room:join', { roomId: room.id, gameCode: room.gameCode });
+    await ask(i, 'room:join', { roomId: room.id, gameCode: room.gameCode });
+
+    // Not joined to that room: no version leaks.
+    const outsider = await ask(i, 'room:ping', { roomId: 'someone-elses-room' });
+    expect(outsider.ok).toBe(true);
+    expect(outsider.version).toBeNull();
+
+    const before = Date.now();
+    const ping = await ask(h, 'room:ping', { roomId: room.id });
+    expect(ping.ok).toBe(true);
+    expect(ping.now).toBeGreaterThanOrEqual(before);
+    expect(ping.version).toBe(room.version);
+
+    expect((await ask(h, 'game:start', { gameCode: room.gameCode })).ok).toBe(true);
+    const wrong = await ask(i, 'game:roll-dice', { gameCode: room.gameCode });
+    expect(wrong.ok).toBe(false);
+    // The answer has the room as the server has it, so the client can resync at once.
+    expect(wrong.room.version).toBe(room.version);
+    expect(wrong.room.currentTurnColor).toBe('RED');
 });
 
 test('a briefly dropped connection is recovered and stays usable (app minimised)', async () => {

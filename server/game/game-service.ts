@@ -52,8 +52,23 @@ export interface GameServiceOptions {
     turnMs: number;
     /** Turn time for disconnected / repeatedly idle players. */
     afkTurnMs: number;
-    /** Pause before auto-pass / auto-move so clients can show the dice. */
+    /** Pause before auto-pass / auto-move so clients can show the dice (counted after the roll animation). */
     autoDelayMs: number;
+    /** How long clients animate a roll; nothing plays on until it has landed. */
+    rollAnimMs: number;
+    /** One cell-to-cell token hop on clients (app: geometry.ts HOP_MS). */
+    hopMs: number;
+    /** A captured token's slide back to base on clients, from the move's start. */
+    captureAnimMs: number;
+    /** Extra pause when the turn passes to another player, so every device shows the handoff. */
+    handoffMs: number;
+    /** Pause after the game starts (boards open, intro plays) before the first turn. */
+    startPauseMs: number;
+    /**
+     * A human's turn auto-plays this long after the deadline clients show, so a tap
+     * sent just before the ring runs out still counts on a slow connection.
+     */
+    lagGraceMs: number;
     /** How often dirty rooms are written to Postgres. */
     flushMs: number;
     /** How long ended rooms (or rooms nobody is connected to) stay in memory. */
@@ -93,7 +108,14 @@ export const cryptoRng: Rng = () => {
 export const DEFAULT_OPTIONS: GameServiceOptions = {
     turnMs: Number(process.env.TURN_MS ?? 15_000),
     afkTurnMs: Number(process.env.AFK_TURN_MS ?? 2_500),
-    autoDelayMs: Number(process.env.AUTO_DELAY_MS ?? 900),
+    autoDelayMs: Number(process.env.AUTO_DELAY_MS ?? 650),
+    // The app's die lands in 1.08 s (two hops, then the slow-down into the face), plus the trip to the phone.
+    rollAnimMs: 1_200,
+    hopMs: 135,
+    captureAnimMs: 940,
+    handoffMs: Number(process.env.HANDOFF_MS ?? 600),
+    startPauseMs: 1_500,
+    lagGraceMs: Number(process.env.LAG_GRACE_MS ?? 1_000),
     flushMs: Number(process.env.FLUSH_MS ?? 10_000),
     idleEvictMs: Number(process.env.IDLE_EVICT_MS ?? 30 * 60_000),
     unwatchedPauseMs: Number(process.env.UNWATCHED_PAUSE_MS ?? 60_000),
@@ -216,12 +238,13 @@ export class GameService {
                 const existing = this.rooms.get(room.id);
                 if (existing) return existing;
                 room.turnEndsAt = null;
+                room.turnStartsAt = null;
                 // Presence is live-only; players reappear as their sockets rejoin. Bots are always there.
                 for (const p of room.players) if (p.status !== 'LEFT') p.status = p.isBot ? 'CONNECTED' : 'DISCONNECTED';
                 // Lobby timings don't survive a restart: give the room a fresh fill window.
                 room.lobby = room.status === 'WAITING' && !room.isPrivate ? this.newLobby() : undefined;
                 this.cache(room);
-                if (room.status === 'PLAYING') this.scheduleTurn(room);
+                if (room.status === 'PLAYING') this.scheduleTurn(room, this.opts.handoffMs);
                 return room;
             })().finally(() => this.loading.delete(loadKey));
             this.loading.set(loadKey, pending);
@@ -563,7 +586,7 @@ export class GameService {
         room.status = 'PLAYING';
         room.startedAt = new Date().toISOString();
         this.lastWatched.set(room.id, Date.now());
-        this.scheduleTurn(room);
+        this.scheduleTurn(room, this.opts.startPauseMs);
         void this.snapshots?.index(room).catch(e => log.error('snapshot index failed', { room: room.gameCode, error: (e as Error)?.message }));
         await this.db.saveRoom(room);
         this.commit(room, [{ type: 'STARTED' }, { type: 'TURN', color: room.game.turn, reason: 'next' }], { persist: false });
@@ -760,10 +783,28 @@ export class GameService {
         if (r.state.phase === 'OVER') {
             this.endGame(room, r.events);
         } else {
-            this.scheduleTurn(room);
+            this.scheduleTurn(room, this.settleMs(r.events));
             this.commit(room, r.events);
         }
         return r.events;
+    }
+
+    /**
+     * How long clients take to show these events (dice landing, token hops,
+     * a capture sliding home), plus a handoff pause when the turn changes hands.
+     * The next turn starts after it, so no device is still animating the last one.
+     */
+    private settleMs(events: GameEvent[]): number {
+        let ms = 0;
+        for (const e of events) {
+            if (e.type === 'ROLLED') ms = Math.max(ms, this.opts.rollAnimMs);
+            // Leaving base is one big hop (twice a normal one).
+            else if (e.type === 'MOVED') ms = Math.max(ms, e.from === 0 ? 2 * this.opts.hopMs : e.path.length * this.opts.hopMs);
+            else if (e.type === 'CAPTURED') ms = Math.max(ms, this.opts.captureAnimMs);
+        }
+        const turn = events.find(e => e.type === 'TURN');
+        if (turn?.type === 'TURN' && turn.reason !== 'extra-roll') ms += this.opts.handoffMs;
+        return ms;
     }
 
     private recordMoves(room: LiveRoom, dice: number | null, events: GameEvent[]) {
@@ -782,6 +823,7 @@ export class GameService {
         room.endedAt = new Date().toISOString();
         room.winnerId = userIdOf(room, g.ranking[0]!) ?? null;
         room.turnEndsAt = null;
+        room.turnStartsAt = null;
         this.commit(room, events, { persist: false });
         this.dirty.delete(room.id);
         this.paused.delete(room.id);
@@ -846,18 +888,29 @@ export class GameService {
         this.timers.delete(roomId);
     }
 
-    private scheduleTurn(room: LiveRoom) {
+    /**
+     * Arms the current turn's timer. `settleMs` (after an action) is how long
+     * clients need to show what just happened: the turn, its countdown, bots and
+     * autopilot all start after it. Without it a turn already settling keeps its start.
+     */
+    private scheduleTurn(room: LiveRoom, settleMs?: number) {
         this.clearTimer(room.id);
         const g = room.game;
         if (!g || g.phase === 'OVER' || room.status !== 'PLAYING') {
             room.turnEndsAt = null;
+            room.turnStartsAt = null;
             return;
         }
+
+        const now = Date.now();
+        const startsAt = settleMs !== undefined ? now + settleMs : Math.max(room.turnStartsAt ?? 0, now);
+        room.turnStartsAt = startsAt;
+        const wait = startsAt - now;
 
         const auto = autoAction(g);
         if (auto) {
             room.turnEndsAt = null;
-            this.timers.set(room.id, setTimeout(() => this.runTimer(room.id, auto, 'auto'), this.opts.autoDelayMs));
+            this.timers.set(room.id, setTimeout(() => this.runTimer(room.id, auto, 'auto'), wait + this.opts.autoDelayMs));
             return;
         }
 
@@ -865,14 +918,16 @@ export class GameService {
         const player = room.players.find(p => p.userId === userId);
         if (player?.isBot) {
             // The usual turn timer shows, but the bot plays after a human-like pause.
-            room.turnEndsAt = Date.now() + this.opts.turnMs;
-            this.timers.set(room.id, setTimeout(() => this.runTimer(room.id, null, 'bot'), this.between(this.opts.botThinkMs)));
+            room.turnEndsAt = startsAt + this.opts.turnMs;
+            this.timers.set(room.id, setTimeout(() => this.runTimer(room.id, null, 'bot'), wait + this.between(this.opts.botThinkMs)));
             return;
         }
         const afk = !player || player.status !== 'CONNECTED' || (room.timeouts[player.userId] ?? 0) >= AFK_AFTER_TIMEOUTS;
         const ms = afk ? this.opts.afkTurnMs : this.opts.turnMs;
-        room.turnEndsAt = Date.now() + ms;
-        this.timers.set(room.id, setTimeout(() => this.runTimer(room.id, null, 'timeout'), ms));
+        room.turnEndsAt = startsAt + ms;
+        // Connected players get the lag grace on top of the deadline they see.
+        const grace = afk ? 0 : this.opts.lagGraceMs;
+        this.timers.set(room.id, setTimeout(() => this.runTimer(room.id, null, 'timeout'), wait + ms + grace));
     }
 
     private runTimer(roomId: string, auto: Action | null, by: 'auto' | 'timeout' | 'bot') {
@@ -992,6 +1047,22 @@ export class GameService {
             this.lastWatched.delete(id);
             this.paused.delete(id);
         }
+    }
+
+    /** A room already in memory, without loading it (heartbeats, rejected actions). */
+    peek(key: { id?: string; gameCode?: string }): LiveRoom | undefined {
+        const id = key.id ?? (key.gameCode ? this.codeToId.get(normalizeCode(key.gameCode)) : undefined);
+        return id ? this.rooms.get(id) : undefined;
+    }
+
+    /** Lobbies and games in progress (admin console). */
+    liveRooms(): { room: LiveRoom; paused: boolean; online: number }[] {
+        const out: { room: LiveRoom; paused: boolean; online: number }[] = [];
+        for (const [id, room] of this.rooms) {
+            if (room.status !== 'WAITING' && room.status !== 'PLAYING') continue;
+            out.push({ room, paused: this.paused.has(id), online: this.onlineCounter(id) });
+        }
+        return out;
     }
 
     /** For tests / metrics. */
