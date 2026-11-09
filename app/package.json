@@ -12,8 +12,11 @@
     "@expo/vector-icons": "^15.0.3",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/netinfo": "^12.0.1",
+    "@react-native-firebase/analytics": "23.8.8",
+    "@react-native-firebase/app": "23.8.8",
     "@react-navigation/bottom-tabs": "^7.15.13",
     "@react-navigation/native": "^7.1.8",
+    "@sentry/react-native": "~7.2.0",
     "@supabase/supabase-js": "^2.105.3",
     "dotenv": "^17.4.2",
     "expo": "~54.0.33",
@@ -55,6 +58,16 @@
   "reanimated": {
     "staticFeatureFlags": {
       "ANDROID_SYNCHRONOUSLY_UPDATE_UI_PROPS": true
+    }
+  },
+  "expo": {
+    "autolinking": {
+      "ios": {
+        "exclude": [
+          "@react-native-firebase/app",
+          "@react-native-firebase/analytics"
+        ]
+      }
     }
   },
   "private": true

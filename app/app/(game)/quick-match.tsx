@@ -116,7 +116,7 @@ export default function QuickMatchScreen() {
             </RNView>
 
             {!error && (
-                <Text weight="medium" style={styles.footnote}>Games start within seconds. You can leave the lobby any time.</Text>
+                <Text weight="medium" style={styles.footnote}>Games start within seconds. Computer players join when few people are online.</Text>
             )}
         </RNView>
     );

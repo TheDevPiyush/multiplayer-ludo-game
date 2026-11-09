@@ -43,6 +43,7 @@ import { useRoomChat, type Bubble } from '@/hooks/useRoomChat';
 import { useSocket } from '@/components/SocketProvider';
 import { supabase } from '@/util/supabase-client';
 import { setActiveRoom } from '@/util/active-room';
+import { track } from '@/util/analytics';
 import { roomInviteUrl } from '@/util/links';
 
 const GRID_GAP = 12;
@@ -201,6 +202,9 @@ export default function LobbyScreen() {
         roomId,
         gameCode: roomCode,
         onEvent: (e) => {
+            if (e.type === 'started' && room) {
+                track('game_start', { mode: room.isPrivate ? 'online_private' : 'online_public', players: room.players.length });
+            }
             // In 2-player rooms the opponent's pick moves you to the opposite corner — say so.
             if (e.type !== 'colors' || e.byUserId === currentUserId) return;
             const mine = e.changes.find(c => c.userId === currentUserId);
@@ -384,6 +388,7 @@ export default function LobbyScreen() {
         const url = roomInviteUrl(roomCode);
         try {
             await Share.share({ message: `Join my Ludo game! Tap to join: ${url}\nor enter room code ${roomCode} in Simple Ludo.` });
+            track('invite_share', { source: 'lobby' });
         } catch {
             await Clipboard.setStringAsync(url);
             setDialog({ visible: true, title: 'Link copied', message: url, actions: undefined });
@@ -491,6 +496,7 @@ export default function LobbyScreen() {
                                 </RNView>
                             </RNView>
                         </GameTile>
+                        <Text weight="medium" style={styles.publicNote}>Computer players join when few people are online.</Text>
                     </Animated.View>
                 ) : (
                     <Animated.View entering={FadeInDown.duration(380)}>
@@ -742,6 +748,7 @@ const styles = StyleSheet.create({
     publicCard: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, paddingLeft: 2, paddingRight: 16 },
     publicInfo: { flex: 1, gap: 6 },
     publicTitle: { fontSize: 17, lineHeight: 22, color: '#FFFFFF' },
+    publicNote: { fontSize: 12, color: 'rgba(255,255,255,0.7)', textAlign: 'center', marginTop: 8 },
     publicActions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
     publicCode: {
         flexShrink: 1,

@@ -2,7 +2,7 @@
 import 'react-native-get-random-values';
 import { ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
-import { useRouter, Stack } from 'expo-router';
+import { ErrorBoundary as RouterErrorBoundary, useRouter, Stack, type ErrorBoundaryProps } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import * as SystemUI from 'expo-system-ui';
@@ -21,10 +21,16 @@ import { AudioDirector } from '@/components/AudioDirector';
 import { AnnouncementsHost } from '@/components/AnnouncementsHost';
 import { friendsHref, setInitialRouteDone, takePendingLink } from '@/util/links';
 import { listenForNotificationTaps, startPushTokenSync } from '@/util/push';
+import { setAnalyticsUser } from '@/util/analytics';
+import { reportError, setMonitoringUser, startMonitoring } from '@/util/monitoring';
 
-export {
-  ErrorBoundary,
-} from 'expo-router';
+startMonitoring();
+
+/** The router's error screen, plus a report: errors caught here never reach the global crash handler. */
+export function ErrorBoundary(props: ErrorBoundaryProps) {
+  useEffect(() => reportError(props.error), [props.error]);
+  return <RouterErrorBoundary {...props} />;
+}
 
 export const unstable_settings = {
   initialRouteName: '(login)',
@@ -112,6 +118,9 @@ export default function RootLayout() {
     // or they yank players out of whatever screen they're on.
     let signedIn: boolean | null = null;
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      // Before the check below: a guest saving their account stays signed in but changes type.
+      setAnalyticsUser(session?.user.id ?? null, session?.user.is_anonymous === true);
+      setMonitoringUser(session?.user.id ?? null);
       const next = !!session;
       if (next === signedIn) return;
       signedIn = next;

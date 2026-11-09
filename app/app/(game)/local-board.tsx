@@ -14,6 +14,7 @@ import { Token } from '@/components/ludo/Token';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
 import { useLocalGame, type LocalGameConfig } from '@/hooks/useLocalGame';
+import { track, type GameMode } from '@/util/analytics';
 import { playEffect } from '@/util/audio';
 import { feedbackForEvents, haptic } from '@/util/feedback';
 
@@ -76,6 +77,24 @@ export default function LocalBoardScreen() {
     const { shownTurn, shownSeat } = game;
     const turnHex = COLOR_HEX[shownTurn] ?? '#fff';
     const humanCount = config.seats.filter(s => s.kind === 'human').length;
+
+    // ── Measuring ──
+    const mode: GameMode = humanCount === 0 ? 'watch_bots' : humanCount === 1 ? 'vs_computer' : 'pass_and_play';
+    const players = config.seats.length;
+    const startedAt = useRef(Date.now());
+    useEffect(() => track('game_start', { mode, players }), []);
+    useEffect(() => {
+        if (!isOver) return;
+        const seconds = Math.round((Date.now() - startedAt.current) / 1000);
+        const you = mode === 'vs_computer' ? config.seats.find(s => s.kind === 'human')?.color : undefined;
+        track('game_finish', { mode, players, seconds, ...(you ? { won: state.ranking[0] === you ? 1 : 0 } : {}) });
+    }, [isOver]);
+    const restart = () => {
+        if (isOver) track('rematch', { mode });
+        startedAt.current = Date.now();
+        track('game_start', { mode, players });
+        game.restart();
+    };
 
     const [lastDice, setLastDice] = useState<number | null>(null);
 
@@ -174,7 +193,7 @@ export default function LocalBoardScreen() {
                         {config.dynamicDice ? ' · Easy dice' : ' · Hard dice'}
                     </Text>
                 </RNView>
-                <TouchableOpacity onPress={game.restart} style={styles.iconBtn}>
+                <TouchableOpacity onPress={restart} style={styles.iconBtn}>
                     <FontAwesome name="refresh" size={13} color={palette.mutedText} />
                 </TouchableOpacity>
             </RNView>
@@ -254,7 +273,7 @@ export default function LocalBoardScreen() {
                             <TouchableOpacity style={[styles.winBtn, styles.winBtnGhost]} onPress={goHome} activeOpacity={0.85}>
                                 <Text weight="bold" style={styles.winBtnText}>Home</Text>
                             </TouchableOpacity>
-                            <TouchableOpacity style={styles.winBtn} onPress={game.restart} activeOpacity={0.85}>
+                            <TouchableOpacity style={styles.winBtn} onPress={restart} activeOpacity={0.85}>
                                 <Text weight="bold" style={styles.winBtnText}>Play again</Text>
                             </TouchableOpacity>
                         </RNView>

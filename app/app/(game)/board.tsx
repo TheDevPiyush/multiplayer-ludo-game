@@ -30,6 +30,7 @@ import { useRoomChat } from '@/hooks/useRoomChat';
 import { markHistoryStale } from '@/util/history-cache';
 import { useSocket } from '@/components/SocketProvider';
 import { setActiveRoom } from '@/util/active-room';
+import { track } from '@/util/analytics';
 import { playEffect } from '@/util/audio';
 import { feedbackForEvents, haptic } from '@/util/feedback';
 import { supabase } from '@/util/supabase-client';
@@ -127,6 +128,14 @@ export default function GameBoardScreen() {
             if (e.type === 'over') {
                 markHistoryStale();
                 setWinnerInfo({ winnerId: e.winnerId, winnerColor: e.winnerColor });
+                if (room) {
+                    track('game_finish', {
+                        mode: room.isPrivate ? 'online_private' : 'online_public',
+                        players: room.players.length,
+                        seconds: room.startedAt ? Math.round((Date.now() - Date.parse(room.startedAt)) / 1000) : 0,
+                        won: e.winnerId === currentUserIdRef.current ? 1 : 0,
+                    });
+                }
             }
             if (e.type === 'cancelled') {
                 showError('Room ended', 'The room has been closed.');

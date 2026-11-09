@@ -30,13 +30,25 @@ function googleServicesFile(): string | undefined {
     return existsSync(file) ? file : undefined;
 }
 
+/**
+ * Uploads source maps to Sentry during release builds. Needs SENTRY_AUTH_TOKEN, SENTRY_ORG and
+ * SENTRY_PROJECT (EAS environment variables). Without the token the plugin stays off, so builds
+ * never fail on it: crashes are still reported, just with minified stack traces.
+ */
+function sentryPlugin(): NonNullable<ExpoConfig['plugins']> {
+    if (!process.env.SENTRY_AUTH_TOKEN) return [];
+    return [['@sentry/react-native/expo', { organization: process.env.SENTRY_ORG, project: process.env.SENTRY_PROJECT }]];
+}
+
 export default ({ config }: ConfigContext): ExpoConfig => {
     const host = linkHost();
     const android = { ...config.android, googleServicesFile: googleServicesFile() };
-    if (!host) return { ...(config as ExpoConfig), android };
+    const plugins = [...(config.plugins ?? []), ...sentryPlugin()];
+    if (!host) return { ...(config as ExpoConfig), android, plugins };
 
     return {
         ...(config as ExpoConfig),
+        plugins,
         ios: {
             ...config.ios,
             associatedDomains: [`applinks:${host}`],

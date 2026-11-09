@@ -26,6 +26,7 @@ import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useIsGuest } from '@/hooks/useIsGuest';
 import { leaveGuest, LEAVE_GUEST_DIALOG, takenDialog } from '@/util/guest';
 import { VolumeSlider } from '@/components/VolumeSlider';
+import { track } from '@/util/analytics';
 import { playEffect, setAudioSettings, useAudioSettings } from '@/util/audio';
 import { forgetPushToken } from '@/util/push';
 import { supabase } from '@/util/supabase-client';
@@ -208,6 +209,7 @@ export default function ProfileTabScreen() {
   const shareProfile = async () => {
     if (!user?.username) return;
     await Share.share({ message: `Challenge me on Simple Ludo! My username: @${user.username}` });
+    track('invite_share', { source: 'profile' });
   };
 
   const editUsername = () => {

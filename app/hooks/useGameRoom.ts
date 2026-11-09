@@ -33,6 +33,7 @@ export type GameRoom = {
     currentDice: number | null;
     winnerId: string | null;
     createdById: string;
+    startedAt: string | null;
     players: RoomPlayer[];
     /** Server state version — updates older than the current one are dropped. */
     version: number;

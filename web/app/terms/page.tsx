@@ -42,8 +42,9 @@ export default function Terms() {
             <h2>3. A game of skill and chance, for fun</h2>
             <p>
                 {SITE.name} is a free game for entertainment. There is no betting, real-money play or prize of any
-                kind. To keep games close and fun, casual games may use “dynamic dice”, which gently adjust the odds
-                of each roll. Every number can always come up.
+                kind. To keep games close and fun, every game uses “dynamic dice”, which adjust the odds of each roll
+                based on how the game is going. Every number can always come up, and what you spend never affects the
+                dice. In public rooms, computer players join when few people are online.
             </p>
 
             <h2>4. Play fair and be kind</h2>

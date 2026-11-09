@@ -6,6 +6,7 @@ import Animated, { FadeIn, ZoomIn } from 'react-native-reanimated';
 
 import { GameTile } from '@/components/GameTile';
 import { Text } from '@/components/Themed';
+import { track } from '@/util/analytics';
 import { clearPendingJoin, setPendingLink } from '@/util/links';
 import { joinRoomByCode } from '@/util/enter-room';
 
@@ -43,6 +44,7 @@ export default function JoinFromLinkScreen() {
                 setError(result.error);
                 return;
             }
+            track('invite_join', {});
             router.replace(result.href);
         })();
 

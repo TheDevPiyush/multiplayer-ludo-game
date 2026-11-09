@@ -78,6 +78,14 @@
   - Each Home visit syncs the device's token. The server keeps each user's 3 newest devices. A device that signs into another account moves to it, signing out removes it, and tokens Expo reports as dead are dropped.
   - Android channels: Game invites, Friends and Game reminders, each of which people can turn off separately. Tapping a notification opens the invite's room or the friends screen.
 
+- **Analytics and crash reports**:
+  - Firebase Analytics on Android (`util/analytics.ts`): `game_start`, `game_finish`, `rematch`, `invite_share`, `invite_join`. Development builds only log them to the console. iOS is left out until it has a Firebase config (`expo.autolinking.ios.exclude` in `app/package.json`).
+  - `@react-native-firebase` stays on 23.8.8: 27.x doesn't compile against React Native 0.81.
+  - The advertising ID and ad-service permissions are blocked until ads ship (`blockedPermissions` in `app.json`).
+  - Per-game bot counts aren't in analytics, because the client doesn't know which seats are bots. They come from the database (`User.provider = 'bot'`).
+  - Sentry on the app (`util/monitoring.ts`, sessions give the crash-free rate) and the server (`lib/sentry.ts`, every `log.error`). Both stay off without a DSN. Tracing and replay stay off.
+  - Readable app stack traces need `SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and `SENTRY_PROJECT` on EAS. After `eas update`, upload maps with `npx sentry-expo-upload-sourcemaps dist`.
+
 ## Supabase settings for guests
 - Authentication → Sign In / Providers: turn on **Allow anonymous sign-ins** and **Allow manual linking**.
 - Authentication → Emails → **Change email address** template: include `{{ .Token }}`, so guests saving with email get the 6-digit code the app asks for.

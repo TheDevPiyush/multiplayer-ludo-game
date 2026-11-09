@@ -12,7 +12,7 @@ export const SITE = {
     contactEmail: 'support@thedevpiyush.com',
     developer: 'TheDevPiyush',
     /** The legal pages say "last updated" with this date. Change it whenever their text changes. */
-    legalUpdated: '27 October 2026',
+    legalUpdated: '9 November 2026',
 } as const;
 
 export const APP = {

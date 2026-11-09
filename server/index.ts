@@ -1,3 +1,5 @@
+// Must stay first: reports errors from everything imported below.
+import { flushErrorReports, reportRouteErrors } from './lib/sentry.ts';
 import type { Request, Response } from 'express';
 import express from 'express';
 import { createServer } from 'http';
@@ -45,6 +47,7 @@ app.use('/game', gameRouter);
 app.use('/rtc', rtcRouter);
 app.use('/social', socialRouter);
 app.use(linksRouter);
+reportRouteErrors(app);
 
 const httpServer = createServer(app);
 attachSocketServer(httpServer, games);
@@ -69,6 +72,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         shuttingDown = true;
         log.info(`${signal}: flushing live games…`);
         await games.stop().catch(e => log.error('flush on shutdown failed', { error: (e as Error)?.message }));
+        await flushErrorReports().catch(() => {});
         process.exit(0);
     });
 }

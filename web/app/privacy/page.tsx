@@ -63,9 +63,23 @@ export default function Privacy() {
                     session.
                 </li>
             </ul>
+            <h3>How the app is used, and when it crashes</h3>
+            <ul>
+                <li>
+                    Usage analytics on Android: events such as a game starting or finishing, its mode and length, the
+                    number of players, whether you won, and whether an invite was shared or used, together with your
+                    internal player ID, whether you are a guest, and basic device and app details. We use these to see
+                    what works and which features people come back for. They never include your username, chat or room
+                    codes.
+                </li>
+                <li>
+                    Crash and error reports: what went wrong, the app version, device details, recent screens and network
+                    requests, and your internal player ID, so we can fix the problem.
+                </li>
+            </ul>
             <p>
-                We do not collect your location, contacts, photos or microphone audio. The app does not show ads and
-                contains no advertising or analytics trackers.
+                We do not collect your location, contacts, photos or microphone audio. The app does not show ads, and we
+                do not collect your device’s advertising ID or use this data for advertising.
             </p>
 
             <h2>2. How we use it</h2>
@@ -108,7 +122,11 @@ export default function Privacy() {
                         </tr>
                         <tr>
                             <td>Google</td>
-                            <td>“Sign in with Google”, if you choose it</td>
+                            <td>“Sign in with Google”, if you choose it; usage analytics (Firebase Analytics)</td>
+                        </tr>
+                        <tr>
+                            <td>Sentry</td>
+                            <td>Crash and error reports</td>
                         </tr>
                         <tr>
                             <td>DigitalOcean</td>
