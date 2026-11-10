@@ -18,6 +18,18 @@ export function previousDay(day: string): string {
     return new Date(Date.parse(`${day}T00:00:00Z`) - DAY_MS).toISOString().slice(0, 10);
 }
 
+/** The India week (Monday to Sunday) that `at` falls in: its first day and when it starts and ends. */
+export function weekOf(at: Date | number): { start: string; startsAt: Date; endsAt: Date } {
+    const midnight = Date.parse(`${dayOf(at)}T00:00:00Z`);
+    const sinceMonday = (new Date(midnight).getUTCDay() + 6) % 7;
+    const start = midnight - sinceMonday * DAY_MS;
+    return {
+        start: new Date(start).toISOString().slice(0, 10),
+        startsAt: new Date(start - IST_OFFSET_MS),
+        endsAt: new Date(start - IST_OFFSET_MS + 7 * DAY_MS),
+    };
+}
+
 // ─── Levels ──────────────────────────────────────────────────────────────────
 
 /** XP to go from `level` to the next: 100, 150, 200, … */
@@ -175,4 +187,34 @@ export function offlineGameReward(r: OfflineReport): GameReward | null {
         xp: r.won ? PROGRESS.offline.winXp : PROGRESS.offline.finishXp,
         stats: { online: false, private: false, won: r.won, captures: r.captures, home: r.home, sixes: r.sixes },
     };
+}
+
+// ─── Invites ─────────────────────────────────────────────────────────────────
+
+export interface InviteUser {
+    createdAt: Date;
+    guest: boolean;
+}
+
+/**
+ * Who a finished private game counts as an invite for: the host, and the players new enough to
+ * have been brought in by them. `paid` is everyone the game paid (so bots, leavers and short
+ * games are already out). The host needs a saved account and to have joined before the new
+ * players. Whether each new player already had their bonus is the caller's to check.
+ */
+export function inviteMatch(
+    room: Pick<LiveRoom, 'isPrivate' | 'createdById' | 'endedAt'>,
+    paid: Iterable<string>,
+    users: Map<string, InviteUser>,
+): { hostId: string; newPlayers: string[] } | null {
+    if (!room.isPrivate || !room.endedAt) return null;
+    const ids = [...paid];
+    const host = users.get(room.createdById);
+    if (!ids.includes(room.createdById) || !host || host.guest) return null;
+    const newSince = Date.parse(room.endedAt) - PROGRESS.invite.newForDays * DAY_MS;
+    const newPlayers = ids.filter(id => {
+        const u = users.get(id);
+        return id !== room.createdById && !!u && +u.createdAt > +host.createdAt && +u.createdAt >= newSince;
+    });
+    return newPlayers.length > 0 ? { hostId: room.createdById, newPlayers } : null;
 }

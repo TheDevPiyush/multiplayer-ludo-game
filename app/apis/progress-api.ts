@@ -37,6 +37,8 @@ export type GameReward = {
     levelsGained: number;
     missionsDone: string[];
     capped: boolean;
+    /** Invite bonus, on top of `coins`: `joined` names the host, `host` the new players. */
+    invite?: { coins: number; role: 'joined' | 'host'; names: string[] } | null;
 };
 
 export async function fetchProgress(accessToken: string): Promise<Result<Progress>> {
@@ -72,6 +74,7 @@ export async function reportOfflineGame(
 /** Server-tuned values (no sign-in needed). */
 export type RemoteConfig = {
     dice?: { strength: number; momentum: number; luckFade: number };
+    rewards?: { invite?: { coins: number } };
 };
 
 export async function fetchRemoteConfig(): Promise<RemoteConfig | null> {

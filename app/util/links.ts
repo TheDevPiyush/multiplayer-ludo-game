@@ -25,7 +25,7 @@ export function routerPathFromUrl(url: string): string {
 
 // ─── Friends modal ────────────────────────────────────────────────────────────
 
-export type FriendsTab = 'friends' | 'requests';
+export type FriendsTab = 'friends' | 'requests' | 'week';
 
 /** The friends modal is a route: /friends?tab=requests works from anywhere (and as a deep link). */
 export function friendsHref(tab: FriendsTab = 'friends'): Href {
@@ -76,5 +76,6 @@ export function clearPendingJoin(code: string) {
 /** /friends?tab=requests → 'requests'; null for other paths. */
 export function friendsTabFromPath(path: string): FriendsTab | null {
     if (!/^\/friends(?:[/?#]|$)/.test(path)) return null;
-    return /[?&]tab=requests\b/.test(path) ? 'requests' : 'friends';
+    const tab = /[?&]tab=(requests|week)\b/.exec(path)?.[1];
+    return (tab as FriendsTab | undefined) ?? 'friends';
 }

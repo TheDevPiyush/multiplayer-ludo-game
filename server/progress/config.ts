@@ -30,6 +30,12 @@ export const PROGRESS = {
     /** Daily reward by day of the 7-day cycle; missing a day starts it over. */
     dailyRewards: [20, 30, 40, 50, 60, 80, 150],
     missionsPerDay: 3,
+    /**
+     * Bringing in a new player: when a player in their first `newForDays` days finishes a private
+     * game hosted by someone with a saved account who joined before them, both get `coins`. Once
+     * per new player; a host gets it at most `perWeek` times a week (stops farming with spare accounts).
+     */
+    invite: { coins: 100, newForDays: 7, perWeek: 5 },
 } as const;
 
 /** The adaptive dice, for online games and (through `/config`) the app's offline games. */
@@ -48,6 +54,7 @@ export function publicConfig() {
             offline: PROGRESS.offline,
             levelUpCoins: PROGRESS.levelUpCoins,
             dailyRewards: PROGRESS.dailyRewards,
+            invite: PROGRESS.invite,
         },
     };
 }

@@ -1,17 +1,20 @@
 import type { Prisma } from '../generated/prisma/client.ts';
 import { ServiceError } from '../game/game-service';
 import type { LiveRoom } from '../game/live-room';
+import { GUEST_PROVIDER } from '../lib/providers';
 import { prisma } from '../lib/prisma';
 import { PROGRESS } from './config';
 import {
     dailyClaim,
     dayOf,
+    inviteMatch,
     levelFor,
     liveStreak,
     missionsFor,
     offlineGameReward,
     onlineGameRewards,
     parseOfflineReport,
+    weekOf,
     type GameReward,
     type GameStats,
 } from './rules';
@@ -32,6 +35,18 @@ export interface RewardSummary {
     missionsDone: string[];
     /** Coins weren't paid because today's cap was reached. */
     capped: boolean;
+    /** An invite bonus this game paid, on top of `coins`. */
+    invite: InviteBonus | null;
+}
+
+/**
+ * The invite bonus: `joined` is the new player's (`names` holds the host), `host` the inviter's
+ * (`names` holds the new players it was paid for).
+ */
+export interface InviteBonus {
+    coins: number;
+    role: 'joined' | 'host';
+    names: string[];
 }
 
 /** Everything Home shows about a player's progress. */
@@ -162,7 +177,40 @@ async function payGame(
         levelsGained: level.gained,
         missionsDone,
         capped: coins < reward.coins,
+        invite: null,
     };
+}
+
+/**
+ * Pays the invite bonus for a finished private game (see `PROGRESS.invite`), inside its
+ * transaction. Checks before each write: a unique-key error would abort the whole transaction.
+ */
+async function payInviteBonus(tx: Db, room: LiveRoom, paid: string[], day: string): Promise<Map<string, InviteBonus>> {
+    const out = new Map<string, InviteBonus>();
+    if (!room.isPrivate || paid.length < 2) return out;
+    const rows = await tx.user.findMany({ where: { id: { in: paid } }, select: { id: true, createdAt: true, provider: true } });
+    const users = new Map(rows.map(u => [u.id, { createdAt: u.createdAt, guest: u.provider === GUEST_PROVIDER }]));
+    const match = inviteMatch(room, paid, users);
+    if (!match) return out;
+
+    const { coins, perWeek } = PROGRESS.invite;
+    const nameOf = (id: string) => room.players.find(p => p.userId === id)?.username ?? 'a player';
+    const week = weekOf(room.endedAt ? Date.parse(room.endedAt) : Date.now()).start;
+    let hostPaidThisWeek = await tx.coinLedger.count({ where: { userId: match.hostId, reason: 'INVITE_HOST', day: { gte: week } } });
+    const hostNames: string[] = [];
+
+    for (const id of match.newPlayers) {
+        const key = `invite:joined:${id}`;
+        if (await tx.coinLedger.findUnique({ where: { key }, select: { id: true } })) continue;
+        await grant(tx, id, coins, 'INVITE', key, day);
+        out.set(id, { coins, role: 'joined', names: [nameOf(match.hostId)] });
+        if (hostPaidThisWeek >= perWeek) continue;
+        await grant(tx, match.hostId, coins, 'INVITE_HOST', `invite:host:${match.hostId}:${id}`, day);
+        hostPaidThisWeek++;
+        hostNames.push(nameOf(id));
+    }
+    if (hostNames.length > 0) out.set(match.hostId, { coins: coins * hostNames.length, role: 'host', names: hostNames });
+    return out;
 }
 
 /** Runs in `finishGame`'s transaction, so a game's result and its rewards are saved together. */
@@ -172,6 +220,7 @@ export async function payGameRewards(tx: Db, room: LiveRoom): Promise<Map<string
     for (const [userId, reward] of onlineGameRewards(room)) {
         out.set(userId, await payGame(tx, userId, reward, 'GAME', `game:${room.id}:${userId}`, day, PROGRESS.game.dailyCoinCap));
     }
+    for (const [userId, bonus] of await payInviteBonus(tx, room, [...out.keys()], day)) out.get(userId)!.invite = bonus;
     return out;
 }
 

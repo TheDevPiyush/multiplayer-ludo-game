@@ -11,11 +11,15 @@ const isNum = (x: unknown, min: number, max: number) => typeof x === 'number' &&
 
 /** Keeps only values that make sense, so a bad response can't break offline games. */
 function clean(raw: unknown): RemoteConfig {
-    const dice = (raw as RemoteConfig | null)?.dice;
+    const r = (raw ?? {}) as RemoteConfig;
+    const out: RemoteConfig = {};
+    const dice = r.dice;
     if (dice && isNum(dice.strength, 0, 1) && isNum(dice.momentum, 0, 5) && isNum(dice.luckFade, 0, 1)) {
-        return { dice: { strength: dice.strength, momentum: dice.momentum, luckFade: dice.luckFade } };
+        out.dice = { strength: dice.strength, momentum: dice.momentum, luckFade: dice.luckFade };
     }
-    return {};
+    const inviteCoins = r.rewards?.invite?.coins;
+    if (isNum(inviteCoins, 1, 10_000)) out.rewards = { invite: { coins: inviteCoins! } };
+    return out;
 }
 
 /**
@@ -39,6 +43,11 @@ export async function loadRemoteConfig() {
 export function diceBalance(): Partial<BalanceConfig> | undefined {
     const d = current.dice;
     return d ? { enabled: d.strength > 0, strength: d.strength, momentum: d.momentum, luckFade: d.luckFade } : undefined;
+}
+
+/** Coins a host and a new player each get for the new player's first private game. */
+export function inviteCoins(): number {
+    return current.rewards?.invite?.coins ?? 100;
 }
 
 /** The dice settings as one short label, for analytics ("0.6/1.5/0.8", or "default"). */

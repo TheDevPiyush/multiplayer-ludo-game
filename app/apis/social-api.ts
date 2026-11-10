@@ -73,6 +73,12 @@ export const removeFriend = (userId: string) =>
 export const inviteFriend = (gameCode: string, userId: string) =>
     authed<{ invited: boolean; alreadyInRoom?: boolean }>('/invites', { method: 'POST', body: JSON.stringify({ gameCode, userId }) });
 
+/** You and your friends by online wins this week (Monday to Sunday, India time). */
+export type LeaderboardRow = { rank: number; user: PublicUser; wins: number; games: number; you: boolean };
+export type Leaderboard = { week: { start: string; endsAt: string }; data: LeaderboardRow[] };
+
+export const getLeaderboard = () => authed<Leaderboard>('/leaderboard');
+
 export const getSocialSummary = () => authed<{ data: SocialSummary }>('/summary');
 export const getNotifications = (cursor?: string) => authed<Page<AppNotification>>(`/notifications${pageQuery(cursor)}`);
 export const markNotificationsRead = () => authed<{ updated: number }>('/notifications/read', { method: 'POST' });

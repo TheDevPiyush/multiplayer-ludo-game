@@ -6,6 +6,7 @@ import { verifySupabaseToken } from '../middleware/tokenVerify.middleware';
 import {
     acceptRequest,
     blockUser,
+    getLeaderboard,
     getSummary,
     inviteToRoom,
     listBlocks,
@@ -38,6 +39,7 @@ socialRouter.get('/requests', listRequests);
 socialRouter.post('/friends/:userId', rateLimit('friend-request', 10, 0.5), sendRequest);
 socialRouter.post('/friends/:userId/accept', acceptRequest);
 socialRouter.delete('/friends/:userId', removeFriend);
+socialRouter.get('/leaderboard', rateLimit('leaderboard', 10, 0.5), getLeaderboard);
 
 socialRouter.post('/invites', rateLimit('invite', 10, 0.5), inviteToRoom);
 

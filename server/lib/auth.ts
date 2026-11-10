@@ -4,8 +4,7 @@ import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 
 import { TtlCache } from './ttl-cache';
 
-/** `User.provider` for guests (Supabase anonymous sign-in). */
-export const GUEST_PROVIDER = 'anonymous';
+export { GUEST_PROVIDER } from './providers';
 
 export interface AuthUser {
     id: string;

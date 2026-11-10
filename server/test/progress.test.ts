@@ -5,6 +5,7 @@ import { PROGRESS } from '../progress/config';
 import {
     dailyClaim,
     dayOf,
+    inviteMatch,
     levelFor,
     liveStreak,
     MISSIONS,
@@ -13,6 +14,7 @@ import {
     onlineGameRewards,
     parseOfflineReport,
     previousDay,
+    weekOf,
 } from '../progress/rules';
 
 describe('days', () => {
@@ -126,5 +128,44 @@ describe('offline reports', () => {
         expect(parseOfflineReport({ ...ok, moves: 2.5 })).toBeNull();
         expect(parseOfflineReport({ ...ok, gameId: 'x' })).toBeNull();
         expect(parseOfflineReport(null)).toBeNull();
+    });
+});
+
+describe('weeks', () => {
+    test('run Monday to Sunday, India time', () => {
+        // Tuesday 10 Nov 2026 → the week of Monday 9 Nov, from 8 Nov 18:30 UTC.
+        const w = weekOf(Date.parse('2026-11-10T08:00:00Z'));
+        expect(w.start).toBe('2026-11-09');
+        expect(w.startsAt.toISOString()).toBe('2026-11-08T18:30:00.000Z');
+        expect(w.endsAt.toISOString()).toBe('2026-11-15T18:30:00.000Z');
+        // Sunday 23:59 India is still that week; a minute later is the next.
+        expect(weekOf(Date.parse('2026-11-15T18:29:00Z')).start).toBe('2026-11-09');
+        expect(weekOf(Date.parse('2026-11-15T18:30:00Z')).start).toBe('2026-11-16');
+    });
+});
+
+describe('invites', () => {
+    const endedAt = '2026-11-10T08:00:00Z';
+    const room = { isPrivate: true, createdById: 'host', endedAt };
+    const days = (n: number) => new Date(Date.parse(endedAt) - n * 24 * 60 * 60_000);
+    const users = new Map([
+        ['host', { createdAt: days(30), guest: false }],
+        ['fresh', { createdAt: days(1), guest: true }],
+        ['old', { createdAt: days(20), guest: false }],
+        ['week', { createdAt: days(PROGRESS.invite.newForDays + 1), guest: false }],
+    ]);
+
+    test('a new player in a saved host\'s private game counts', () => {
+        expect(inviteMatch(room, ['host', 'fresh', 'old', 'week'], users)).toEqual({ hostId: 'host', newPlayers: ['fresh'] });
+    });
+
+    test('not for public games, guest hosts, hosts the game did not pay, or hosts newer than the player', () => {
+        expect(inviteMatch({ ...room, isPrivate: false }, ['host', 'fresh'], users)).toBeNull();
+        expect(inviteMatch(room, ['fresh'], users)).toBeNull();
+        const guestHost = new Map(users).set('host', { createdAt: days(30), guest: true });
+        expect(inviteMatch(room, ['host', 'fresh'], guestHost)).toBeNull();
+        const newerHost = new Map(users).set('host', { createdAt: days(0.5), guest: false });
+        expect(inviteMatch(room, ['host', 'fresh'], newerHost)).toBeNull();
+        expect(inviteMatch(room, ['host', 'old'], users)).toBeNull();
     });
 });

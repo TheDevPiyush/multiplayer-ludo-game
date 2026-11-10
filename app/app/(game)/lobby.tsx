@@ -45,6 +45,8 @@ import { supabase } from '@/util/supabase-client';
 import { setActiveRoom } from '@/util/active-room';
 import { track } from '@/util/analytics';
 import { roomInviteUrl } from '@/util/links';
+import { inviteCoins } from '@/util/remote-config';
+import { Coin } from '@/components/progress/Coin';
 
 const GRID_GAP = 12;
 const SEAT_HEIGHT = 150;
@@ -528,6 +530,15 @@ export default function LobbyScreen() {
                                 </GameTile>
                             </RNView>
                         </GameTile>
+                        {/* The invite bonus goes to hosts with a saved account (see the server's PROGRESS.invite). */}
+                        {isHost && !guest && room?.status === 'WAITING' && (
+                            <RNView style={styles.inviteHint}>
+                                <Coin size={14} />
+                                <Text weight="medium" style={styles.inviteHintText}>
+                                    Bring someone new: after their first game here, you both get {inviteCoins()} coins.
+                                </Text>
+                            </RNView>
+                        )}
                     </Animated.View>
                 )}
 
@@ -749,6 +760,8 @@ const styles = StyleSheet.create({
     publicInfo: { flex: 1, gap: 6 },
     publicTitle: { fontSize: 17, lineHeight: 22, color: '#FFFFFF' },
     publicNote: { fontSize: 12, color: 'rgba(255,255,255,0.7)', textAlign: 'center', marginTop: 8 },
+    inviteHint: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 8, paddingHorizontal: 8 },
+    inviteHintText: { flexShrink: 1, fontSize: 12, color: 'rgba(255,255,255,0.8)', textAlign: 'center' },
     publicActions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
     publicCode: {
         flexShrink: 1,

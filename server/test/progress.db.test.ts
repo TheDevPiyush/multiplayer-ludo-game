@@ -16,7 +16,8 @@ describe.skipIf(!migrated)('daily loop (database)', async () => {
     const { prisma } = await import('../lib/prisma');
     const { PROGRESS } = await import('../progress/config');
     const { claimDaily, claimMission, getProgress, payGameRewards, reportOfflineGame } = await import('../progress/progress');
-    const { missionsFor } = await import('../progress/rules');
+    const { dayOf, missionsFor } = await import('../progress/rules');
+    const { friendsLeaderboard } = await import('../social/leaderboard');
 
     const tag = randomUUID().slice(0, 6);
     const users = ['a', 'b'].map(n => ({ id: randomUUID(), username: `zzp_${tag}_${n}`, provider: 'anonymous' }));
@@ -24,14 +25,20 @@ describe.skipIf(!migrated)('daily loop (database)', async () => {
     const roomId = randomUUID();
     const now = new Date('2026-11-10T08:00:00Z');
     const tomorrow = new Date('2026-11-11T08:00:00Z');
+    const DAY = 24 * 60 * 60_000;
+    // An invite: a saved host from a month ago, and two players who joined yesterday.
+    const host = { id: randomUUID(), username: `zzp_${tag}_h`, provider: 'google', createdAt: new Date(+now - 30 * DAY) };
+    const fresh = ['n', 'm'].map(n => ({ id: randomUUID(), username: `zzp_${tag}_${n}`, provider: 'anonymous', createdAt: new Date(+now - DAY) }));
+    const everyone = [...users, host, ...fresh];
+    const rooms = [roomId, randomUUID(), randomUUID()];
 
     beforeAll(async () => {
-        await prisma.user.createMany({ data: users });
+        await prisma.user.createMany({ data: everyone });
         await prisma.gameRoom.create({ data: { id: roomId, gameCode: `Z${tag.toUpperCase()}`.slice(0, 6), createdById: a.id, status: 'PLAYING' } });
     });
     afterAll(async () => {
-        await prisma.gameRoom.deleteMany({ where: { id: roomId } });
-        await prisma.user.deleteMany({ where: { id: { in: users.map(u => u.id) } } });
+        await prisma.gameRoom.deleteMany({ where: { id: { in: rooms } } });
+        await prisma.user.deleteMany({ where: { id: { in: everyone.map(u => u.id) } } });
     });
 
     test('the daily reward pays once a day and the streak carries on the next day', async () => {
@@ -104,5 +111,68 @@ describe.skipIf(!migrated)('daily loop (database)', async () => {
         for (let i = 1; i < PROGRESS.offline.gamesPerDay; i++) await reportOfflineGame(a.id, report(i), now);
         expect((await reportOfflineGame(a.id, report(99), now)).reward).toBeNull();
         await expect(reportOfflineGame(a.id, { ...report(100), home: 9 }, now)).rejects.toMatchObject({ status: 400 });
+    }, 30_000);
+
+    /** A finished 10-minute private game the host won against `guest`. */
+    const privateGame = (guest: { id: string; username: string }) => ({
+        id: randomUUID(), isPrivate: true, status: 'FINISHED', createdById: host.id,
+        startedAt: new Date(+now - 10 * 60_000).toISOString(), endedAt: now.toISOString(),
+        players: [
+            { userId: host.id, username: host.username, color: 'RED', status: 'CONNECTED' },
+            { userId: guest.id, username: guest.username, color: 'GREEN', status: 'CONNECTED' },
+        ],
+        game: { ranking: ['RED', 'GREEN'] },
+        moveLog: Array.from({ length: 12 }, (_, i) => [i % 2 ? 'GREEN' : 'RED', 0, 3, 1, 4, 0]),
+        stats: {},
+    } as unknown as LiveRoom);
+
+    test('a new player\'s first private game pays both of them once, and the host only a few times a week', async () => {
+        const [n, m] = fresh as [typeof fresh[0], typeof fresh[0]];
+        const first = await prisma.$transaction(tx => payGameRewards(tx, privateGame(n)));
+        expect(first.get(n.id)!.invite).toEqual({ coins: PROGRESS.invite.coins, role: 'joined', names: [host.username] });
+        expect(first.get(host.id)!.invite).toEqual({ coins: PROGRESS.invite.coins, role: 'host', names: [n.username] });
+
+        // Their next game together pays no bonus.
+        const second = await prisma.$transaction(tx => payGameRewards(tx, privateGame(n)));
+        expect(second.get(n.id)!.invite).toBeNull();
+        expect(second.get(host.id)!.invite).toBeNull();
+
+        // With this week's host bonuses used up, a new player still gets theirs; the host doesn't.
+        await prisma.coinLedger.createMany({
+            data: Array.from({ length: PROGRESS.invite.perWeek - 1 }, (_, i) => ({
+                userId: host.id, amount: 0, reason: 'INVITE_HOST', key: `test:${tag}:${i}`, day: dayOf(now),
+            })),
+        });
+        const capped = await prisma.$transaction(tx => payGameRewards(tx, privateGame(m)));
+        expect(capped.get(m.id)!.invite?.role).toBe('joined');
+        expect(capped.get(host.id)!.invite).toBeNull();
+    }, 60_000);
+
+    test('the friends leaderboard counts this week\'s wins, not short games', async () => {
+        await prisma.friendship.create({ data: { requesterId: a.id, addresseeId: b.id, status: 'ACCEPTED', respondedAt: now } });
+        const game = (id: string, code: string, minutes: number, winner: string) => prisma.gameRoom.create({
+            data: {
+                id, gameCode: code, createdById: a.id, status: 'FINISHED', winnerId: winner,
+                startedAt: new Date(+now - minutes * 60_000), endedAt: now,
+                players: {
+                    create: [
+                        { userId: a.id, seatNumber: 0, color: 'RED', rank: winner === a.id ? 1 : 2, joinedAt: new Date(+now - 20 * 60_000) },
+                        { userId: b.id, seatNumber: 1, color: 'GREEN', rank: winner === b.id ? 1 : 2, joinedAt: new Date(+now - 20 * 60_000) },
+                    ],
+                },
+            },
+        });
+        await game(rooms[1]!, `Y${tag.toUpperCase()}`.slice(0, 6), 10, b.id);
+        await game(rooms[2]!, `X${tag.toUpperCase()}`.slice(0, 6), 1, a.id);
+
+        const board = await friendsLeaderboard(a.id, now);
+        expect(board.week.start).toBe('2026-11-09');
+        expect(board.data.map(r => [r.user.id, r.rank, r.wins, r.games, r.you])).toEqual([
+            [b.id, 1, 1, 1, false],
+            [a.id, 2, 0, 1, true],
+        ]);
+        // Next week starts empty.
+        const later = await friendsLeaderboard(a.id, new Date(+now + 7 * DAY));
+        expect(later.data.every(r => r.wins === 0 && r.games === 0)).toBe(true);
     }, 30_000);
 });

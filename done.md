@@ -2,7 +2,7 @@
 
 ## New features
 - **Invite links**: share `/join/<code>`; the app opens and joins automatically (Android App Links, iOS Universal Links, with a browser landing page as fallback). The link domain is set by `EXPO_PUBLIC_LINK_URL`.
-- **Friends**: search users, send, accept and remove requests, and see who's online. The modal is URL-driven (`/friends?tab=friends|requests`), so any screen can open it.
+- **Friends**: search users, send, accept and remove requests, and see who's online. The modal is URL-driven (`/friends?tab=friends|requests|week`), so any screen can open it.
 - **Alerts tab**: friend requests and room invites with an unread badge. Tapping a request opens the friends modal; an invite has a Join button while the room is still open.
 - **Room invites**: the host taps an empty seat to invite friends. The friend gets a live banner in the app and a notification in Alerts.
 - **Quick Match (Join Public)**:
@@ -110,6 +110,11 @@
   - **Home**: level and XP bar under the name, a coin count, the daily reward card while it's waiting, and the missions panel with the streak.
   - **`GET /config`**: the dice settings and reward values. The app loads it on start and saved, and offline games use its dice (`DICE_MOMENTUM` and `DICE_LUCK_FADE` join `DICE_BALANCE_STRENGTH`). `game_finish` now records the dice settings; `daily_claim` and `mission_claim` are new events.
   - Values live in `server/progress/config.ts`.
+- **Friends leaderboard**: a "This week" tab in the Friends sheet (`/friends?tab=week`, `GET /social/leaderboard`). It ranks you and your friends by online wins since Monday (India time), then by games played, with ties sharing a place. Games under 2 minutes don't count. Only you and your friends appear, so bots never rank. Saved accounts only, like the rest of Friends.
+- **Invite bonus** (`PROGRESS.invite`): when a player in their first 7 days finishes a private game hosted by someone with a saved account who joined before them, both get 100 coins.
+  - Once per new player. A host gets it at most 5 times a week; after that the new player still gets theirs.
+  - Paid in the same transaction as the game's other rewards (ledger reasons `INVITE` and `INVITE_HOST`) and shown on both result screens.
+  - The private lobby tells its host about it.
 
 ## Supabase settings for guests
 - Authentication → Sign In / Providers: turn on **Allow anonymous sign-ins** and **Allow manual linking**.

@@ -28,6 +28,7 @@ import {
 } from '@/apis/social-api';
 import AppDialog from '@/components/Dialog';
 import { AccountRequired } from '@/components/AccountRequired';
+import { FriendsLeaderboard } from '@/components/FriendsLeaderboard';
 import { PlayerSheet, type SheetPlayer } from '@/components/PlayerSheet';
 import { useSocial } from '@/components/SocialProvider';
 import { Text } from '@/components/Themed';
@@ -114,7 +115,7 @@ function EmptyState({ icon, title, sub }: { icon: IconName; title: string; sub: 
 
 /**
  * Friends modal. A route, so it opens from anywhere — including links:
- * /friends?tab=friends | /friends?tab=requests.
+ * /friends?tab=friends | /friends?tab=requests | /friends?tab=week.
  */
 export default function FriendsModal() {
     const guest = useIsGuest();
@@ -156,7 +157,7 @@ function FriendsSheet() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const params = useLocalSearchParams<{ tab?: string }>();
-    const tab: FriendsTab = params.tab === 'requests' ? 'requests' : 'friends';
+    const tab: FriendsTab = params.tab === 'requests' || params.tab === 'week' ? params.tab : 'friends';
     const { revision, refresh, summary } = useSocial();
 
     const friendList = usePagedList<Friend>(getFriends, friendKey);
@@ -368,8 +369,9 @@ function FriendsSheet() {
                     {!isSearching && (
                         <RNView style={styles.tabs}>
                             {([
-                                { key: 'friends', label: 'My Friends', count: summary.friends, badge: false },
+                                { key: 'friends', label: 'Friends', count: summary.friends, badge: false },
                                 { key: 'requests', label: 'Requests', count: requestCount, badge: requestCount > 0 },
+                                { key: 'week', label: 'This week', count: 0, badge: false },
                             ] as const).map(t => {
                                 const active = tab === t.key;
                                 return (
@@ -386,23 +388,27 @@ function FriendsSheet() {
                         </RNView>
                     )}
 
-                    <FlatList
-                        data={rows}
-                        keyExtractor={r => r.key}
-                        renderItem={renderRow}
-                        ListEmptyComponent={listEmpty}
-                        onEndReached={isSearching ? undefined : () => void activeList.loadMore()}
-                        onEndReachedThreshold={0.5}
-                        ListFooterComponent={
-                            !isSearching && activeList.loadingMore
-                                ? <ActivityIndicator color={INDIGO} style={{ marginVertical: 16 }} />
-                                : null
-                        }
-                        keyboardShouldPersistTaps="handled"
-                        keyboardDismissMode="on-drag"
-                        contentContainerStyle={{ paddingBottom: 16, flexGrow: 1 }}
-                        style={{ flex: 1 }}
-                    />
+                    {tab === 'week' && !isSearching ? (
+                        <FriendsLeaderboard revision={revision} onOpenPlayer={setSheetPlayer} />
+                    ) : (
+                        <FlatList
+                            data={rows}
+                            keyExtractor={r => r.key}
+                            renderItem={renderRow}
+                            ListEmptyComponent={listEmpty}
+                            onEndReached={isSearching ? undefined : () => void activeList.loadMore()}
+                            onEndReachedThreshold={0.5}
+                            ListFooterComponent={
+                                !isSearching && activeList.loadingMore
+                                    ? <ActivityIndicator color={INDIGO} style={{ marginVertical: 16 }} />
+                                    : null
+                            }
+                            keyboardShouldPersistTaps="handled"
+                            keyboardDismissMode="on-drag"
+                            contentContainerStyle={{ paddingBottom: 16, flexGrow: 1 }}
+                            style={{ flex: 1 }}
+                        />
+                    )}
                 </Animated.View>
 
                 <PlayerSheet player={sheetPlayer} onClose={() => setSheetPlayer(null)} />
