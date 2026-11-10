@@ -50,14 +50,27 @@ export function levelFor(xp: number): { level: number; into: number; needed: num
 
 // ─── Daily reward ────────────────────────────────────────────────────────────
 
+/** Monday 1 … Sunday 7, for an India date. */
+export function weekdayOf(day: string): number {
+    return ((new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7) + 1;
+}
+
+/** The dates of the India week `day` is in, Monday first. */
+export function weekDays(day: string): string[] {
+    const monday = Date.parse(`${day}T00:00:00Z`) - (weekdayOf(day) - 1) * DAY_MS;
+    return Array.from({ length: 7 }, (_, i) => new Date(monday + i * DAY_MS).toISOString().slice(0, 10));
+}
+
 /**
- * The daily reward for a claim on `today`. The streak carries on from a claim yesterday and
- * starts over otherwise. `day` is the place in the 7-day cycle (1–7).
+ * The daily reward for a claim on `today`: set by the day of the week (Monday smallest,
+ * Sunday biggest). A missed day only loses that day's coins. The streak (days in a row)
+ * carries on from a claim yesterday and starts over otherwise; it's for show.
+ * `day` is the weekday, Monday 1 … Sunday 7.
  */
 export function dailyClaim(lastDay: string | null, streak: number, today: string) {
     if (lastDay === today) return null;
     const nextStreak = lastDay === previousDay(today) ? streak + 1 : 1;
-    const day = ((nextStreak - 1) % PROGRESS.dailyRewards.length) + 1;
+    const day = weekdayOf(today);
     return { streak: nextStreak, day, coins: PROGRESS.dailyRewards[day - 1]! };
 }
 

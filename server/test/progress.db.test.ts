@@ -20,7 +20,7 @@ describe.skipIf(!migrated)('daily loop (database)', async () => {
     const { friendsLeaderboard } = await import('../social/leaderboard');
 
     const tag = randomUUID().slice(0, 6);
-    const users = ['a', 'b'].map(n => ({ id: randomUUID(), username: `zzp_${tag}_${n}`, provider: 'anonymous' }));
+    const users = ['a', 'b'].map(n => ({ id: randomUUID(), username: `zzp_${tag}_${n}`, provider: 'anonymous', createdAt: new Date('2026-11-10T01:00:00Z') }));
     const [a, b] = users as [typeof users[0], typeof users[0]];
     const roomId = randomUUID();
     const now = new Date('2026-11-10T08:00:00Z');
@@ -42,18 +42,27 @@ describe.skipIf(!migrated)('daily loop (database)', async () => {
     });
 
     test('the daily reward pays once a day and the streak carries on the next day', async () => {
+        // `now` is Tuesday 10 Nov: the week's second reward.
         const first = await claimDaily(a.id, now);
-        expect(first.coins).toBe(PROGRESS.dailyRewards[0]!);
-        expect(first.progress).toMatchObject({ coins: first.coins, streak: 1, daily: { claimedToday: true, cycleDay: 1 } });
+        expect(first.coins).toBe(PROGRESS.dailyRewards[1]!);
+        expect(first.progress).toMatchObject({ coins: first.coins, streak: 1, daily: { claimedToday: true, cycleDay: 2 } });
+        // Monday is before this test user joined (no "missed"), Tuesday collected, the rest to come.
+        expect(first.progress.daily.week.map(d => d.state)).toEqual(['before', 'collected', 'upcoming', 'upcoming', 'upcoming', 'upcoming', 'upcoming']);
 
         // Two taps at once: one wins.
         const again = await Promise.allSettled([claimDaily(a.id, now), claimDaily(a.id, now)]);
         expect(again.every(r => r.status === 'rejected')).toBe(true);
 
         const next = await claimDaily(a.id, tomorrow);
-        expect(next.coins).toBe(PROGRESS.dailyRewards[1]!);
+        expect(next.coins).toBe(PROGRESS.dailyRewards[2]!);
         expect(next.progress.streak).toBe(2);
-        expect(next.progress.coins).toBe(PROGRESS.dailyRewards[0]! + PROGRESS.dailyRewards[1]!);
+        expect(next.progress.coins).toBe(PROGRESS.dailyRewards[1]! + PROGRESS.dailyRewards[2]!);
+
+        // Skipping Thursday: Friday pays Friday's coins, and Thursday shows as missed.
+        const friday = await claimDaily(a.id, new Date('2026-11-13T08:00:00Z'));
+        expect(friday.coins).toBe(PROGRESS.dailyRewards[4]!);
+        expect(friday.progress.streak).toBe(1);
+        expect(friday.progress.daily.week.map(d => d.state).slice(1, 5)).toEqual(['collected', 'collected', 'missed', 'collected']);
     }, 30_000);
 
     test('a finished game pays once, inside its transaction, with mission progress', async () => {

@@ -10,7 +10,7 @@ import Animated, {
     withSequence,
     withTiming,
 } from 'react-native-reanimated';
-import Svg, { Circle, Defs, Ellipse, LinearGradient, Path, RadialGradient, Stop } from 'react-native-svg';
+import { Pawn } from '@/components/cosmetics/PawnArt';
 
 import {
     CAPTURE_RETURN_DELAY_MS,
@@ -32,52 +32,7 @@ const BASE_FRAC = 108 / 130;
 /** Pawns stand slightly below the cell centre so they look planted on it. */
 const STAND_OFFSET = CELL * 0.2;
 
-/** Glossy 3D pawn — head, collar, flared body and base, lit from the top-left. */
-export const Pawn = memo(function Pawn({ color, width }: { color: string; width: number }) {
-    const hex = COLOR_HEX[color] ?? '#888';
-    const dark = COLOR_DARK[color] ?? '#444';
-    const bright = COLOR_BRIGHT[color] ?? '#ccc';
-    const id = color.toLowerCase();
-    return (
-        <Svg width={width} height={width * 1.3} viewBox="0 0 100 130">
-            <Defs>
-                <LinearGradient id={`body-${id}`} x1="0" y1="0" x2="1" y2="0">
-                    <Stop offset="0" stopColor={dark} />
-                    <Stop offset="0.38" stopColor={bright} />
-                    <Stop offset="0.62" stopColor={hex} />
-                    <Stop offset="1" stopColor={dark} />
-                </LinearGradient>
-                <RadialGradient id={`head-${id}`} cx="36%" cy="30%" r="72%">
-                    <Stop offset="0" stopColor="#FFFFFF" stopOpacity={0.95} />
-                    <Stop offset="0.22" stopColor={bright} />
-                    <Stop offset="0.65" stopColor={hex} />
-                    <Stop offset="1" stopColor={dark} />
-                </RadialGradient>
-                <LinearGradient id={`base-${id}`} x1="0" y1="0" x2="0" y2="1">
-                    <Stop offset="0" stopColor={hex} />
-                    <Stop offset="1" stopColor={dark} />
-                </LinearGradient>
-            </Defs>
-            {/* ground shadow */}
-            <Ellipse cx={50} cy={118} rx={36} ry={9} fill="rgba(0,0,0,0.32)" />
-            {/* base */}
-            <Ellipse cx={50} cy={109} rx={37} ry={13} fill={dark} />
-            <Ellipse cx={50} cy={104} rx={37} ry={13} fill={`url(#base-${id})`} />
-            {/* body */}
-            <Path d="M21,104 C27,84 38,72 40,54 L60,54 C62,72 73,84 79,104 Z" fill={`url(#body-${id})`} />
-            <Path d="M21,104 C27,84 38,72 40,54 L60,54 C62,72 73,84 79,104 Z" fill="none" stroke="rgba(0,0,0,0.18)" strokeWidth={1.5} />
-            {/* collar */}
-            <Ellipse cx={50} cy={55} rx={17} ry={6} fill={dark} />
-            <Ellipse cx={50} cy={53} rx={17} ry={6} fill={hex} />
-            {/* head */}
-            <Circle cx={50} cy={33} r={23} fill={`url(#head-${id})`} />
-            <Circle cx={50} cy={33} r={23} fill="none" stroke="rgba(0,0,0,0.16)" strokeWidth={1.5} />
-            {/* highlights */}
-            <Ellipse cx={42} cy={24} rx={8} ry={5.5} fill="rgba(255,255,255,0.75)" transform="rotate(-25 42 24)" />
-            <Path d="M41,62 C40,76 34,88 29,100" stroke="rgba(255,255,255,0.45)" strokeWidth={3.5} strokeLinecap="round" fill="none" />
-        </Svg>
-    );
-});
+export { Pawn } from '@/components/cosmetics/PawnArt';
 
 type Point = { x: number; y: number };
 
@@ -103,12 +58,14 @@ type TokenProps = {
     captured: boolean;
     /** Quarter turns of the board this token is drawn on (see `turnsFor`). */
     turns?: number;
+    /** The owner's equipped pawn item. */
+    skin?: string | null;
 };
 
 /** Re-render only when something visible changed (`coord` is a new object on every room update). */
 function sameToken(a: TokenProps, b: TokenProps): boolean {
     return a.coord.x === b.coord.x && a.coord.y === b.coord.y && a.pos === b.pos && a.color === b.color
-        && a.tokenIndex === b.tokenIndex && a.canMove === b.canMove && a.captured === b.captured && a.onPress === b.onPress && a.turns === b.turns;
+        && a.tokenIndex === b.tokenIndex && a.canMove === b.canMove && a.captured === b.captured && a.onPress === b.onPress && a.turns === b.turns && a.skin === b.skin;
 }
 
 export const Token = memo(function Token({
@@ -120,6 +77,7 @@ export const Token = memo(function Token({
     canMove,
     captured,
     turns = 0,
+    skin,
 }: TokenProps) {
     const x = useSharedValue(coord.x);
     const y = useSharedValue(coord.y);
@@ -224,7 +182,7 @@ export const Token = memo(function Token({
                     hitSlop={6}
                     style={StyleSheet.absoluteFill}
                 >
-                    <Pawn color={color} width={PAWN_W} />
+                    <Pawn color={color} width={PAWN_W} skin={skin} />
                 </Pressable>
                 <Animated.View pointerEvents="none" style={[styles.flash, flashStyle]} />
             </Animated.View>

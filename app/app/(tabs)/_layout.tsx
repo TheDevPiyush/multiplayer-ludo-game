@@ -10,6 +10,7 @@ import { useSocial } from '@/components/SocialProvider';
 /** Active tab colours, bright enough to read on the dark glass bar. */
 const TAB_COLORS: Record<string, string> = {
   index: '#FF5A6A',
+  shop: '#C98BFF',
   history: '#FFB020',
   notifications: '#34D27B',
   profile: '#5AA2FF',
@@ -25,6 +26,10 @@ export default function TabLayout() {
       screenOptions={{
         sceneStyle: { backgroundColor: 'transparent' },
         headerShown: false,
+        // Tabs mount on first visit and then stay; a hidden one doesn't re-render (coins,
+        // progress and social updates reach it when it's shown again).
+        lazy: true,
+        freezeOnBlur: true,
       }}
       tabBar={({ navigation, state, descriptors, insets }) => (
         // Glass like the app's panels: the indigo tint, no live blur (cheaper on basic phones).
@@ -75,6 +80,15 @@ export default function TabLayout() {
           title: 'Home',
           tabBarIcon: ({ color, size }) => (
             <FontAwesome name="home" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="shop"
+        options={{
+          title: 'Shop',
+          tabBarIcon: ({ color, size }) => (
+            <FontAwesome name="shopping-bag" size={size - 3} color={color} />
           ),
         }}
       />

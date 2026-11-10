@@ -9,6 +9,9 @@ export type Mission = {
     claimed: boolean;
 };
 
+/** One day of the daily reward week. `before`: before the player joined, so nothing was missed. */
+export type DailyDay = { date: string; coins: number; state: 'collected' | 'missed' | 'today' | 'upcoming' | 'before' };
+
 /** Coins, level, daily reward and today's missions (server: progress/progress.ts getProgress). */
 export type Progress = {
     /** India date the missions and daily reward belong to. */
@@ -22,9 +25,11 @@ export type Progress = {
     streak: number;
     daily: {
         claimedToday: boolean;
-        /** Place in the 7-day cycle of the next claim (or today's, once claimed). */
+        /** Today's weekday, Monday 1 … Sunday 7. */
         cycleDay: number;
         rewards: number[];
+        /** This India week, Monday first. Older servers don't send it. */
+        week?: DailyDay[];
     };
     missions: Mission[];
 };

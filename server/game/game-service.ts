@@ -283,15 +283,13 @@ export class GameService {
         return profile;
     }
 
-    invalidateProfile(userId: string, next?: Profile) {
+    /** Forgets a cached profile; `changed` fields are also updated in the rooms the user is in. */
+    invalidateProfile(userId: string, changed?: Partial<Profile>) {
         this.profiles.delete(userId);
-        if (!next) return;
+        if (!changed) return;
         for (const room of this.rooms.values()) {
             const p = room.players.find(x => x.userId === userId);
-            if (p) {
-                p.username = next.username;
-                p.avatarUrl = next.avatarUrl;
-            }
+            if (p) Object.assign(p, changed);
         }
     }
 

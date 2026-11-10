@@ -49,6 +49,15 @@ enum ReportReason {
   OTHER
 }
 
+/// How an item was got. Store purchases (later) carry the store's id in `externalId`.
+enum EntitlementSource {
+  COINS
+  PLAY
+  APPSTORE
+  REWARD
+  ADMIN
+}
+
 enum NotificationType {
   FRIEND_REQUEST
   FRIEND_ACCEPTED
@@ -81,6 +90,11 @@ model User {
   dailyStreak       Int       @default(0)
   /// India date of the last daily reward, "2026-11-10".
   dailyClaimDay     String?
+  /// Equipped cosmetics (shop item ids, e.g. "pawn.crown"); null is the free default.
+  /// Others see the pawn and dice in games; the board is only ever the player's own view.
+  pawnSkin          String?
+  diceSkin          String?
+  boardTheme        String?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
@@ -100,6 +114,7 @@ model User {
 
   coinLedger      CoinLedger[]
   missionProgress MissionProgress[]
+  entitlements    Entitlement[]
 
   @@index([providerId])
   @@index([lastSeenAt])
@@ -314,7 +329,7 @@ model CoinLedger {
   userId    String
   /// Positive when earned, negative when spent.
   amount    Int
-  /// GAME, OFFLINE_GAME, DAILY, MISSION or LEVEL_UP (later also AD and SHOP).
+  /// GAME, OFFLINE_GAME, DAILY, MISSION, LEVEL_UP, INVITE, INVITE_HOST or SHOP (later also AD).
   reason    String
   /// e.g. "game:<roomId>:<userId>", "daily:<userId>:<day>".
   key       String   @unique
@@ -341,4 +356,21 @@ model MissionProgress {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([userId, day, missionId])
+}
+
+/// A cosmetic a user owns (shop item ids live in code: shop/catalog.ts). One row per user and item.
+model Entitlement {
+  id         String            @id @default(uuid())
+  userId     String
+  itemId     String
+  source     EntitlementSource
+  /// A store's purchase id, so one purchase grants once.
+  externalId String?           @unique
+  /// Null: owned for good. Otherwise a trial that ends then.
+  expiresAt  DateTime?
+  createdAt  DateTime          @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, itemId])
 }

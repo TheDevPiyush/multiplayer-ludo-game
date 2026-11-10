@@ -14,6 +14,10 @@ type Events = {
     /** `day`: place in the 7-day cycle. */
     daily_claim: { day: number; streak: number };
     mission_claim: { mission: string };
+    shop_view: Record<string, never>;
+    /** A shop item bought; `currency` is 'coins' until store purchases arrive. */
+    purchase: { item: string; currency: 'coins'; price: number };
+    shop_equip: { item: string };
 };
 
 type Firebase = typeof import('@react-native-firebase/analytics');

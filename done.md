@@ -102,19 +102,37 @@
 
 - **Daily loop: coins, levels, daily reward, missions** (`server/progress/`; guests too):
   - Coins are only earned and will only buy cosmetics: they're never sold, traded or cashed out. Every change is a row in `CoinLedger`, with a unique key, so nothing pays twice.
-  - **Online games** pay 15 coins and 20 XP for finishing, or 40 coins and 50 XP for a win, up to 300 coins a day from games. They're paid in the same transaction that saves the result, and a retried save pays nothing more. Bots, players who left before getting home, games under 2 minutes and players with fewer than 5 moves get nothing. Each player's result screen shows what they got (`progress:reward` socket event).
+  - **Online games** pay 15 coins and 20 XP for finishing, or 40 coins and 50 XP for a win, up to 300 coins a day from games. They're paid in the same transaction that saves the result, and a retried save pays nothing more. Bots, players who left before getting home, games under 2 minutes and players with fewer than 5 moves get nothing. A game that short says so on the result screen. Each player's result screen shows what they got (`progress:reward` socket event).
   - **Vs Computer** games are reported by the app (`POST /progress/offline-game`): 5 coins / 10 XP, or 10 / 20 for a win, for at most 10 games a day. Impossible reports are refused. Pass & Play and watching bots pay nothing.
   - **Levels** need 100 XP, then 50 more each level. Every level up pays 50 coins.
-  - **Daily reward**: a 7-day cycle (20, 30, 40, 50, 60, 80, 150). Missing a day starts it over. Days follow India time (midnight IST).
+  - **Daily reward**: by day of the week, Monday 20, 30, 40, 50, 60, 80, Sunday 150. Missing a day only loses that day's coins; the streak (days in a row) is for show. Days and weeks follow India time (midnight IST). The card is always on Home, under the missions: this week with a tick on collected days, a mark on missed ones (not on days before the player joined), and Collect on today.
   - **Missions**: 3 a day per player from a pool of 8 (`progress/rules.ts`), worked out from the player and the day, so only progress is stored. They're collected by tapping, on the same day.
   - **Home**: level and XP bar under the name, a coin count, the daily reward card while it's waiting, and the missions panel with the streak.
   - **`GET /config`**: the dice settings and reward values. The app loads it on start and saved, and offline games use its dice (`DICE_MOMENTUM` and `DICE_LUCK_FADE` join `DICE_BALANCE_STRENGTH`). `game_finish` now records the dice settings; `daily_claim` and `mission_claim` are new events.
   - Values live in `server/progress/config.ts`.
+- **Shared profile on every screen** (`useCurrentUser`): one copy for the whole app, so a username change on Profile, or a profile that loads late on a slow network, shows on Home at once. Home also retries on focus.
+- **No login flash on start**: the splash screen stays up until the app knows whether someone is signed in and has routed them. If the login screen does show while signed in, it shows a loader instead of its buttons (`util/auth-phase.ts`).
 - **Friends leaderboard**: a "This week" tab in the Friends sheet (`/friends?tab=week`, `GET /social/leaderboard`). It ranks you and your friends by online wins since Monday (India time), then by games played, with ties sharing a place. Games under 2 minutes don't count. Only you and your friends appear, so bots never rank. Saved accounts only, like the rest of Friends.
 - **Invite bonus** (`PROGRESS.invite`): when a player in their first 7 days finishes a private game hosted by someone with a saved account who joined before them, both get 100 coins.
   - Once per new player. A host gets it at most 5 times a week; after that the new player still gets theirs.
   - Paid in the same transaction as the game's other rewards (ledger reasons `INVITE` and `INVITE_HOST`) and shown on both result screens.
   - The private lobby tells its host about it.
+- **Cosmetics shop** (`server/shop/`, Shop tab; guests too):
+  - Items for coins only, all drawn in code (`app/components/cosmetics/`) and all original:
+    - **19 pawn styles** (250 to 2,500): Marble, Ducky, Cupcake, Mushroom, Kitty, Ghost, Star Cap, Penguin, Robo, Pumpkin, Alien, Diya, Crown, Rocket, Ninja, Knight, Planet, Gemstone and Champion. Each is its own shape, in the player's colour.
+    - **4 dice** (250 to 1,500): Midnight, Candy, Teak and Gold.
+    - **18 boards** (600 to 2,500): Night Sky, Woodcraft, Sand Dunes, Chalkboard, Candyland, Garden, Coral Reef, Snowfall, Sakura, Haunted Night, 8-Bit, Cricket Ground, Festival of Lights, Holi Colours, Mech Lab, Deep Space, Neon Arcade and Royal.
+    - Plus the free Classic of each.
+  - Board themes are data (`items.ts`) for a small engine in `LudoBoard.tsx`. A theme sets the frame (with sparkles or festive lights), tile shape and gaps, lane and home fills, patterns over the homes (cobwebs, circuits, waves, dunes, chalk hatching, and so on), the panel and slot style, the safe-square symbol and the centre emblem (`motifs.tsx`). The four homes stay in the players' colours. Symbols are drawn upright for each player's turn of the board.
+  - Pawn styles keep the player's colour, so whose pawn it is still reads at a glance. Pass & Play keeps the defaults; against the computer your pawns and dice are yours.
+  - Everyone in a game sees each player's pawns, and the roller's dice. The board is only ever the viewer's own.
+  - Buying takes the coins and equips the item in one transaction: coins never go below zero, and the ledger's unique key (`shop:<user>:<item>`) stops a double tap paying twice. Spends are `SHOP` ledger rows with a negative amount.
+  - `Entitlement` rows record what each player owns, with a source (`COINS` now; `PLAY`, `APPSTORE`, `REWARD`, `ADMIN` later), an optional store id (unique, so a store purchase grants once) and an optional end time for trials. Equipped items are `User.pawnSkin`, `diceSkin` and `boardTheme`; an ended trial or a removed item shows as the default.
+  - **Shop speed:** the cards show pre-drawn WebP images (`app/assets/shop/`, 44 images, about 820 KB), not live SVG. Run `npm run shop-previews` in `app/` after changing any item's art: it draws every item with the real components and rewrites `components/cosmetics/previews.ts`. The list only draws the cards on screen, and each card re-renders only when its own state changes. The dice's drawing lives in `DiceArt.tsx`, apart from its animation, so the script can draw it.
+  - **Tabs:** hidden tabs are frozen (`freezeOnBlur`), so coin and social updates don't re-render screens you can't see. Home's floating dice stops animating while Home isn't showing. The game board and the floating pawns are cached as GPU textures, since they never change while they move.
+  - The catalogue lives in `server/shop/catalog.ts`. The app lists only items it can draw, so a new item waits for an app update.
+  - `GET /shop`, `POST /shop/items/:id/buy`, `POST /shop/items/:id/equip`. Equipping updates the player in any room they're in; others see it from the room's next update.
+  - The app remembers the equipped items, so offline games show them without the server. Tapping the coin count on Home opens the shop. New events `shop_view`, `purchase` and `shop_equip`.
 
 ## Supabase settings for guests
 - Authentication → Sign In / Providers: turn on **Allow anonymous sign-ins** and **Allow manual linking**.

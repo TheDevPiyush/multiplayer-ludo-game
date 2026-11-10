@@ -2,7 +2,7 @@ import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View as RNView } from 'react-native';
-import Animated, { FadeInDown, FadeOutUp, LinearTransition } from 'react-native-reanimated';
+import Animated, { FadeInDown, LinearTransition } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import AppDialog from '@/components/Dialog';
@@ -15,7 +15,7 @@ import { useSocket } from '@/components/SocketProvider';
 import { UserAvatar } from '@/components/UserAvatar';
 import { FloatingDiceArt } from '@/components/ludo/FloatingDiceArt';
 import { Text } from '@/components/Themed';
-import { useCurrentUser } from '@/hooks/useCurrentUser';
+import { refreshCurrentUser, useCurrentUser } from '@/hooks/useCurrentUser';
 import { useProgress } from '@/hooks/useProgress';
 import { friendsHref } from '@/util/links';
 import { syncPushToken } from '@/util/push';
@@ -90,6 +90,8 @@ export default function HomeTabScreen() {
     // Home is where we ask for notification permission; once granted, the token is also
     // synced on every app open (startPushTokenSync in the root layout).
     useFocusEffect(useCallback(() => void syncPushToken({ prompt: true }), []));
+    // Shared with Profile; this retries a profile that didn't load (slow or no network).
+    useFocusEffect(useCallback(() => void refreshCurrentUser(), []));
 
     const username = user?.username ?? 'player';
     const games = user?.totalGames ?? 0;
@@ -136,10 +138,16 @@ export default function HomeTabScreen() {
                     )}
                 </RNView>
                 {progress && (
-                    <RNView style={styles.coins} accessibilityLabel={`${progress.coins} coins`}>
+                    <Pressable
+                        onPress={() => router.navigate('/(tabs)/shop')}
+                        style={({ pressed }) => [styles.coins, pressed && { transform: [{ scale: 0.95 }] }]}
+                        hitSlop={6}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${progress.coins} coins. Open the shop`}
+                    >
                         <Coin size={18} />
                         <Text weight="bold" style={styles.coinsText}>{progress.coins.toLocaleString('en-IN')}</Text>
-                    </RNView>
+                    </Pressable>
                 )}
                 <Pressable
                     onPress={() => router.push(friendsHref(requests > 0 ? 'requests' : 'friends'))}
@@ -155,13 +163,6 @@ export default function HomeTabScreen() {
                     )}
                 </Pressable>
             </Animated.View>
-
-            {/* Today's reward, only while it's waiting */}
-            {progress && !progress.daily.claimedToday && (
-                <Animated.View entering={FadeInDown.delay(40).duration(400)} exiting={FadeOutUp.duration(250)}>
-                    <DailyRewardCard progress={progress} onClaim={claimDaily} onError={setError} />
-                </Animated.View>
-            )}
 
             {/* Hero: online with friends */}
             <Animated.View entering={FadeInDown.delay(80).duration(450)}>
@@ -210,6 +211,13 @@ export default function HomeTabScreen() {
             {progress && (
                 <Animated.View entering={FadeInDown.delay(200).duration(450)} layout={LinearTransition}>
                     <MissionsPanel progress={progress} onClaim={claimMission} onError={setError} />
+                </Animated.View>
+            )}
+
+            {/* Daily reward: always here, this week with what's collected and missed */}
+            {progress && (
+                <Animated.View entering={FadeInDown.delay(220).duration(450)} layout={LinearTransition}>
+                    <DailyRewardCard progress={progress} onClaim={claimDaily} onError={setError} />
                 </Animated.View>
             )}
 

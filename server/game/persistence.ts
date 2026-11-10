@@ -4,11 +4,15 @@ import { prisma } from '../lib/prisma';
 import { redis } from '../lib/redis';
 import { payGameRewards, type RewardSummary } from '../progress/progress';
 import { BOT_PROVIDER } from './bots';
+import { equippedItem } from '../shop/catalog';
 import type { LivePlayer, LiveRoom, MoveEntry, RoomStatus } from './live-room';
 
 export interface Profile {
     username: string;
     avatarUrl: string | null;
+    /** Equipped shop items others see in a game (null: the default). */
+    pawnSkin?: string | null;
+    diceSkin?: string | null;
 }
 
 /**
@@ -51,7 +55,7 @@ function findRoom(where: { id: string } | { gameCode: string }) {
         where,
         include: {
             players: {
-                include: { user: { select: { username: true, avatarUrl: true, provider: true } } },
+                include: { user: { select: { username: true, avatarUrl: true, provider: true, pawnSkin: true, diceSkin: true } } },
                 orderBy: { seatNumber: 'asc' },
             },
         },
@@ -97,6 +101,8 @@ function fromDb(db: DbRoom): LiveRoom {
             joinedAt: p.joinedAt.toISOString(),
             username: p.user.username,
             avatarUrl: p.user.avatarUrl,
+            pawnSkin: p.user.pawnSkin,
+            diceSkin: p.user.diceSkin,
             ...(p.user.provider === BOT_PROVIDER ? { isBot: true } : {}),
         })),
         game,
@@ -217,7 +223,22 @@ export const prismaPersistence: Persistence = {
     },
 
     async getProfile(userId) {
-        return prisma.user.findUnique({ where: { id: userId }, select: { username: true, avatarUrl: true } });
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: {
+                username: true, avatarUrl: true, pawnSkin: true, diceSkin: true,
+                // Trials that have ended: their item no longer shows.
+                entitlements: { where: { expiresAt: { lte: new Date() } }, select: { itemId: true } },
+            },
+        });
+        if (!user) return null;
+        const usable = new Set([user.pawnSkin, user.diceSkin].filter((id): id is string => !!id && !user.entitlements.some(e => e.itemId === id)));
+        return {
+            username: user.username,
+            avatarUrl: user.avatarUrl,
+            pawnSkin: equippedItem('pawn', user.pawnSkin, usable),
+            diceSkin: equippedItem('dice', user.diceSkin, usable),
+        };
     },
 };
 

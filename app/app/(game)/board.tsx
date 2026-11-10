@@ -28,6 +28,7 @@ import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
 import { useGameActions } from '@/hooks/useGameActions';
 import { useGameRoom, useRoundTrip } from '@/hooks/useGameRoom';
+import { useEquipped } from '@/hooks/useShop';
 import { useRoomChat } from '@/hooks/useRoomChat';
 import { markHistoryStale } from '@/util/history-cache';
 import { useSocket } from '@/components/SocketProvider';
@@ -349,9 +350,16 @@ export default function GameBoardScreen() {
         }
     }, []);
 
+    /** The finished game was too short to pay anything (the server's PROGRESS.minGameSeconds). */
+    const tooShort = !!room?.startedAt && room.status === 'FINISHED'
+        && (Date.parse(room.endedAt ?? new Date().toISOString()) - Date.parse(room.startedAt)) < 120_000;
+
     /** Turns the board so your own home is bottom-right on your phone. */
     const myColor = players.find(p => p.userId === currentUserId)?.color;
     const turns = turnsFor(myColor);
+    // Pawns and dice look as their owner equipped them; the board is the viewer's own.
+    const myBoard = useEquipped().board;
+    const skinOf = (color: string | null | undefined) => players.find(p => p.color === color)?.user;
 
     // Token coords & stacking
     const tokenItems = useMemo(() => {
@@ -535,11 +543,12 @@ export default function GameBoardScreen() {
             {/* BOARD */}
             <RNView style={styles.boardWrap}>
                 <RNView style={styles.boardShadow} />
-                <LudoBoard turns={turns} />
+                <LudoBoard turns={turns} theme={myBoard} />
                 {tokenItems.map(t => (
                     <Token
                         turns={turns}
                         key={t.key}
+                        skin={skinOf(t.color)?.pawnSkin}
                         color={t.color}
                         coord={t.coord}
                         pos={t.pos}
@@ -579,6 +588,7 @@ export default function GameBoardScreen() {
                         result={rollResult}
                         onSettled={onDiceSettled}
                         color={COLOR_HEX[rolling ? rollingColor ?? shownColor : shownColor] ?? '#888'}
+                        skin={skinOf(rolling ? rollingColor ?? shownColor : shownColor)?.diceSkin}
                         waiting={canRoll}
                         disabled={!canRoll}
                         onPress={handleRollDice}
@@ -643,7 +653,12 @@ export default function GameBoardScreen() {
                                 ? 'Champion of this round!'
                                 : `Winner: ${players.find(p => p.userId === winnerInfo.winnerId)?.user.username ?? 'Unknown'}`}
                         </Text>
-                        {reward && <GameRewardLine reward={reward} />}
+                        {reward ? <GameRewardLine reward={reward} /> : tooShort && (
+                            // The server pays nothing for these (it stops farming with quick quits).
+                            <Text weight="medium" style={styles.noReward}>
+                                Games shorter than 2 minutes don't earn coins, XP or mission progress.
+                            </Text>
+                        )}
                         {rematchOffer && (
                             <RNView style={styles.rematchOffer}>
                                 <MaterialCommunityIcons name="sword-cross" size={14} color="#37BD6A" />
@@ -854,6 +869,7 @@ const styles = StyleSheet.create({
     },
     winTitle: { fontSize: 22, color: palette.text },
     winSub: { fontSize: 13, color: palette.mutedText, textAlign: 'center' },
+    noReward: { fontSize: 12, color: 'rgba(255,255,255,0.6)', textAlign: 'center', paddingHorizontal: 8 },
     rematchOffer: {
         flexDirection: 'row', alignItems: 'center', gap: 6,
         maxWidth: '100%',

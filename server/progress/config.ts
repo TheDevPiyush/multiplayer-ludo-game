@@ -27,7 +27,7 @@ export const PROGRESS = {
     minMoves: 5,
     /** Coins for each level gained. */
     levelUpCoins: 50,
-    /** Daily reward by day of the 7-day cycle; missing a day starts it over. */
+    /** Daily reward by day of the India week, Monday first; a missed day just loses its coins. */
     dailyRewards: [20, 30, 40, 50, 60, 80, 150],
     missionsPerDay: 3,
     /**

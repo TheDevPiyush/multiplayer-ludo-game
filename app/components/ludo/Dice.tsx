@@ -11,218 +11,11 @@ import Animated, {
     type SharedValue,
 } from 'react-native-reanimated';
 import { scheduleOnRN, scheduleOnUI } from 'react-native-worklets';
-import Svg, { Circle, Defs, Ellipse, G, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
+import Svg from 'react-native-svg';
 
-// ─── Tiny 3D renderer ────────────────────────────────────────────────────────
-// A die is a cube with fixed pips on each face. We rotate it, hide the faces
-// that point away, and draw each visible face as an affine-mapped unit square
-// (an orthographic projection of a square is exactly a parallelogram). A cube is
-// convex, so visible faces never overlap — no depth sorting needed.
-//
-// Every pose is drawn once, as a static SVG. The rolling die never redraws an
-// SVG while it moves (see RollingDice): that is what made it drop frames on
-// low-end Android, where each animated SVG prop re-rasterises the whole die.
+import { DiceDefs, DieShape, FACE_UP, REST_TILT, apply, orientation, type Mat } from './DiceArt';
 
-type Vec = [number, number, number];
-type Mat = [Vec, Vec, Vec]; // rows
-
-/** Pip positions in face units (0..1). */
-const PIPS: Record<number, [number, number][]> = {
-    1: [[0.5, 0.5]],
-    2: [[0.27, 0.27], [0.73, 0.73]],
-    3: [[0.27, 0.27], [0.5, 0.5], [0.73, 0.73]],
-    4: [[0.27, 0.27], [0.73, 0.27], [0.27, 0.73], [0.73, 0.73]],
-    5: [[0.27, 0.27], [0.73, 0.27], [0.5, 0.5], [0.27, 0.73], [0.73, 0.73]],
-    6: [[0.27, 0.24], [0.73, 0.24], [0.27, 0.5], [0.73, 0.5], [0.27, 0.76], [0.73, 0.76]],
-};
-
-type Face = { value: number; n: Vec; a: Vec; b: Vec };
-
-/**
- * Faces of a standard die (opposites sum to 7). `a` / `b` are the face's
- * right / down directions when that face is turned towards the viewer.
- */
-const FACES: Face[] = [
-    { value: 1, n: [0, 0, 1], a: [1, 0, 0], b: [0, -1, 0] },
-    { value: 6, n: [0, 0, -1], a: [-1, 0, 0], b: [0, -1, 0] },
-    { value: 3, n: [1, 0, 0], a: [0, 0, -1], b: [0, -1, 0] },
-    { value: 4, n: [-1, 0, 0], a: [0, 0, 1], b: [0, -1, 0] },
-    { value: 2, n: [0, 1, 0], a: [1, 0, 0], b: [0, 0, 1] },
-    { value: 5, n: [0, -1, 0], a: [1, 0, 0], b: [0, 0, -1] },
-];
-
-/** Euler angles (degrees, applied X → Y → Z) that turn each value towards the viewer. */
-const FACE_UP: Record<number, Vec> = {
-    1: [0, 0, 0],
-    6: [0, 180, 0],
-    3: [0, -90, 0],
-    4: [0, 90, 0],
-    2: [90, 0, 0],
-    5: [-90, 0, 0],
-};
-
-/** Resting tilt so a face-up die still shows a sliver of its top and side. */
-const REST_TILT: Vec = [-9, 11, 0];
-
-const LIGHT: Vec = [-0.4877, 0.6503, 0.5826]; // normalised (-0.45, 0.6, 0.66)
-
-const CORNERS: Vec[] = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => [x, y, z] as Vec)));
-
-function orientation(ax: number, ay: number, az: number, tilt: Vec): Mat {
-    const r = (d: number) => (d * Math.PI) / 180;
-    const mul = (p: Mat, q: Mat): Mat => {
-        const o: Mat = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
-        for (let i = 0; i < 3; i++) {
-            for (let j = 0; j < 3; j++) {
-                o[i]![j] = p[i]![0] * q[0]![j]! + p[i]![1] * q[1]![j]! + p[i]![2] * q[2]![j]!;
-            }
-        }
-        return o;
-    };
-    const rx = (d: number): Mat => {
-        const c = Math.cos(r(d)), s = Math.sin(r(d));
-        return [[1, 0, 0], [0, c, -s], [0, s, c]];
-    };
-    const ry = (d: number): Mat => {
-        const c = Math.cos(r(d)), s = Math.sin(r(d));
-        return [[c, 0, s], [0, 1, 0], [-s, 0, c]];
-    };
-    const rz = (d: number): Mat => {
-        const c = Math.cos(r(d)), s = Math.sin(r(d));
-        return [[c, -s, 0], [s, c, 0], [0, 0, 1]];
-    };
-    const own = mul(rz(az), mul(ry(ay), rx(ax)));
-    return mul(mul(ry(tilt[1]), rx(tilt[0])), own);
-}
-
-function apply(m: Mat, v: Vec): Vec {
-    return [
-        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
-        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
-        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
-    ];
-}
-
-/** Screen-space matrix, visibility and shading for one face. */
-function faceProps(m: Mat, face: Face, half: number, c: number) {
-    const n = apply(m, face.n);
-    const a = apply(m, face.a);
-    const b = apply(m, face.b);
-    // Unit square (u, w) → screen: centre + (2u−1)·a + (2w−1)·b, with y flipped.
-    const ax = a[0] * half, ay = -a[1] * half;
-    const bx = b[0] * half, by = -b[1] * half;
-    const cx = c + n[0] * half, cy = c - n[1] * half;
-    const light = Math.max(0, n[0] * LIGHT[0] + n[1] * LIGHT[1] + n[2] * LIGHT[2]);
-    return {
-        matrix: [2 * ax, 2 * ay, 2 * bx, 2 * by, cx - ax - bx, cy - ay - by],
-        visible: n[2] > 0.02,
-        shade: 0.32 * (1 - light), // 0 = fully lit
-    };
-}
-
-/** Outline of the rotated cube (convex hull, monotone chain) as an SVG path. */
-function silhouette(m: Mat, half: number, c: number): string {
-    const pts: [number, number][] = [];
-    for (let i = 0; i < CORNERS.length; i++) {
-        const p = apply(m, CORNERS[i]!);
-        pts.push([c + p[0] * half, c - p[1] * half]);
-    }
-    pts.sort((p, q) => p[0] - q[0] || p[1] - q[1]);
-    const cross = (o: [number, number], p: [number, number], q: [number, number]) =>
-        (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
-    const lower: [number, number][] = [];
-    for (let i = 0; i < pts.length; i++) {
-        while (lower.length >= 2 && cross(lower[lower.length - 2]!, lower[lower.length - 1]!, pts[i]!) <= 0) lower.pop();
-        lower.push(pts[i]!);
-    }
-    const upper: [number, number][] = [];
-    for (let i = pts.length - 1; i >= 0; i--) {
-        while (upper.length >= 2 && cross(upper[upper.length - 2]!, upper[upper.length - 1]!, pts[i]!) <= 0) upper.pop();
-        upper.push(pts[i]!);
-    }
-    const hull = lower.slice(0, -1).concat(upper.slice(0, -1));
-    let d = '';
-    for (let i = 0; i < hull.length; i++) d += `${i === 0 ? 'M' : 'L'}${hull[i]![0].toFixed(2)} ${hull[i]![1].toFixed(2)}`;
-    return `${d}Z`;
-}
-
-const BODY = '#A9AFC4';
-const SHADE = '#1E2340';
-
-/** Gradient ids are per colour, so dice of different colours never share one (web: ids are global). */
-const pipId = (color: string) => `pip-${color.replace(/[^a-zA-Z0-9]/g, '')}`;
-
-function FaceArt({ value, pip }: { value: number; pip: string }) {
-    return (
-        <>
-            <Rect x={0.015} y={0.015} width={0.97} height={0.97} rx={0.17} fill="#FFFFFF" />
-            {(PIPS[value] ?? []).map(([x, y], i) => (
-                <G key={i}>
-                    <Circle cx={x} cy={y + 0.012} r={0.092} fill="rgba(0,0,0,0.2)" />
-                    <Circle cx={x} cy={y} r={0.088} fill={`url(#${pip})`} />
-                </G>
-            ))}
-        </>
-    );
-}
-
-function DiceDefs({ color }: { color: string }) {
-    return (
-        <Defs>
-            <RadialGradient id={pipId(color)} cx="35%" cy="30%" r="75%">
-                <Stop offset="0" stopColor={color} />
-                <Stop offset="1" stopColor="#0F172A" stopOpacity={0.9} />
-            </RadialGradient>
-        </Defs>
-    );
-}
-
-/** Outline + visible faces of a die in pose `m`, centred on (c, c). */
-function DieShape({ m, size, c, color }: { m: Mat; size: number; c: number; color: string }) {
-    const half = size * 0.3;
-    const pip = pipId(color);
-    return (
-        <>
-            <Path d={silhouette(m, half, c)} fill={BODY} stroke={BODY} strokeWidth={size * 0.06} strokeLinejoin="round" />
-            {FACES.map(face => {
-                const f = faceProps(m, face, half, c);
-                if (!f.visible) return null;
-                return (
-                    <G key={face.value} transform={`matrix(${f.matrix.join(' ')})`}>
-                        <FaceArt value={face.value} pip={pip} />
-                        <Rect x={0.015} y={0.015} width={0.97} height={0.97} rx={0.17} fill={SHADE} opacity={f.shade} />
-                    </G>
-                );
-            })}
-        </>
-    );
-}
-
-/** A static die rendered in true 3D (used for decoration, e.g. the home hero). */
-export function Dice3D({
-    value,
-    size,
-    color,
-    tilt = REST_TILT,
-}: {
-    value: number;
-    size: number;
-    color: string;
-    tilt?: Vec;
-}) {
-    const v = Math.min(6, Math.max(1, Math.round(value)));
-    const [ax, ay, az] = FACE_UP[v]!;
-    const m = orientation(ax, ay, az, tilt);
-    const half = size * 0.3;
-    const c = size / 2;
-    return (
-        <Svg width={size} height={size * 1.08}>
-            <DiceDefs color={color} />
-            <Ellipse cx={c} cy={c + half * 1.55} rx={half * 1.25} ry={half * 0.2} fill="rgba(0,0,0,0.26)" />
-            <DieShape m={m} size={size} c={c} color={color} />
-        </Svg>
-    );
-}
+export { Dice3D } from './DiceArt';
 
 // ─── Rolling die: fake 3D ────────────────────────────────────────────────────
 // While it rolls, the die flips through a loop of pre-drawn tumble poses (only
@@ -297,12 +90,12 @@ const SETTLE: Record<number, Mat[]> = Object.fromEntries(
 );
 
 /** One pose as a static SVG, drawn once. */
-const PoseArt = memo(function PoseArt({ m, size, color }: { m: Mat; size: number; color: string }) {
+const PoseArt = memo(function PoseArt({ m, size, color, skin }: { m: Mat; size: number; color: string; skin?: string | null }) {
     const w = size * (1 + 2 * PAD);
     return (
         <Svg width={w} height={w}>
-            <DiceDefs color={color} />
-            <DieShape m={m} size={size} c={w / 2} color={color} />
+            <DiceDefs color={color} skin={skin} />
+            <DieShape m={m} size={size} c={w / 2} color={color} skin={skin} />
         </Svg>
     );
 });
@@ -314,11 +107,12 @@ const PoseArt = memo(function PoseArt({ m, size, color }: { m: Mat; size: number
  * function isn't tracked, and the die then showed a stale face).
  */
 const Pose = memo(function Pose({
-    m, size, color, kind, face = 0, index = 0, mode, frame, settle, shown,
+    m, size, color, skin, kind, face = 0, index = 0, mode, frame, settle, shown,
 }: {
     m: Mat;
     size: number;
     color: string;
+    skin?: string | null;
     kind: typeof MODE_TUMBLE | typeof MODE_SETTLE;
     face?: number;
     index?: number;
@@ -337,7 +131,7 @@ const Pose = memo(function Pose({
     });
     return (
         <Animated.View style={[StyleSheet.absoluteFill, style]} pointerEvents="none">
-            <PoseArt m={m} size={size} color={color} />
+            <PoseArt m={m} size={size} color={color} skin={skin} />
         </Animated.View>
     );
 });
@@ -352,11 +146,12 @@ type FaceSetter = (face: number) => void;
  * animated layer around it, keeps that from touching anything that moves.
  */
 const RestFaces = memo(function RestFaces({
-    initial, size, color, bind,
+    initial, size, color, skin, bind,
 }: {
     initial: number;
     size: number;
     color: string;
+    skin?: string | null;
     bind: (set: FaceSetter | null) => void;
 }) {
     const [face, setFace] = useState(initial);
@@ -368,7 +163,7 @@ const RestFaces = memo(function RestFaces({
         <>
             {[1, 2, 3, 4, 5, 6].map(v => (
                 <View key={v} style={[StyleSheet.absoluteFill, { opacity: v === face ? 1 : 0 }]} pointerEvents="none">
-                    <PoseArt m={REST[v]!} size={size} color={color} />
+                    <PoseArt m={REST[v]!} size={size} color={color} skin={skin} />
                 </View>
             ))}
         </>
@@ -379,6 +174,7 @@ const RestFaces = memo(function RestFaces({
 const Poses = memo(function Poses({
     size,
     color,
+    skin,
     withTumble,
     withSettle,
     initialFace,
@@ -390,6 +186,7 @@ const Poses = memo(function Poses({
 }: {
     size: number;
     color: string;
+    skin?: string | null;
     /** Tumble and landing poses mount a moment after the die, so opening the board stays quick. */
     withTumble: boolean;
     withSettle: boolean;
@@ -400,13 +197,13 @@ const Poses = memo(function Poses({
     settle: SharedValue<number>;
     shown: SharedValue<number>;
 }) {
-    const shared = { size, color, mode, frame, settle, shown };
+    const shared = { size, color, skin, mode, frame, settle, shown };
     // Shown at rest (fully opaque then, as on the first render, so a re-render can't change it).
     const restStyle = useAnimatedStyle(() => ({ opacity: mode.value === MODE_REST ? 1 : 0 }));
     return (
         <>
             <Animated.View style={[StyleSheet.absoluteFill, restStyle]} pointerEvents="none">
-                <RestFaces initial={initialFace} size={size} color={color} bind={bindRest} />
+                <RestFaces initial={initialFace} size={size} color={color} skin={skin} bind={bindRest} />
             </Animated.View>
             {withTumble && TUMBLE.map((m, k) => (
                 <Pose key={`tumble-${k}`} m={m} kind={MODE_TUMBLE} index={k} {...shared} />
@@ -431,6 +228,7 @@ export function RollingDice({
     result,
     onSettled,
     color,
+    skin,
     size = 68,
     waiting,
     disabled,
@@ -444,6 +242,8 @@ export function RollingDice({
     /** The die has come to rest on the roll's result. */
     onSettled?: () => void;
     color: string;
+    /** The roller's equipped dice item. */
+    skin?: string | null;
     size?: number;
     /** Pulse the halo (the local player should roll). */
     waiting?: boolean;
@@ -692,6 +492,7 @@ export function RollingDice({
                     <Poses
                         size={size}
                         color={color}
+                        skin={skin}
                         withTumble={tumbleMounted || rolling}
                         withSettle={settleMounted || rolling}
                         initialFace={initialFace}

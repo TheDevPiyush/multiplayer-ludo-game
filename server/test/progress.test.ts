@@ -4,6 +4,8 @@ import type { LiveRoom } from '../game/live-room';
 import { PROGRESS } from '../progress/config';
 import {
     dailyClaim,
+    weekDays,
+    weekdayOf,
     dayOf,
     inviteMatch,
     levelFor,
@@ -37,12 +39,16 @@ describe('levels', () => {
 
 describe('daily reward', () => {
     test('a streak grows on consecutive days, wraps after 7, and starts over after a missed day', () => {
-        expect(dailyClaim(null, 0, '2026-11-10')).toEqual({ streak: 1, day: 1, coins: PROGRESS.dailyRewards[0] });
+        // 10 Nov 2026 is a Tuesday: the week's second reward, whatever the streak.
+        expect(dailyClaim(null, 0, '2026-11-10')).toEqual({ streak: 1, day: 2, coins: PROGRESS.dailyRewards[1] });
         expect(dailyClaim('2026-11-10', 1, '2026-11-10')).toBeNull();
-        expect(dailyClaim('2026-11-10', 1, '2026-11-11')).toMatchObject({ streak: 2, day: 2 });
-        expect(dailyClaim('2026-11-10', 7, '2026-11-11')).toMatchObject({ streak: 8, day: 1 });
-        expect(dailyClaim('2026-11-10', 6, '2026-11-11')).toMatchObject({ day: 7, coins: PROGRESS.dailyRewards[6] });
-        expect(dailyClaim('2026-11-08', 5, '2026-11-10')).toMatchObject({ streak: 1, day: 1 });
+        expect(dailyClaim('2026-11-10', 1, '2026-11-11')).toMatchObject({ streak: 2, day: 3 });
+        expect(dailyClaim('2026-11-14', 6, '2026-11-15')).toMatchObject({ streak: 7, day: 7, coins: PROGRESS.dailyRewards[6] });
+        expect(dailyClaim('2026-11-15', 7, '2026-11-16')).toMatchObject({ streak: 8, day: 1, coins: PROGRESS.dailyRewards[0] });
+        // A missed day loses its coins and the streak, nothing else.
+        expect(dailyClaim('2026-11-08', 5, '2026-11-10')).toMatchObject({ streak: 1, day: 2, coins: PROGRESS.dailyRewards[1] });
+        expect(weekdayOf('2026-11-09')).toBe(1);
+        expect(weekDays('2026-11-15')).toEqual(['2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12', '2026-11-13', '2026-11-14', '2026-11-15']);
     });
 
     test('a streak shows as lost once a whole day passes', () => {

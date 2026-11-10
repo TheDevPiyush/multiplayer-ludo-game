@@ -10,6 +10,7 @@ import {
     inviteMatch,
     levelFor,
     liveStreak,
+    weekDays,
     missionsFor,
     offlineGameReward,
     onlineGameRewards,
@@ -52,14 +53,18 @@ export interface InviteBonus {
 /** Everything Home shows about a player's progress. */
 export async function getProgress(userId: string, now = new Date(), db: Db = prisma) {
     const day = dayOf(now);
-    const [user, rows] = await Promise.all([
-        db.user.findUnique({ where: { id: userId }, select: { coins: true, xp: true, dailyStreak: true, dailyClaimDay: true } }),
+    const week = weekDays(day);
+    const [user, rows, claims] = await Promise.all([
+        db.user.findUnique({ where: { id: userId }, select: { coins: true, xp: true, dailyStreak: true, dailyClaimDay: true, createdAt: true } }),
         db.missionProgress.findMany({ where: { userId, day } }),
+        db.coinLedger.findMany({ where: { userId, reason: 'DAILY', day: { gte: week[0]! } }, select: { day: true } }),
     ]);
     if (!user) throw new ServiceError(404, 'Player not found.');
     const level = levelFor(user.xp);
     const next = dailyClaim(user.dailyClaimDay, user.dailyStreak, day);
     const streak = liveStreak(user.dailyClaimDay, user.dailyStreak, day);
+    const claimed = new Set(claims.map(c => c.day));
+    const joined = dayOf(user.createdAt);
     return {
         day,
         coins: user.coins,
@@ -70,9 +75,19 @@ export async function getProgress(userId: string, now = new Date(), db: Db = pri
         streak,
         daily: {
             claimedToday: !next,
-            /** Place in the 7-day cycle of the next claim, or today's when already claimed. */
-            cycleDay: next?.day ?? ((Math.max(streak, 1) - 1) % PROGRESS.dailyRewards.length) + 1,
+            /** Today's weekday, Monday 1 … Sunday 7. */
+            cycleDay: week.indexOf(day) + 1,
             rewards: PROGRESS.dailyRewards,
+            /** This week, Monday first. `before`: before the player joined (nothing to miss). */
+            week: week.map((date, i) => ({
+                date,
+                coins: PROGRESS.dailyRewards[i]!,
+                state: claimed.has(date) ? 'collected' as const
+                    : date === day ? 'today' as const
+                    : date > day ? 'upcoming' as const
+                    : date < joined ? 'before' as const
+                    : 'missed' as const,
+            })),
         },
         missions: missionsFor(userId, day).map(m => {
             const row = rows.find(r => r.missionId === m.id);

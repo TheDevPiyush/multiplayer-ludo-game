@@ -1,6 +1,8 @@
+import { useIsFocused } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
 import { StyleSheet, View as RNView, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
+    cancelAnimation,
     Easing,
     useAnimatedStyle,
     useSharedValue,
@@ -54,12 +56,18 @@ export function FloatingDiceArt({ size = 'medium', rolling = false, style }: {
     style?: StyleProp<ViewStyle>;
 }) {
     const s = SIZES[size];
-    const roll = useRollLoop(rolling);
+    // Only while its screen is showing: a tab or screen behind another keeps running otherwise.
+    const focused = useIsFocused();
+    const roll = useRollLoop(rolling && focused);
     const float = useSharedValue(0);
     useEffect(() => {
+        if (!focused) {
+            cancelAnimation(float);
+            return;
+        }
         // Back and forth with no reset between loops, so the float never jumps.
         float.value = withRepeat(withTiming(1, { duration: 1600, easing: Easing.inOut(Easing.sin) }), -1, true);
-    }, [float]);
+    }, [float, focused]);
     const diceStyle = useAnimatedStyle(() => ({
         transform: [{ translateY: -float.value * s.lift }, { rotate: `${-12 + float.value * 6}deg` }],
     }));
@@ -67,7 +75,7 @@ export function FloatingDiceArt({ size = 'medium', rolling = false, style }: {
 
     return (
         <RNView style={[{ width: s.box[0], height: s.box[1] }, style]} pointerEvents="none">
-            <Animated.View style={[styles.abs, s.backAt, pawnStyle]}>
+            <Animated.View style={[styles.abs, s.backAt, pawnStyle]} renderToHardwareTextureAndroid shouldRasterizeIOS>
                 <Pawn color="BLUE" width={s.back} />
             </Animated.View>
             <Animated.View style={[styles.abs, s.diceAt, diceStyle]}>
@@ -80,7 +88,7 @@ export function FloatingDiceArt({ size = 'medium', rolling = false, style }: {
                     <Dice3D value={6} size={s.dice} color={COLOR_HEX.RED!} tilt={[-28, 34, 0]} />
                 )}
             </Animated.View>
-            <Animated.View style={[styles.abs, s.frontAt, pawnStyle]}>
+            <Animated.View style={[styles.abs, s.frontAt, pawnStyle]} renderToHardwareTextureAndroid shouldRasterizeIOS>
                 <Pawn color="RED" width={s.front} />
             </Animated.View>
         </RNView>

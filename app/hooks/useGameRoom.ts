@@ -19,7 +19,8 @@ export type RoomPlayer = {
     isReady: boolean;
     rank: number | null;
     tokenPositions: number[];
-    user: { username: string; avatarUrl: string | null };
+    /** `pawnSkin` and `diceSkin`: equipped shop items (null or missing: the default; older servers send neither). */
+    user: { username: string; avatarUrl: string | null; pawnSkin?: string | null; diceSkin?: string | null };
 };
 
 export type GameRoom = {
@@ -34,6 +35,7 @@ export type GameRoom = {
     winnerId: string | null;
     createdById: string;
     startedAt: string | null;
+    endedAt?: string | null;
     players: RoomPlayer[];
     /** Server state version — updates older than the current one are dropped. */
     version: number;

@@ -16,6 +16,7 @@ import { GameRewardLine } from '@/components/progress/GameRewardLine';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
 import { useLocalGame, type LocalGameConfig } from '@/hooks/useLocalGame';
+import { useEquipped } from '@/hooks/useShop';
 import { showProgress } from '@/hooks/useProgress';
 import { track, type GameMode } from '@/util/analytics';
 import { playEffect } from '@/util/audio';
@@ -104,6 +105,10 @@ export default function LocalBoardScreen() {
     // The turn as shown: the previous player keeps it until their token has stopped (see useLocalGame).
     const { shownTurn, shownSeat } = game;
     const turnHex = COLOR_HEX[shownTurn] ?? '#fff';
+    // Your equipped pawns and dice are yours alone: on your colour against the computer. Pass & Play
+    // shares one phone between players, so it keeps the defaults; the board is always yours.
+    const equipped = useEquipped();
+    const mySkin = (color: string, kind: 'pawn' | 'dice') => (color === soloColor ? equipped[kind] : null);
     const humanCount = config.seats.filter(s => s.kind === 'human').length;
 
     // ── Measuring ──
@@ -249,11 +254,12 @@ export default function LocalBoardScreen() {
 
             <RNView style={styles.boardWrap}>
                 <RNView style={styles.boardShadow} />
-                <LudoBoard turns={turns} />
+                <LudoBoard turns={turns} theme={equipped.board} />
                 {tokenItems.map(t => (
                     <Token
                         turns={turns}
                         key={t.key}
+                        skin={mySkin(t.color, 'pawn')}
                         color={t.color}
                         coord={t.coord}
                         pos={t.pos}
@@ -283,6 +289,7 @@ export default function LocalBoardScreen() {
                         result={game.rollResult}
                         onSettled={game.diceSettled}
                         color={turnHex}
+                        skin={mySkin(shownTurn, 'dice')}
                         waiting={canRoll}
                         disabled={!canRoll}
                         onPress={game.roll}

@@ -24,9 +24,12 @@ import { listenForNotificationTaps, startPushTokenSync } from '@/util/push';
 import { setAnalyticsUser } from '@/util/analytics';
 import { reportError, setMonitoringUser, startMonitoring } from '@/util/monitoring';
 import { loadRemoteConfig } from '@/util/remote-config';
+import { markInitialRouted, setAuthPhase, useAuthPhase } from '@/util/auth-phase';
+import { loadEquipped } from '@/hooks/useShop';
 
 startMonitoring();
 void loadRemoteConfig();
+void loadEquipped();
 
 /** The router's error screen, plus a report: errors caught here never reach the global crash handler. */
 export function ErrorBoundary(props: ErrorBoundaryProps) {
@@ -51,18 +54,22 @@ export default function RootLayout() {
 
 
   const router = useRouter();
-
+  const { routed } = useAuthPhase();
 
   // font loading
   useEffect(() => {
     if (error) throw error;
   }, [error]);
 
+  // The splash stays up until fonts are in and the first sign-in routing has run, so a signed-in
+  // player opens straight onto Home (or their game) instead of glimpsing the login screen.
+  // A moment after routing lets the new screen replace the login one; 4 s is the fallback.
   useEffect(() => {
-    if (loaded) {
-      SplashScreen.hideAsync();
-    }
-  }, [loaded]);
+    if (!loaded) return;
+    const hide = () => void SplashScreen.hideAsync().catch(() => {});
+    const timer = setTimeout(hide, routed ? 200 : 4_000);
+    return () => clearTimeout(timer);
+  }, [loaded, routed]);
 
 
   // Notification taps. Before the sign-in routing below: a tap that launched the app becomes its pending link.
@@ -77,6 +84,7 @@ export default function RootLayout() {
       if (!loggedIn) {
         setInitialRouteDone(false);
         router.replace('/(login)');
+        markInitialRouted();
         return;
       }
       const active = await getActiveRoom();
@@ -85,6 +93,7 @@ export default function RootLayout() {
       // A link opened the app (or arrived while signed out): go there.
       const link = takePendingLink();
       setInitialRouteDone(true);
+      markInitialRouted();
       if (link?.kind === 'join') {
         router.replace({ pathname: '/join/[code]', params: { code: link.code } });
         return;
@@ -124,6 +133,7 @@ export default function RootLayout() {
       setAnalyticsUser(session?.user.id ?? null, session?.user.is_anonymous === true);
       setMonitoringUser(session?.user.id ?? null);
       const next = !!session;
+      setAuthPhase(next ? 'signedIn' : 'signedOut');
       if (next === signedIn) return;
       signedIn = next;
       void resume(next);

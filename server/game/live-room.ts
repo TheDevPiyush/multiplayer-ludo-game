@@ -13,6 +13,9 @@ export interface LivePlayer {
     joinedAt: string;
     username: string;
     avatarUrl: string | null;
+    /** Equipped pawn and dice (shop item ids); null or missing is the default. */
+    pawnSkin?: string | null;
+    diceSkin?: string | null;
     /** A server-played seat that fills public rooms. Never sent to clients. */
     isBot?: boolean;
 }
@@ -131,7 +134,7 @@ export function toRoomDto(room: LiveRoom) {
                 tokenPositions: ps?.tokens ?? [0, 0, 0, 0],
                 joinedAt: p.joinedAt,
                 leftAt: null,
-                user: { username: p.username, avatarUrl: p.avatarUrl },
+                user: { username: p.username, avatarUrl: p.avatarUrl, pawnSkin: p.pawnSkin ?? null, diceSkin: p.diceSkin ?? null },
             };
         }),
     };
