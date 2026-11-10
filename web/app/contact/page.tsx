@@ -39,7 +39,7 @@ export default function Contact() {
 
             <h2>Complaints</h2>
             <p>
-                To raise a complaint about the game or another player, write to our grievance officer, {SITE.developer},
+                To raise a complaint about the game or another player, write to our grievance officer, {SITE.grievanceOfficer},
                 at <a href={`mailto:${SITE.contactEmail}`}>{SITE.contactEmail}</a>.
             </p>
 

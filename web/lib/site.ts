@@ -11,6 +11,8 @@ export const SITE = {
     /** Shown on the contact, privacy, terms and account-deletion pages. */
     contactEmail: 'support@thedevpiyush.com',
     developer: 'TheDevPiyush',
+    /** The person named on the contact page for complaints (India's Online Gaming Rules). */
+    grievanceOfficer: 'Piyush',
     /** The legal pages say "last updated" with this date. Change it whenever their text changes. */
     legalUpdated: '9 November 2026',
 } as const;

@@ -86,6 +86,13 @@
   - Sentry on the app (`util/monitoring.ts`, sessions give the crash-free rate) and the server (`lib/sentry.ts`, every `log.error`). Both stay off without a DSN. Tracing and replay stay off.
   - Readable app stack traces need `SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and `SENTRY_PROJECT` on EAS. After `eas update`, upload maps with `npx sentry-expo-upload-sourcemaps dist`.
 
+- **Adaptive dice v2** (`packages/ludo-engine/src/dice.ts`):
+  - One dice for everyone, online and offline. The Easy/Hard picker is gone; the local setup screen says "Dice adapt during the game to keep it close."
+  - Each player has a fading `luck` score: good rolls raise it, wasted rolls and lost pawns lower it. A hot player is eased off for a few turns, a cold one helped, and it fades by itself (`momentum` 1.5, `luckFade` 0.8).
+  - Strength grows as the race nears its end (0.8× to 1.2× of `strength`). Every face stays within 8–36% exactly.
+  - Saved games without `luck` keep working (treated as 0).
+  - Tune with `bun scripts/dice-report.ts` in `packages/ludo-engine` (`--engine=` compares another copy, `--fair=1` turns adapting off). Against the old dice over 2,000 games: sixes unchanged (about 17%), lead changes up 20–27%, the roll after three hot rolls averages 3.35 and after three cold 3.64, and the better bot wins more (73% vs 69%).
+
 ## Supabase settings for guests
 - Authentication → Sign In / Providers: turn on **Allow anonymous sign-ins** and **Allow manual linking**.
 - Authentication → Emails → **Change email address** template: include `{{ .Token }}`, so guests saving with email get the 6-digit code the app asks for.

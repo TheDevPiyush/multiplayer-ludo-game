@@ -20,6 +20,10 @@ export interface BalanceConfig {
     strength: number;
     /** Rolls without a six (all tokens in base) before the pity boost kicks in. */
     pityAfter: number;
+    /** How much a player's recent luck counts, next to how far ahead they are. 0 = not at all. */
+    momentum?: number;
+    /** Share of a player's luck left after each of their rolls. Lower = a hot run cools sooner. */
+    luckFade?: number;
 }
 
 export interface PlayerState {
@@ -30,6 +34,8 @@ export interface PlayerState {
     /** False once the player has left the game. */
     active: boolean;
     rollsWithoutSix: number;
+    /** Fading score of recent rolls: above 0 = running hot, below = running cold. Missing in older snapshots. */
+    luck?: number;
 }
 
 export type Phase = 'ROLL' | 'MOVE' | 'OVER';

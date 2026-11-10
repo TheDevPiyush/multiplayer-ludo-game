@@ -82,9 +82,14 @@ probability so any roll is always possible.
   sixes), which lets the pack catch up — the "sudden step back".
 - **Pity timer**: all tokens in base and N rolls without a six → six chance rises.
 - **Anti-streak**: chance of a six drops after a six (three sixes still forfeits).
-- Strength is a single 0..1 knob in config (`balance.strength`), per room. Keep it
-  off for any future ranked / tournament / real-reward mode, and mention
-  "dynamic dice" in the rules screen.
+- **Momentum**: each player has a fading `luck` score. Good rolls raise it, wasted
+  rolls and losing a token lower it, and it fades after each of their rolls. A hot
+  run eases off for a few turns even in a close race, then recovers by itself.
+- **Strength per roll**: `balance.strength` is the base, gentle early and firmer as
+  someone nears the finish.
+- Always on for players, with no choice to make. It must never read spending, ads
+  watched or account type. Never advertise "fair dice" or "100% random".
+- Measure changes with `bun scripts/dice-report.ts` in `packages/ludo-engine`.
 
 ## 2. Real-time server + caching
 

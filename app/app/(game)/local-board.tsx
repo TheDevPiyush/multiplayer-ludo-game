@@ -21,7 +21,6 @@ import { feedbackForEvents, haptic } from '@/util/feedback';
 const palette = Colors.dark;
 
 const FALLBACK: LocalGameConfig = {
-    dynamicDice: true,
     seats: [
         { color: 'RED', kind: 'human', name: 'You', level: 'medium' },
         { color: 'GREEN', kind: 'bot', name: 'Green Bot', level: 'medium' },
@@ -190,7 +189,6 @@ export default function LocalBoardScreen() {
                     <FontAwesome name={humanCount > 1 ? 'users' : 'laptop'} size={11} color={palette.mutedText} />
                     <Text weight="medium" style={styles.chipText}>
                         {humanCount > 1 ? 'Pass & Play' : humanCount === 1 ? 'Vs Computer' : 'Bots only'}
-                        {config.dynamicDice ? ' · Easy dice' : ' · Hard dice'}
                     </Text>
                 </RNView>
                 <TouchableOpacity onPress={restart} style={styles.iconBtn}>

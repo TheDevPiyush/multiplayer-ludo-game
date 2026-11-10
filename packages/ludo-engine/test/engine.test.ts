@@ -1,11 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
+    afterRoll,
     autoAction,
     chooseMove,
     createGame,
+    dicePressure,
     diceProbabilities,
     legalMoves,
+    MAX_FACE_P,
     MIN_FACE_P,
     reduce,
     type Action,
@@ -199,6 +202,136 @@ describe('dice balancing', () => {
             counts[r.state.dice! - 1]!++;
         }
         for (const c of counts) expect(c / 6000).toBeGreaterThan(0.1);
+    });
+});
+
+describe('adaptive dice', () => {
+    const lucky = (state: GameState, color: Color, luck: number): GameState => ({
+        ...state,
+        players: state.players.map(p => (p.color === color ? { ...p, luck } : p)),
+    });
+    const avgFace = (p: number[]) => p.reduce((s, x, i) => s + x * (i + 1), 0);
+    const redOf = (g: GameState) => g.players.find(p => p.color === 'RED')!;
+    const start = () => withTokens(createGame({ playerCount: 2 }), { RED: [20, 10, 0, 0], GREEN: [20, 10, 0, 0] });
+
+    test('in an even race, a hot player gets lower odds and a cold one higher', () => {
+        const g = start();
+        const even = avgFace(diceProbabilities(g, 'RED'));
+        expect(avgFace(diceProbabilities(lucky(g, 'RED', 2), 'RED'))).toBeLessThan(even);
+        expect(avgFace(diceProbabilities(lucky(g, 'RED', -2), 'RED'))).toBeGreaterThan(even);
+    });
+
+    test('a hot run cools by itself over a few ordinary rolls', () => {
+        let g = lucky(start(), 'RED', 3);
+        expect(dicePressure(g, 'RED')).toBe(1);
+        for (let i = 0; i < 8; i++) g = lucky(g, 'RED', afterRoll(g, 'RED', 3));
+        expect(Math.abs(redOf(g).luck!)).toBeLessThan(1);
+        expect(Math.abs(dicePressure(g, 'RED'))).toBeLessThan(1);
+    });
+
+    test('a great roll raises luck, and a wasted one lowers it', () => {
+        const g = withTokens(createGame({ playerCount: 2 }), { RED: [26, 0, 0, 0], GREEN: [3, 0, 0, 0] });
+        // RED's 3 captures GREEN.
+        expect(redOf(apply(g, { type: 'ROLL', color: 'RED', value: 3 }).state).luck!).toBeGreaterThan(0.5);
+        expect(redOf(apply(g, { type: 'ROLL', color: 'RED', value: 1 }).state).luck!).toBeLessThan(0);
+    });
+
+    test('being captured counts as bad luck, more for a token that had come further', () => {
+        const lostAt = (pos: number, attacker: number) => {
+            let g = withTokens(createGame({ playerCount: 2, ...fair }), { RED: [attacker, 0, 0, 0], GREEN: [pos, 0, 0, 0] });
+            g = { ...g, balance: { ...g.balance, enabled: true } };
+            g = apply(g, { type: 'ROLL', color: 'RED', value: 3 }).state;
+            return apply(g, { type: 'MOVE', color: 'RED', token: 0 }).state.players[1]!.luck!;
+        };
+        // GREEN pos p is abs cell p + 25; RED pos q is abs cell q - 1. RED rolls 3 to land on it.
+        const early = lostAt(3, 26);
+        const late = lostAt(20, 43);
+        expect(early).toBeLessThan(0);
+        expect(late).toBeLessThan(early);
+    });
+
+    test('faces stay within their limits on any board, however hot or cold', () => {
+        const rng = seeded(11);
+        for (let i = 0; i < 3000; i++) {
+            const pos = () => Math.floor(rng() * 58);
+            const players = 2 + Math.floor(rng() * 3);
+            let g = createGame({ playerCount: players, balance: { strength: rng() } });
+            g = {
+                ...g,
+                sixStreak: Math.floor(rng() * 3),
+                players: g.players.map(p => ({
+                    ...p,
+                    tokens: [pos(), pos(), pos(), pos()],
+                    luck: rng() * 6 - 3,
+                    rollsWithoutSix: Math.floor(rng() * 15),
+                })),
+            };
+            const p = diceProbabilities(g, g.turn);
+            expect(p.reduce((a, b) => a + b, 0)).toBeCloseTo(1, 10);
+            for (const x of p) {
+                expect(x).toBeGreaterThanOrEqual(MIN_FACE_P - 1e-12);
+                expect(x).toBeLessThanOrEqual(MAX_FACE_P + 1e-12);
+            }
+        }
+    });
+
+    test('games saved before this version keep working', () => {
+        const fresh = start();
+        const old = JSON.parse(JSON.stringify(fresh)) as GameState;
+        for (const p of old.players) delete p.luck;
+        delete old.balance.momentum;
+        delete old.balance.luckFade;
+
+        expect(diceProbabilities(old, 'RED')).toEqual(diceProbabilities(fresh, 'RED'));
+        const r = reduce(old, { type: 'ROLL', color: 'RED', value: 4 });
+        expect(r.ok && typeof r.state.players[0]!.luck === 'number').toBe(true);
+    });
+
+    test('with adapting off, dice stay uniform and no luck builds up', () => {
+        let g = withTokens(createGame({ playerCount: 2, ...fair }), { RED: [26, 0, 0, 0], GREEN: [3, 0, 0, 0] });
+        g = apply(g, { type: 'ROLL', color: 'RED', value: 3 }).state;
+        expect(redOf(g).luck).toBe(0);
+        for (const x of diceProbabilities(lucky(g, 'RED', 3), 'RED')) expect(x).toBeCloseTo(1 / 6, 10);
+    });
+
+    test('over many games: sixes look normal, leads change, and skill still wins', () => {
+        const play = (seed: number, levels: ['easy' | 'medium' | 'hard', 'easy' | 'medium' | 'hard']) => {
+            const rng = seeded(seed);
+            let g = createGame({ playerCount: 2 });
+            const level = { RED: levels[0], GREEN: levels[1] } as Record<Color, 'easy' | 'medium' | 'hard'>;
+            let rolls = 0;
+            let sixes = 0;
+            while (g.phase !== 'OVER') {
+                const action: Action = g.phase === 'ROLL'
+                    ? { type: 'ROLL', color: g.turn }
+                    : autoAction(g) ?? { type: 'MOVE', color: g.turn, token: chooseMove(g, level[g.turn], rng)! };
+                const r = reduce(g, action, rng);
+                if (!r.ok) throw new Error(r.message);
+                for (const e of r.events) {
+                    if (e.type !== 'ROLLED') continue;
+                    rolls++;
+                    if (e.value === 6) sixes++;
+                }
+                g = r.state;
+            }
+            return { rolls, sixes, winner: g.ranking[0] };
+        };
+
+        let rolls = 0;
+        let sixes = 0;
+        let hardWins = 0;
+        const games = 600;
+        for (let seed = 1; seed <= games; seed++) {
+            // Swap seats each game, so going first doesn't favour either level.
+            const hardFirst = seed % 2 === 0;
+            const r = play(seed * 13, hardFirst ? ['hard', 'easy'] : ['easy', 'hard']);
+            rolls += r.rolls;
+            sixes += r.sixes;
+            if (r.winner === (hardFirst ? 'RED' : 'GREEN')) hardWins++;
+        }
+        expect(sixes / rolls).toBeGreaterThan(0.155);
+        expect(sixes / rolls).toBeLessThan(0.185);
+        expect(hardWins / games).toBeGreaterThan(0.62);
     });
 });
 

@@ -1,6 +1,6 @@
 import { evaluateMove, getPlayer, legalMoves, racingPlayers } from './analysis';
 import { absCell, HOME_POS, progress, seatColors, stepPath } from './board';
-import { rollDice } from './dice';
+import { afterCapture, afterRoll, DEFAULT_BALANCE, rollDice } from './dice';
 import type {
     Action,
     BalanceConfig,
@@ -24,12 +24,6 @@ export const DEFAULT_RULES: Rules = {
     autoMoveSingle: true,
 };
 
-export const DEFAULT_BALANCE: BalanceConfig = {
-    enabled: true,
-    strength: 0.6,
-    pityAfter: 4,
-};
-
 export interface CreateGameOptions {
     /** Seated colors. Defaults to the standard seating for `playerCount`. */
     colors?: Color[];
@@ -51,6 +45,7 @@ export function createGame(opts: CreateGameOptions = {}): GameState {
             rank: null,
             active: true,
             rollsWithoutSix: 0,
+            luck: 0,
         })),
         turn: order[0]!,
         phase: 'ROLL',
@@ -144,6 +139,7 @@ export function reduce(state: GameState, action: Action, rng: Rng = Math.random)
             next.phase = 'MOVE';
             next.sixStreak = value === 6 ? next.sixStreak + 1 : 0;
             player.rollsWithoutSix = value === 6 ? 0 : player.rollsWithoutSix + 1;
+            player.luck = afterRoll(state, action.color, value);
             return { ok: true, state: next, events: [{ type: 'ROLLED', color: action.color, value }] };
         }
 
@@ -172,7 +168,9 @@ export function reduce(state: GameState, action: Action, rng: Rng = Math.random)
             });
 
             for (const victim of outcome.captures) {
-                getPlayer(next, victim.color)!.tokens[victim.token] = 0;
+                const captured = getPlayer(next, victim.color)!;
+                captured.luck = afterCapture(state, captured, captured.tokens[victim.token]!);
+                captured.tokens[victim.token] = 0;
                 events.push({
                     type: 'CAPTURED',
                     color: victim.color,
