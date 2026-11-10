@@ -38,6 +38,36 @@ export const PROGRESS = {
     invite: { coins: 100, newForDays: 7, perWeek: 5 },
 } as const;
 
+/**
+ * Ads. Rewarded ads are always the player's choice and pay through Google's server-side
+ * verification (ads/). Full-screen ads are rare, only after a finished game, and their caps are
+ * applied by the app (it reads them from `/config`).
+ */
+export const ADS = {
+    rewarded: {
+        /** Doubling a game's coins, per day. */
+        doublePerDay: 5,
+        /** Collecting a missed day of the daily reward, per week. */
+        missedPerWeek: 1,
+    },
+    interstitial: {
+        /** At most one per this many finished games… */
+        everyGames: 3,
+        /** …this far apart… */
+        minGapMinutes: 10,
+        /** …and this many a day. */
+        perDay: 3,
+        /** None in a player's first games or first hours. */
+        graceGames: 3,
+        graceHours: 24,
+    },
+    /**
+     * Development only: lets the app claim a reward itself, because Google's test ads never
+     * call the verification URL. Never on in production.
+     */
+    trustClient: process.env.ADS_TRUST_CLIENT === 'true' && process.env.NODE_ENV !== 'production',
+};
+
 /** The adaptive dice, for online games and (through `/config`) the app's offline games. */
 export const DICE = {
     strength: Number(process.env.DICE_BALANCE_STRENGTH ?? DEFAULT_BALANCE.strength),
@@ -56,5 +86,6 @@ export function publicConfig() {
             dailyRewards: PROGRESS.dailyRewards,
             invite: PROGRESS.invite,
         },
+        ads: { rewarded: ADS.rewarded, interstitial: ADS.interstitial, trustClient: ADS.trustClient },
     };
 }

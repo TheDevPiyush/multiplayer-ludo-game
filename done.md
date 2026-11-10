@@ -133,6 +133,18 @@
   - The catalogue lives in `server/shop/catalog.ts`. The app lists only items it can draw, so a new item waits for an app update.
   - `GET /shop`, `POST /shop/items/:id/buy`, `POST /shop/items/:id/equip`. Equipping updates the player in any room they're in; others see it from the room's next update.
   - The app remembers the equipped items, so offline games show them without the server. Tapping the coin count on Home opens the shop. New events `shop_view`, `purchase` and `shop_equip`.
+- **Ads** (Google AdMob, `app/util/ads.ts`, `server/ads/`):
+  - **Rewarded ads, always the player's choice**, with the reward shown on the button first:
+    - "Double it" on both result screens: the game's own coins again, up to 5 games a day.
+    - On the daily reward card: "Double today" (today's coins again, once a day) and "Get <day> back" (one missed day of this week, once a week).
+  - **Paid only through Google's server-side verification:** AdMob calls `GET /ads/ssv`, signed with Google's published keys; the server checks the signature, then pays (`ads/rewards.ts`). Each placement has its own ledger key (`AD_DOUBLE`, `DAILY_AD`, `DAILY_BONUS`), so a repeated call or a second ad for the same thing pays nothing. The app hears `ads:reward` on its socket and updates the coins.
+  - Google's test ads never call `/ssv`, so development servers set `ADS_TRUST_CLIENT=true` and the app claims test rewards through `POST /ads/claim`. Ignored when `NODE_ENV=production`.
+  - **Full-screen ads, rarely:** only when leaving a finished game's result screen with Home (never Rematch, never in a game or lobby). At most one per 3 finished games, 10 minutes apart, 3 a day, none in a player's first 3 games or first 24 hours, and none within 3 minutes of a rewarded ad. The caps come from `/config` (`ADS` in `server/progress/config.ts`); the app loads the ad in advance and never waits for one.
+  - **Consent and age:** Home starts the SDK after Google's consent form (shown where the law requires it). Before the first rewarded ad the app asks once whether the player is 18 or older; under 18s, and anyone who hasn't answered, get only non-personalised ads. Content rating T.
+  - **Library:** `react-native-google-mobile-ads` is pinned to **17.0.0** with a two-line patch (`app/patches/`, applied by `patch-package` on install). 17.1 and later need React Native 0.86; 16.x needs Kotlin 2.3; 17.0.0 passes a possibly-null string to `promise.reject`, which React Native 0.81 refuses. Drop the patch when the app moves to React Native 0.86.
+  - **Config:** AdMob app IDs are build-time (`ADMOB_ANDROID_APP_ID`, `ADMOB_IOS_APP_ID` on EAS; without them, Google's sample IDs). Unit IDs are `EXPO_PUBLIC_ADMOB_*`; without them, development builds show test ads and release builds show none. The advertising ID permission is no longer blocked.
+  - **Website:** the privacy policy describes the ads, consent and the under-18 rule; the Terms say coins have no money value and can't be bought, traded or cashed out. `/app-ads.txt` is served once `ADMOB_PUBLISHER_ID` is set.
+  - New events: `ad_offered`, `ad_watched`, `interstitial_shown`. Results also carry `gameCoins`, the game's own coins that a rewarded ad can double.
 
 ## Supabase settings for guests
 - Authentication → Sign In / Providers: turn on **Allow anonymous sign-ins** and **Allow manual linking**.

@@ -46,6 +46,14 @@ export default function Terms() {
                 based on how the game is going. Every number can always come up, and what you spend never affects the
                 dice. In public rooms, computer players join when few people are online.
             </p>
+            <p>
+                Coins are earned by playing (games, daily rewards, missions, invites and optional rewarded ads) and can
+                only be spent on cosmetic items in the in-app shop. Coins and shop items have no money value: they
+                cannot be bought, sold, traded, transferred to another player or exchanged for money or anything else.
+                Cosmetic items never affect the dice or how a game is played. We may change how many coins things pay
+                or cost, and we may remove coins or items gained by cheating, such as by playing against your own extra
+                accounts.
+            </p>
 
             <h2>4. Play fair and be kind</h2>
             <p>You agree not to:</p>
@@ -77,8 +85,9 @@ export default function Terms() {
 
             <h2>7. Paid features</h2>
             <p>
-                The Service is free today. If we add optional paid features later, their price and terms will be shown
-                before you buy, and purchases will also be subject to the app store’s terms.
+                The Service is free and shows ads (see our Privacy Policy). Rewarded ads are always your choice. If we
+                add optional paid features later, their price and terms will be shown before you buy, and purchases
+                will also be subject to the app store’s terms.
             </p>
 
             <h2>8. Changes and availability</h2>

@@ -14,7 +14,7 @@ export const SITE = {
     /** The person named on the contact page for complaints (India's Online Gaming Rules). */
     grievanceOfficer: 'Piyush',
     /** The legal pages say "last updated" with this date. Change it whenever their text changes. */
-    legalUpdated: '9 November 2026',
+    legalUpdated: '11 November 2026',
 } as const;
 
 export const APP = {

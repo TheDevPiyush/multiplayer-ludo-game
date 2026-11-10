@@ -13,6 +13,7 @@ import { LudoBoard } from '@/components/ludo/LudoBoard';
 import { PlayerStrip, type PlayerStripProps } from '@/components/ludo/PlayerStrip';
 import { Token } from '@/components/ludo/Token';
 import { GameRewardLine } from '@/components/progress/GameRewardLine';
+import { leavingResult, noteGameFinished } from '@/util/ads';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
 import { useLocalGame, type LocalGameConfig } from '@/hooks/useLocalGame';
@@ -122,6 +123,7 @@ export default function LocalBoardScreen() {
         const you = mode === 'vs_computer' ? config.seats.find(s => s.kind === 'human')?.color : undefined;
         track('game_finish', { mode, players, seconds, dice: diceLabel(), ...(you ? { won: state.ranking[0] === you ? 1 : 0 } : {}) });
         if (soloColor) {
+            void noteGameFinished();
             const id = gameId.current;
             void report({
                 gameId: id,
@@ -164,6 +166,14 @@ export default function LocalBoardScreen() {
     const goHome = () => {
         leavingRef.current = true;
         setExitDialog(false);
+        // A full-screen ad only after a finished game against the computer, on the way home.
+        if (isOver && soloColor) {
+            void leavingResult().then(shown => {
+                if (shown) track('interstitial_shown', {});
+                router.replace('/(tabs)');
+            });
+            return;
+        }
         router.replace('/(tabs)');
     };
 
@@ -319,7 +329,7 @@ export default function LocalBoardScreen() {
                                 </RNView>
                             ))}
                         </RNView>
-                        {reward && <GameRewardLine reward={reward} />}
+                        {reward && <GameRewardLine reward={reward} doubleRef={`offline:${gameId.current}`} />}
                         <RNView style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
                             <TouchableOpacity style={[styles.winBtn, styles.winBtnGhost]} onPress={goHome} activeOpacity={0.85}>
                                 <Text weight="bold" style={styles.winBtnText}>Home</Text>

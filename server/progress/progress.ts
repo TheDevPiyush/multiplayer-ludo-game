@@ -3,7 +3,7 @@ import { ServiceError } from '../game/game-service';
 import type { LiveRoom } from '../game/live-room';
 import { GUEST_PROVIDER } from '../lib/providers';
 import { prisma } from '../lib/prisma';
-import { PROGRESS } from './config';
+import { ADS, PROGRESS } from './config';
 import {
     dailyClaim,
     dayOf,
@@ -36,6 +36,8 @@ export interface RewardSummary {
     missionsDone: string[];
     /** Coins weren't paid because today's cap was reached. */
     capped: boolean;
+    /** The game's own coins (without level-ups): what a rewarded ad can double. */
+    gameCoins: number;
     /** An invite bonus this game paid, on top of `coins`. */
     invite: InviteBonus | null;
 }
@@ -57,14 +59,16 @@ export async function getProgress(userId: string, now = new Date(), db: Db = pri
     const [user, rows, claims] = await Promise.all([
         db.user.findUnique({ where: { id: userId }, select: { coins: true, xp: true, dailyStreak: true, dailyClaimDay: true, createdAt: true } }),
         db.missionProgress.findMany({ where: { userId, day } }),
-        db.coinLedger.findMany({ where: { userId, reason: 'DAILY', day: { gte: week[0]! } }, select: { day: true } }),
+        db.coinLedger.findMany({ where: { userId, reason: { in: ['DAILY', 'DAILY_AD', 'DAILY_BONUS'] }, day: { gte: week[0]! } }, select: { day: true, reason: true } }),
     ]);
     if (!user) throw new ServiceError(404, 'Player not found.');
     const level = levelFor(user.xp);
     const next = dailyClaim(user.dailyClaimDay, user.dailyStreak, day);
     const streak = liveStreak(user.dailyClaimDay, user.dailyStreak, day);
-    const claimed = new Set(claims.map(c => c.day));
+    const claimed = new Set(claims.filter(c => c.reason !== 'DAILY_BONUS').map(c => c.day));
     const joined = dayOf(user.createdAt);
+    const recoveredThisWeek = claims.filter(c => c.reason === 'DAILY_AD').length >= ADS.rewarded.missedPerWeek;
+    const missed = week.filter(d => d < day && d >= joined && !claimed.has(d));
     return {
         day,
         coins: user.coins,
@@ -78,6 +82,10 @@ export async function getProgress(userId: string, now = new Date(), db: Db = pri
             /** Today's weekday, Monday 1 … Sunday 7. */
             cycleDay: week.indexOf(day) + 1,
             rewards: PROGRESS.dailyRewards,
+            /** A missed day this week a rewarded ad can still collect (the latest), or null. */
+            recoverable: recoveredThisWeek ? null : missed[missed.length - 1] ?? null,
+            /** Today's reward is in and a rewarded ad can pay it once more. */
+            bonusReady: !next && !claims.some(c => c.reason === 'DAILY_BONUS' && c.day === day),
             /** This week, Monday first. `before`: before the player joined (nothing to miss). */
             week: week.map((date, i) => ({
                 date,
@@ -105,7 +113,7 @@ export async function getProgress(userId: string, now = new Date(), db: Db = pri
 
 export type Progress = Awaited<ReturnType<typeof getProgress>>;
 
-async function grant(tx: Db, userId: string, amount: number, reason: string, key: string, day: string) {
+export async function grant(tx: Db, userId: string, amount: number, reason: string, key: string, day: string) {
     await tx.coinLedger.create({ data: { userId, amount, reason, key, day } });
     await tx.user.update({ where: { id: userId }, data: { coins: { increment: amount } } });
 }
@@ -192,6 +200,7 @@ async function payGame(
         levelsGained: level.gained,
         missionsDone,
         capped: coins < reward.coins,
+        gameCoins: coins,
         invite: null,
     };
 }

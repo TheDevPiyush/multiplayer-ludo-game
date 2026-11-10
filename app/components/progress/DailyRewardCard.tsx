@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
 import type { DailyDay, Progress } from '@/apis/progress-api';
+import { RewardedButton } from '@/components/ads/RewardedButton';
 import { GameTile } from '@/components/GameTile';
 import { Text } from '@/components/Themed';
 import { playEffect } from '@/util/audio';
@@ -68,6 +69,8 @@ export function DailyRewardCard({ progress, onClaim, onError }: Props) {
     const today = week[todayIndex];
     const ready = today?.state === 'today';
     const tomorrow = week[todayIndex + 1];
+    const missedIndex = progress.daily.recoverable ? week.findIndex(d => d.date === progress.daily.recoverable) : -1;
+    const missed = missedIndex >= 0 ? week[missedIndex] : undefined;
 
     const collect = async () => {
         if (busy) return;
@@ -121,6 +124,23 @@ export function DailyRewardCard({ progress, onClaim, onError }: Props) {
             <View style={styles.days}>
                 {week.map((day, i) => <DayTile key={i} day={day} index={i} isToday={i === todayIndex} />)}
             </View>
+            {/* Rewarded ads, always optional: today's coins once more, or one missed day back a week. */}
+            {(progress.daily.bonusReady && today) || missed ? (
+                <View style={styles.offers}>
+                    {progress.daily.bonusReady && today && (
+                        <RewardedButton placement="daily_bonus" customData={`daily_bonus:${today.date}`} coins={today.coins} label="Double today" tone="gold" />
+                    )}
+                    {missed && (
+                        <RewardedButton
+                            placement="daily_missed"
+                            customData={`daily_missed:${missed.date}`}
+                            coins={missed.coins}
+                            label={`Get ${WEEKDAYS[missedIndex]} back`}
+                            tone="gold"
+                        />
+                    )}
+                </View>
+            ) : null}
         </GameTile>
     );
 }
@@ -161,6 +181,7 @@ const styles = StyleSheet.create({
     },
     doneText: { fontSize: 13, color: '#1F8A4C' },
     days: { flexDirection: 'row', gap: 5 },
+    offers: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' },
     day: {
         flex: 1,
         alignItems: 'center',

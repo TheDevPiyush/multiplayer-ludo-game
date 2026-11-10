@@ -39,6 +39,11 @@ export default function Privacy() {
             <h3>Game and social information</h3>
             <ul>
                 <li>Rooms you create or join, your colour, moves, results, wins and games played.</li>
+                <li>
+                    Your coins and every change to them, your XP and level, daily rewards and missions, and the shop
+                    items you own and use. Coins are only earned in the game; they are not bought and have no money
+                    value.
+                </li>
                 <li>Friends, friend requests, room invites and in-app notifications.</li>
                 <li>
                     Players you block, and reports you make or that are made about you, including the reason, any note
@@ -59,15 +64,17 @@ export default function Privacy() {
                     security and rate limiting and kept in short-lived server logs.
                 </li>
                 <li>
-                    Settings stored on your device only: sound, music and vibration preferences, and your sign-in
-                    session.
+                    Settings stored on your device only: sound, music and vibration preferences, your sign-in session,
+                    whether you told us you are 18 or older (for ads, below), and how many full-screen ads you have
+                    seen recently (so we can limit them).
                 </li>
             </ul>
             <h3>How the app is used, and when it crashes</h3>
             <ul>
                 <li>
                     Usage analytics on Android: events such as a game starting or finishing, its mode and length, the
-                    number of players, whether you won, and whether an invite was shared or used, together with your
+                    number of players, whether you won, whether an invite was shared or used, rewards collected, shop
+                    visits and purchases with coins, and whether an ad was offered, watched or shown, together with your
                     internal player ID, whether you are a guest, and basic device and app details. We use these to see
                     what works and which features people come back for. They never include your username, chat or room
                     codes.
@@ -77,10 +84,29 @@ export default function Privacy() {
                     requests, and your internal player ID, so we can fix the problem.
                 </li>
             </ul>
-            <p>
-                We do not collect your location, contacts, photos or microphone audio. The app does not show ads, and we
-                do not collect your device’s advertising ID or use this data for advertising.
-            </p>
+            <h3>Ads</h3>
+            <ul>
+                <li>
+                    The app shows ads from Google AdMob: rewarded ads, which you choose to watch for coins, and an
+                    occasional full-screen ad after a finished game. Never during a game.
+                </li>
+                <li>
+                    To show ads, limit how often you see them, measure them and prevent fraud, Google’s ads software
+                    collects your device’s advertising ID, IP address, device and app details, and how you interact
+                    with ads. When you watch a rewarded ad, Google tells our server your internal player ID and what the
+                    reward was for, so we can pay it.
+                </li>
+                <li>
+                    Where the law requires it (for example the EEA and the UK), we ask for your consent first, using
+                    Google’s consent form. If you tell us you are under 18, or have not told us your age, you only get
+                    ads that are not based on your activity (non-personalised ads).
+                </li>
+                <li>
+                    You can reset or delete your advertising ID, or opt out of personalised ads, in your device’s
+                    settings.
+                </li>
+            </ul>
+            <p>We do not collect your location, contacts, photos or microphone audio, and we do not sell your data.</p>
 
             <h2>2. How we use it</h2>
             <ul>
@@ -122,7 +148,10 @@ export default function Privacy() {
                         </tr>
                         <tr>
                             <td>Google</td>
-                            <td>“Sign in with Google”, if you choose it; usage analytics (Firebase Analytics)</td>
+                            <td>
+                                “Sign in with Google”, if you choose it; usage analytics (Firebase Analytics); ads and the
+                                ad consent form (Google AdMob)
+                            </td>
                         </tr>
                         <tr>
                             <td>Sentry</td>
@@ -173,7 +202,8 @@ export default function Privacy() {
             <p>
                 {SITE.name} is meant for players aged 13 and over. We do not knowingly collect personal information
                 from children under 13. If you believe a child has given us information, contact us and we will
-                delete it.
+                delete it. Players under 18 only get non-personalised ads, and the app does not ask them for anything
+                beyond what is described above.
             </p>
 
             <h2>8. Security</h2>

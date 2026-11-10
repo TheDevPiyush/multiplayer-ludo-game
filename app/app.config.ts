@@ -40,10 +40,27 @@ function sentryPlugin(): NonNullable<ExpoConfig['plugins']> {
     return [['@sentry/react-native/expo', { organization: process.env.SENTRY_ORG, project: process.env.SENTRY_PROJECT }]];
 }
 
+/**
+ * AdMob (react-native-google-mobile-ads). The app IDs are build-time: ADMOB_ANDROID_APP_ID and
+ * ADMOB_IOS_APP_ID (EAS environment variables). Without them, Google's sample app IDs, which
+ * only ever serve test ads. Ad unit IDs are runtime (EXPO_PUBLIC_ADMOB_*, see util/ads.ts).
+ * The SDK starts only after consent is settled (util/ads.ts), so measurement waits for it too.
+ */
+function adsPlugin(): NonNullable<ExpoConfig['plugins']> {
+    return [[
+        'react-native-google-mobile-ads',
+        {
+            androidAppId: process.env.ADMOB_ANDROID_APP_ID || 'ca-app-pub-3940256099942544~3347511713',
+            iosAppId: process.env.ADMOB_IOS_APP_ID || 'ca-app-pub-3940256099942544~1458002511',
+            delayAppMeasurementInit: true,
+        },
+    ]];
+}
+
 export default ({ config }: ConfigContext): ExpoConfig => {
     const host = linkHost();
     const android = { ...config.android, googleServicesFile: googleServicesFile() };
-    const plugins = [...(config.plugins ?? []), ...sentryPlugin()];
+    const plugins = [...(config.plugins ?? []), ...adsPlugin(), ...sentryPlugin()];
     if (!host) return { ...(config as ExpoConfig), android, plugins };
 
     return {

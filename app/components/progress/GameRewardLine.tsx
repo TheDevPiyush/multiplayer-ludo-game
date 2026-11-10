@@ -1,8 +1,10 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 
 import type { GameReward } from '@/apis/progress-api';
+import { RewardedButton } from '@/components/ads/RewardedButton';
 import { Text } from '@/components/Themed';
 import { Coin } from './Coin';
 
@@ -12,15 +14,20 @@ function inviteText({ role, names }: NonNullable<GameReward['invite']>): string 
     return `for bringing ${list.length > 1 ? `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}` : list[0]}`;
 }
 
-/** What a game paid, on the result screen: coins, XP, a level-up and missions it completed. */
-export function GameRewardLine({ reward }: { reward: GameReward }) {
+/**
+ * What a game paid, on the result screen: coins, XP, a level-up and missions it completed.
+ * `doubleRef` ("game:<roomId>" or "offline:<gameId>") offers a rewarded ad that doubles the game's coins.
+ */
+export function GameRewardLine({ reward, doubleRef }: { reward: GameReward; doubleRef?: string }) {
+    const [doubled, setDoubled] = useState(0);
+    const canDouble = !!doubleRef && (reward.gameCoins ?? 0) > 0 && !doubled;
     return (
         <Animated.View entering={FadeIn.duration(300)} style={styles.wrap}>
             <View style={styles.row}>
                 {reward.coins > 0 && (
                     <View style={styles.chip}>
                         <Coin size={16} />
-                        <Text weight="bold" style={styles.chipText}>+{reward.coins}</Text>
+                        <Text weight="bold" style={styles.chipText}>+{reward.coins + doubled}</Text>
                     </View>
                 )}
                 <View style={styles.chip}>
@@ -48,6 +55,21 @@ export function GameRewardLine({ reward }: { reward: GameReward }) {
                     <Text weight="medium" style={styles.mission} numberOfLines={1}>{title} · collect on Home</Text>
                 </View>
             ))}
+            {canDouble && (
+                <RewardedButton
+                    placement="double"
+                    customData={`double:${doubleRef}`}
+                    coins={reward.gameCoins!}
+                    label="Double it"
+                    onRewarded={setDoubled}
+                />
+            )}
+            {doubled > 0 && (
+                <View style={styles.line}>
+                    <MaterialCommunityIcons name="check-circle" size={15} color="#FFCB3D" />
+                    <Text weight="bold" style={styles.levelUp}>Doubled! +{doubled} coins</Text>
+                </View>
+            )}
             {reward.capped && (
                 <Text weight="medium" style={styles.note}>You've reached today's coin limit for games. XP still counts.</Text>
             )}

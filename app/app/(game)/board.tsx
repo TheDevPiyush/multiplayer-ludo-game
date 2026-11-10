@@ -36,6 +36,7 @@ import { setActiveRoom } from '@/util/active-room';
 import { track } from '@/util/analytics';
 import { playEffect } from '@/util/audio';
 import { feedbackForEvents, haptic } from '@/util/feedback';
+import { leavingResult, noteGameFinished } from '@/util/ads';
 import { diceLabel } from '@/util/remote-config';
 import { supabase } from '@/util/supabase-client';
 
@@ -135,6 +136,7 @@ export default function GameBoardScreen() {
             if (e.type === 'over') {
                 markHistoryStale();
                 setWinnerInfo({ winnerId: e.winnerId, winnerColor: e.winnerColor });
+                void noteGameFinished();
                 if (room) {
                     track('game_finish', {
                         mode: room.isPrivate ? 'online_private' : 'online_public',
@@ -494,6 +496,8 @@ export default function GameBoardScreen() {
             await setActiveRoom(null);
             leftRef.current = true;
             await notifyServerLeave();
+            // A full-screen ad only here, on the way home after a finished game (never on Rematch).
+            if (await leavingResult()) track('interstitial_shown', {});
             router.replace('/(tabs)');
         })();
     };
@@ -653,7 +657,7 @@ export default function GameBoardScreen() {
                                 ? 'Champion of this round!'
                                 : `Winner: ${players.find(p => p.userId === winnerInfo.winnerId)?.user.username ?? 'Unknown'}`}
                         </Text>
-                        {reward ? <GameRewardLine reward={reward} /> : tooShort && (
+                        {reward ? <GameRewardLine reward={reward} doubleRef={`game:${roomId}`} /> : tooShort && (
                             // The server pays nothing for these (it stops farming with quick quits).
                             <Text weight="medium" style={styles.noReward}>
                                 Games shorter than 2 minutes don't earn coins, XP or mission progress.

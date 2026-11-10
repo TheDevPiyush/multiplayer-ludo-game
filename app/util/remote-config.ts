@@ -1,7 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { BalanceConfig } from '@ludo/engine';
 
-import { fetchRemoteConfig, type RemoteConfig } from '@/apis/progress-api';
+import { fetchRemoteConfig, type AdCaps, type RemoteConfig } from '@/apis/progress-api';
+
+export type { AdCaps };
 
 const KEY = 'simpleludo:remote-config';
 
@@ -19,6 +21,11 @@ function clean(raw: unknown): RemoteConfig {
     }
     const inviteCoins = r.rewards?.invite?.coins;
     if (isNum(inviteCoins, 1, 10_000)) out.rewards = { invite: { coins: inviteCoins! } };
+    const ads = r.ads;
+    const i = ads?.interstitial;
+    if (ads && i && [i.everyGames, i.minGapMinutes, i.perDay, i.graceGames, i.graceHours].every(n => isNum(n, 0, 10_000))) {
+        out.ads = { rewarded: ads.rewarded, interstitial: i, trustClient: ads.trustClient === true };
+    }
     return out;
 }
 
@@ -43,6 +50,11 @@ export async function loadRemoteConfig() {
 export function diceBalance(): Partial<BalanceConfig> | undefined {
     const d = current.dice;
     return d ? { enabled: d.strength > 0, strength: d.strength, momentum: d.momentum, luckFade: d.luckFade } : undefined;
+}
+
+/** The server's ad caps, once loaded. */
+export function remoteAds(): AdCaps | undefined {
+    return current.ads;
 }
 
 /** Coins a host and a new player each get for the new player's first private game. */

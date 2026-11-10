@@ -1,6 +1,6 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View as RNView } from 'react-native';
 import Animated, { FadeInDown, LinearTransition } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,6 +16,7 @@ import { UserAvatar } from '@/components/UserAvatar';
 import { FloatingDiceArt } from '@/components/ludo/FloatingDiceArt';
 import { Text } from '@/components/Themed';
 import { refreshCurrentUser, useCurrentUser } from '@/hooks/useCurrentUser';
+import { startAds } from '@/util/ads';
 import { useProgress } from '@/hooks/useProgress';
 import { friendsHref } from '@/util/links';
 import { syncPushToken } from '@/util/push';
@@ -90,6 +91,8 @@ export default function HomeTabScreen() {
     // Home is where we ask for notification permission; once granted, the token is also
     // synced on every app open (startPushTokenSync in the root layout).
     useFocusEffect(useCallback(() => void syncPushToken({ prompt: true }), []));
+    // Ads start here, once signed in: Google's consent form shows first where the law needs it.
+    useEffect(() => void startAds(), []);
     // Shared with Profile; this retries a profile that didn't load (slow or no network).
     useFocusEffect(useCallback(() => void refreshCurrentUser(), []));
 

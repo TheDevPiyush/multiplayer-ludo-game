@@ -18,6 +18,10 @@ type Events = {
     /** A shop item bought; `currency` is 'coins' until store purchases arrive. */
     purchase: { item: string; currency: 'coins'; price: number };
     shop_equip: { item: string };
+    /** A rewarded ad offer was shown, and one was watched to the end. */
+    ad_offered: { placement: string };
+    ad_watched: { placement: string };
+    interstitial_shown: Record<string, never>;
 };
 
 type Firebase = typeof import('@react-native-firebase/analytics');

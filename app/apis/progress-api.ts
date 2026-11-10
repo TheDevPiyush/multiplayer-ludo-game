@@ -30,6 +30,10 @@ export type Progress = {
         rewards: number[];
         /** This India week, Monday first. Older servers don't send it. */
         week?: DailyDay[];
+        /** A missed day this week a rewarded ad can still collect (the latest), or null. */
+        recoverable?: string | null;
+        /** Today's reward is in and a rewarded ad can pay it once more. */
+        bonusReady?: boolean;
     };
     missions: Mission[];
 };
@@ -42,6 +46,8 @@ export type GameReward = {
     levelsGained: number;
     missionsDone: string[];
     capped: boolean;
+    /** The game's own coins (without level-ups): what a rewarded ad can double. Older servers leave it out. */
+    gameCoins?: number;
     /** Invite bonus, on top of `coins`: `joined` names the host, `host` the new players. */
     invite?: { coins: number; role: 'joined' | 'host'; names: string[] } | null;
 };
@@ -80,6 +86,15 @@ export async function reportOfflineGame(
 export type RemoteConfig = {
     dice?: { strength: number; momentum: number; luckFade: number };
     rewards?: { invite?: { coins: number } };
+    ads?: AdCaps;
+};
+
+/** Ad caps the server sets (progress/config.ts ADS). */
+export type AdCaps = {
+    rewarded: { doublePerDay: number; missedPerWeek: number };
+    interstitial: { everyGames: number; minGapMinutes: number; perDay: number; graceGames: number; graceHours: number };
+    /** Development server: the app claims rewards itself (test ads never reach Google's verification). */
+    trustClient: boolean;
 };
 
 export async function fetchRemoteConfig(): Promise<RemoteConfig | null> {
