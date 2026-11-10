@@ -12,6 +12,11 @@ export const games = new GameService(prismaPersistence, redisSnapshots, {
 
 games.onUsersChanged = invalidateUsers;
 
+// Each player's result screen shows what the game paid them.
+games.onGameRewards = (room, rewards) => {
+    for (const [userId, reward] of rewards) getIO()?.to(`user:${userId}`).emit('progress:reward', { roomId: room.id, ...reward });
+};
+
 /** Time to say "gg" on the results screen before a finished game's voice channel closes. */
 const VOICE_AFTER_GAME_MS = 2 * 60_000;
 

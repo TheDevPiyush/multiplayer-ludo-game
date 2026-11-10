@@ -23,8 +23,10 @@ import { friendsHref, setInitialRouteDone, takePendingLink } from '@/util/links'
 import { listenForNotificationTaps, startPushTokenSync } from '@/util/push';
 import { setAnalyticsUser } from '@/util/analytics';
 import { reportError, setMonitoringUser, startMonitoring } from '@/util/monitoring';
+import { loadRemoteConfig } from '@/util/remote-config';
 
 startMonitoring();
+void loadRemoteConfig();
 
 /** The router's error screen, plus a report: errors caught here never reach the global crash handler. */
 export function ErrorBoundary(props: ErrorBoundaryProps) {

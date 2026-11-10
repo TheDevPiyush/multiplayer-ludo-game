@@ -6,10 +6,14 @@ export type GameMode = 'online_public' | 'online_private' | 'vs_computer' | 'pas
 type Events = {
     game_start: { mode: GameMode; players: number };
     /** `won` is left out when there's no single player to credit (Pass & Play, watching bots). */
-    game_finish: { mode: GameMode; players: number; seconds: number; won?: 0 | 1 };
+    /** `dice`: the adaptive dice settings the game ran on ("strength/momentum/fade", or "default"). */
+    game_finish: { mode: GameMode; players: number; seconds: number; won?: 0 | 1; dice: string };
     rematch: { mode: GameMode };
     invite_share: { source: 'lobby' | 'profile' };
     invite_join: Record<string, never>;
+    /** `day`: place in the 7-day cycle. */
+    daily_claim: { day: number; streak: number };
+    mission_claim: { mission: string };
 };
 
 type Firebase = typeof import('@react-native-firebase/analytics');

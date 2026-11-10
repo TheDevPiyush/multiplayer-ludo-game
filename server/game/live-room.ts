@@ -66,6 +66,17 @@ export interface LiveRoom {
     lobby?: LobbyAuto;
     /** Finished rooms: the room someone opened for a rematch, which the other players can join. */
     rematch?: Rematch;
+    /** What each color did this game, for missions. Optional: snapshots from before it existed. */
+    stats?: Partial<Record<Color, PlayerStats>>;
+}
+
+export interface PlayerStats {
+    captures: number;
+    /** Pawns brought home. */
+    home: number;
+    sixes: number;
+    /** Got all pawns home (still earns if they leave the results afterwards). */
+    finished?: boolean;
 }
 
 export interface Rematch {

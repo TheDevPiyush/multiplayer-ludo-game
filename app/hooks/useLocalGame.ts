@@ -14,6 +14,7 @@ import {
 
 import { DICE_ROLL_MS } from '@/components/ludo/Dice';
 import { CAPTURE_RETURN_DELAY_MS, CAPTURE_RETURN_MS, HOP_MS } from '@/components/ludo/geometry';
+import { diceBalance } from '@/util/remote-config';
 
 export type SeatKind = 'human' | 'bot';
 
@@ -46,6 +47,8 @@ const between = ([min, max]: [number, number]) => min + Math.random() * (max - m
 function newGame(config: LocalGameConfig): GameState {
     return createGame({
         colors: config.seats.map(s => s.color),
+        // The server's tuning when it has been loaded, else the engine's defaults.
+        balance: diceBalance(),
     });
 }
 

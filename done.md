@@ -100,6 +100,17 @@
   - If the rematch's host leaves its lobby, the next player to tap opens a fresh one. Once it has started, only its own players can get back in.
   - Socket action `room:rematch` (`GameService.rematch`). The link from the old room lives in memory only, so after a server restart a tap opens a new room.
 
+- **Daily loop: coins, levels, daily reward, missions** (`server/progress/`; guests too):
+  - Coins are only earned and will only buy cosmetics: they're never sold, traded or cashed out. Every change is a row in `CoinLedger`, with a unique key, so nothing pays twice.
+  - **Online games** pay 15 coins and 20 XP for finishing, or 40 coins and 50 XP for a win, up to 300 coins a day from games. They're paid in the same transaction that saves the result, and a retried save pays nothing more. Bots, players who left before getting home, games under 2 minutes and players with fewer than 5 moves get nothing. Each player's result screen shows what they got (`progress:reward` socket event).
+  - **Vs Computer** games are reported by the app (`POST /progress/offline-game`): 5 coins / 10 XP, or 10 / 20 for a win, for at most 10 games a day. Impossible reports are refused. Pass & Play and watching bots pay nothing.
+  - **Levels** need 100 XP, then 50 more each level. Every level up pays 50 coins.
+  - **Daily reward**: a 7-day cycle (20, 30, 40, 50, 60, 80, 150). Missing a day starts it over. Days follow India time (midnight IST).
+  - **Missions**: 3 a day per player from a pool of 8 (`progress/rules.ts`), worked out from the player and the day, so only progress is stored. They're collected by tapping, on the same day.
+  - **Home**: level and XP bar under the name, a coin count, the daily reward card while it's waiting, and the missions panel with the streak.
+  - **`GET /config`**: the dice settings and reward values. The app loads it on start and saved, and offline games use its dice (`DICE_MOMENTUM` and `DICE_LUCK_FADE` join `DICE_BALANCE_STRENGTH`). `game_finish` now records the dice settings; `daily_claim` and `mission_claim` are new events.
+  - Values live in `server/progress/config.ts`.
+
 ## Supabase settings for guests
 - Authentication → Sign In / Providers: turn on **Allow anonymous sign-ins** and **Allow manual linking**.
 - Authentication → Emails → **Change email address** template: include `{{ .Token }}`, so guests saving with email get the 6-digit code the app asks for.

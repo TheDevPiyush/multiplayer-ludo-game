@@ -14,6 +14,7 @@ import {
 } from '@ludo/engine';
 
 import { TtlCache } from '../lib/ttl-cache';
+import { DICE } from '../progress/config';
 import {
     toRoomDto,
     userIdOf,
@@ -26,6 +27,7 @@ import {
     type SyncEvent,
 } from './live-room';
 import type { Persistence, Profile, SnapshotStore } from './persistence';
+import type { RewardSummary } from '../progress/progress';
 import { log } from '../lib/logger';
 
 export class ServiceError extends Error {
@@ -122,7 +124,7 @@ export const DEFAULT_OPTIONS: GameServiceOptions = {
     idleEvictMs: Number(process.env.IDLE_EVICT_MS ?? 30 * 60_000),
     unwatchedPauseMs: Number(process.env.UNWATCHED_PAUSE_MS ?? 60_000),
     abandonMs: Number(process.env.ABANDON_MS ?? 10 * 60_000),
-    balanceStrength: Number(process.env.DICE_BALANCE_STRENGTH ?? 0.6),
+    balanceStrength: DICE.strength,
     botFillMs: [15_000, 20_000],
     botGapMs: [1_500, 3_500],
     botThinkMs: [700, 1_700],
@@ -186,6 +188,8 @@ export class GameService {
     onUsersChanged: (userIds: string[]) => void = () => {};
     /** Called once when a room finishes or is cancelled (closes its voice channel). */
     onRoomClosed: (room: LiveRoom) => void = () => {};
+    /** Called once a finished game's rewards are saved, with each player's. */
+    onGameRewards: (room: LiveRoom, rewards: Map<string, RewardSummary>) => void = () => {};
 
     constructor(
         private db: Persistence,
@@ -592,7 +596,12 @@ export class GameService {
 
         room.game = createGame({
             colors: room.players.map(p => p.color),
-            balance: { enabled: this.opts.balanceStrength > 0, strength: this.opts.balanceStrength },
+            balance: {
+                enabled: this.opts.balanceStrength > 0,
+                strength: this.opts.balanceStrength,
+                momentum: DICE.momentum,
+                luckFade: DICE.luckFade,
+            },
         });
         this.clearLobbyTimer(room.id);
         room.lobby = undefined;
@@ -891,7 +900,13 @@ export class GameService {
 
     private recordMoves(room: LiveRoom, dice: number | null, events: GameEvent[]) {
         const startedAt = room.startedAt ? Date.parse(room.startedAt) : Date.now();
+        room.stats ??= {};
+        const stats = (color: Color) => (room.stats![color] ??= { captures: 0, home: 0, sixes: 0 });
         for (const e of events) {
+            if (e.type === 'ROLLED' && e.value === 6) stats(e.color).sixes++;
+            else if (e.type === 'CAPTURED') stats(e.by).captures++;
+            else if (e.type === 'HOME') stats(e.color).home++;
+            else if (e.type === 'FINISHED') stats(e.color).finished = true;
             if (e.type !== 'MOVED') continue;
             const entry: MoveEntry = [e.color, e.token, dice ?? 0, e.from, e.to, Math.round((Date.now() - startedAt) / 100)];
             room.moveLog.push(entry);
@@ -950,9 +965,10 @@ export class GameService {
         if (this.finishing.has(room.id)) return;
         this.finishing.add(room.id);
         try {
-            await this.db.finishGame(room);
+            const rewards = await this.db.finishGame(room);
             log.info('game finished', { room: room.gameCode, winner: room.winnerId });
             this.onUsersChanged(room.players.map(p => p.userId));
+            if (rewards && rewards.size > 0) this.onGameRewards(room, rewards);
             await this.snapshots?.delete(room).catch(() => {});
         } catch (e) {
             log.error('finishGame failed, will retry on flush', { room: room.gameCode, error: (e as Error)?.message });

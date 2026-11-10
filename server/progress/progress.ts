@@ -1,0 +1,195 @@
+import type { Prisma } from '../generated/prisma/client.ts';
+import { ServiceError } from '../game/game-service';
+import type { LiveRoom } from '../game/live-room';
+import { prisma } from '../lib/prisma';
+import { PROGRESS } from './config';
+import {
+    dailyClaim,
+    dayOf,
+    levelFor,
+    liveStreak,
+    missionsFor,
+    offlineGameReward,
+    onlineGameRewards,
+    parseOfflineReport,
+    type GameReward,
+    type GameStats,
+} from './rules';
+
+/** The client or an open transaction: everything here runs inside a transaction where it writes. */
+type Db = Prisma.TransactionClient;
+
+const TX = { timeout: 20_000, maxWait: 10_000 };
+
+/** What a player got from one game, shown on the result screen. */
+export interface RewardSummary {
+    coins: number;
+    xp: number;
+    level: number;
+    /** Levels gained by this game (each also paid `levelUpCoins`, counted in `coins`). */
+    levelsGained: number;
+    /** Missions this game completed, ready to claim. */
+    missionsDone: string[];
+    /** Coins weren't paid because today's cap was reached. */
+    capped: boolean;
+}
+
+/** Everything Home shows about a player's progress. */
+export async function getProgress(userId: string, now = new Date(), db: Db = prisma) {
+    const day = dayOf(now);
+    const [user, rows] = await Promise.all([
+        db.user.findUnique({ where: { id: userId }, select: { coins: true, xp: true, dailyStreak: true, dailyClaimDay: true } }),
+        db.missionProgress.findMany({ where: { userId, day } }),
+    ]);
+    if (!user) throw new ServiceError(404, 'Player not found.');
+    const level = levelFor(user.xp);
+    const next = dailyClaim(user.dailyClaimDay, user.dailyStreak, day);
+    const streak = liveStreak(user.dailyClaimDay, user.dailyStreak, day);
+    return {
+        day,
+        coins: user.coins,
+        xp: user.xp,
+        level: level.level,
+        levelXp: level.into,
+        levelXpNeeded: level.needed,
+        streak,
+        daily: {
+            claimedToday: !next,
+            /** Place in the 7-day cycle of the next claim, or today's when already claimed. */
+            cycleDay: next?.day ?? ((Math.max(streak, 1) - 1) % PROGRESS.dailyRewards.length) + 1,
+            rewards: PROGRESS.dailyRewards,
+        },
+        missions: missionsFor(userId, day).map(m => {
+            const row = rows.find(r => r.missionId === m.id);
+            return {
+                id: m.id,
+                title: m.title,
+                target: m.target,
+                coins: m.coins,
+                progress: Math.min(row?.progress ?? 0, m.target),
+                claimed: !!row?.claimedAt,
+            };
+        }),
+    };
+}
+
+export type Progress = Awaited<ReturnType<typeof getProgress>>;
+
+async function grant(tx: Db, userId: string, amount: number, reason: string, key: string, day: string) {
+    await tx.coinLedger.create({ data: { userId, amount, reason, key, day } });
+    await tx.user.update({ where: { id: userId }, data: { coins: { increment: amount } } });
+}
+
+export async function claimDaily(userId: string, now = new Date()): Promise<{ coins: number; progress: Progress }> {
+    const day = dayOf(now);
+    const coins = await prisma.$transaction(async tx => {
+        const user = await tx.user.findUnique({ where: { id: userId }, select: { dailyStreak: true, dailyClaimDay: true } });
+        if (!user) throw new ServiceError(404, 'Player not found.');
+        const claim = dailyClaim(user.dailyClaimDay, user.dailyStreak, day);
+        if (!claim) throw new ServiceError(409, "You've already collected today's reward.");
+        // Only if nothing changed since the read: a second tap at the same moment finds 0 rows.
+        const won = await tx.user.updateMany({
+            where: { id: userId, dailyClaimDay: user.dailyClaimDay },
+            data: { dailyClaimDay: day, dailyStreak: claim.streak },
+        });
+        if (won.count === 0) throw new ServiceError(409, "You've already collected today's reward.");
+        await grant(tx, userId, claim.coins, 'DAILY', `daily:${userId}:${day}`, day);
+        return claim.coins;
+    }, TX);
+    return { coins, progress: await getProgress(userId, now) };
+}
+
+export async function claimMission(userId: string, missionId: string, now = new Date()): Promise<{ coins: number; progress: Progress }> {
+    const day = dayOf(now);
+    const mission = missionsFor(userId, day).find(m => m.id === missionId);
+    if (!mission) throw new ServiceError(404, "That isn't one of today's missions.");
+    await prisma.$transaction(async tx => {
+        const row = await tx.missionProgress.findUnique({ where: { userId_day_missionId: { userId, day, missionId } } });
+        if (!row || row.progress < mission.target) throw new ServiceError(400, "That mission isn't done yet.");
+        const won = await tx.missionProgress.updateMany({
+            where: { userId, day, missionId, claimedAt: null },
+            data: { claimedAt: now },
+        });
+        if (won.count === 0) throw new ServiceError(409, 'Already collected.');
+        await grant(tx, userId, mission.coins, 'MISSION', `mission:${userId}:${day}:${missionId}`, day);
+    }, TX);
+    return { coins: mission.coins, progress: await getProgress(userId, now) };
+}
+
+/** Adds XP; each level gained pays `levelUpCoins`. */
+async function addXp(tx: Db, userId: string, xp: number, day: string) {
+    const after = await tx.user.update({ where: { id: userId }, data: { xp: { increment: xp } }, select: { xp: true } });
+    const from = levelFor(after.xp - xp).level;
+    const to = levelFor(after.xp).level;
+    for (let level = from + 1; level <= to; level++) {
+        await grant(tx, userId, PROGRESS.levelUpCoins, 'LEVEL_UP', `level:${userId}:${level}`, day);
+    }
+    return { level: to, gained: to - from };
+}
+
+/** Moves today's missions on; returns the titles of those this game completed. */
+async function advanceMissions(tx: Db, userId: string, day: string, stats: GameStats): Promise<string[]> {
+    const done: string[] = [];
+    for (const m of missionsFor(userId, day)) {
+        const add = m.count(stats);
+        if (add <= 0) continue;
+        const row = await tx.missionProgress.upsert({
+            where: { userId_day_missionId: { userId, day, missionId: m.id } },
+            create: { userId, day, missionId: m.id, progress: add },
+            update: { progress: { increment: add } },
+        });
+        if (row.progress >= m.target && row.progress - add < m.target) done.push(m.title);
+    }
+    return done;
+}
+
+/** Pays one game: coins (up to `cap` a day for `reason`), XP and level-ups, mission progress. */
+async function payGame(
+    tx: Db, userId: string, reward: GameReward, reason: string, key: string, day: string, cap?: number,
+): Promise<RewardSummary> {
+    let coins = reward.coins;
+    if (cap !== undefined) {
+        const earned = await tx.coinLedger.aggregate({ where: { userId, reason, day }, _sum: { amount: true } });
+        coins = Math.max(0, Math.min(coins, cap - (earned._sum.amount ?? 0)));
+    }
+    if (coins > 0) await grant(tx, userId, coins, reason, key, day);
+    const level = await addXp(tx, userId, reward.xp, day);
+    const missionsDone = await advanceMissions(tx, userId, day, reward.stats);
+    return {
+        coins: coins + level.gained * PROGRESS.levelUpCoins,
+        xp: reward.xp,
+        level: level.level,
+        levelsGained: level.gained,
+        missionsDone,
+        capped: coins < reward.coins,
+    };
+}
+
+/** Runs in `finishGame`'s transaction, so a game's result and its rewards are saved together. */
+export async function payGameRewards(tx: Db, room: LiveRoom): Promise<Map<string, RewardSummary>> {
+    const out = new Map<string, RewardSummary>();
+    const day = dayOf(room.endedAt ? Date.parse(room.endedAt) : Date.now());
+    for (const [userId, reward] of onlineGameRewards(room)) {
+        out.set(userId, await payGame(tx, userId, reward, 'GAME', `game:${room.id}:${userId}`, day, PROGRESS.game.dailyCoinCap));
+    }
+    return out;
+}
+
+/**
+ * A Vs Computer game the app reports. The app can't be checked, so it pays little and only
+ * `gamesPerDay` times a day. Reporting the same game again changes nothing.
+ */
+export async function reportOfflineGame(userId: string, body: unknown, now = new Date()) {
+    const report = parseOfflineReport(body);
+    if (!report) throw new ServiceError(400, 'That game report is not valid.');
+    const day = dayOf(now);
+    const key = `offline:${userId}:${report.gameId}`;
+    const reward = await prisma.$transaction(async tx => {
+        if (await tx.coinLedger.findUnique({ where: { key }, select: { id: true } })) return null;
+        const today = await tx.coinLedger.count({ where: { userId, reason: 'OFFLINE_GAME', day } });
+        if (today >= PROGRESS.offline.gamesPerDay) return null;
+        const base = offlineGameReward(report);
+        return base ? payGame(tx, userId, base, 'OFFLINE_GAME', key, day) : null;
+    }, TX);
+    return { reward, progress: await getProgress(userId, now) };
+}

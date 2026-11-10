@@ -1,22 +1,27 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { getPlayer, type GameEvent } from '@ludo/engine';
+import { getPlayer, HOME_POS, type GameEvent } from '@ludo/engine';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { reportOfflineGame, type GameReward } from '@/apis/progress-api';
 import AppDialog from '@/components/Dialog';
 import { RollingDice } from '@/components/ludo/Dice';
 import { BOARD_SIZE, COLOR_HEX, layoutTokens, stripRows, turnsFor } from '@/components/ludo/geometry';
 import { LudoBoard } from '@/components/ludo/LudoBoard';
 import { PlayerStrip, type PlayerStripProps } from '@/components/ludo/PlayerStrip';
 import { Token } from '@/components/ludo/Token';
+import { GameRewardLine } from '@/components/progress/GameRewardLine';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
 import { useLocalGame, type LocalGameConfig } from '@/hooks/useLocalGame';
+import { showProgress } from '@/hooks/useProgress';
 import { track, type GameMode } from '@/util/analytics';
 import { playEffect } from '@/util/audio';
 import { feedbackForEvents, haptic } from '@/util/feedback';
+import { diceLabel } from '@/util/remote-config';
+import { supabase } from '@/util/supabase-client';
 
 const palette = Colors.dark;
 
@@ -38,6 +43,20 @@ function parseConfig(raw: unknown): LocalGameConfig {
 
 const RANK_LABEL = ['1st', '2nd', '3rd', '4th'];
 
+/** Names one game for the server, so reporting it twice pays once. */
+const newGameId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+
+/** Sends a finished Vs Computer game to the server; resolves to what it paid, if anything. */
+async function report(game: Parameters<typeof reportOfflineGame>[1]): Promise<GameReward | null> {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) return null;
+    const r = await reportOfflineGame(token, game);
+    if (!r.ok) return null;
+    void showProgress(r.data.progress);
+    return r.data.reward;
+}
+
 export default function LocalBoardScreen() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
@@ -51,10 +70,20 @@ export default function LocalBoardScreen() {
 
     // Everyone at this phone hears the game; haptics and "your turn" are for the human seats.
     const isHuman = (color: string) => config.seats.some(s => s.color === color && s.kind === 'human');
+    /** Vs Computer: the one human's color, whose game counts toward rewards and missions. */
+    const humans = config.seats.filter(s => s.kind === 'human');
+    const soloColor = humans.length === 1 ? humans[0]!.color : null;
+    const soloStats = useRef({ moves: 0, captures: 0, sixes: 0 });
+    const gameId = useRef(newGameId());
+    const [reward, setReward] = useState<GameReward | null>(null);
 
     const onEvents = (events: GameEvent[]) => {
         for (const e of events) {
             if (e.type === 'CAPTURED') setCapturedKey(`${e.color}:${e.token}:${Date.now()}`);
+            if (!soloColor) continue;
+            if (e.type === 'MOVED' && e.color === soloColor) soloStats.current.moves++;
+            else if (e.type === 'CAPTURED' && e.by === soloColor) soloStats.current.captures++;
+            else if (e.type === 'ROLLED' && e.color === soloColor && e.value === 6) soloStats.current.sixes++;
         }
         feedbackForEvents(events, isHuman);
     };
@@ -86,10 +115,26 @@ export default function LocalBoardScreen() {
         if (!isOver) return;
         const seconds = Math.round((Date.now() - startedAt.current) / 1000);
         const you = mode === 'vs_computer' ? config.seats.find(s => s.kind === 'human')?.color : undefined;
-        track('game_finish', { mode, players, seconds, ...(you ? { won: state.ranking[0] === you ? 1 : 0 } : {}) });
+        track('game_finish', { mode, players, seconds, dice: diceLabel(), ...(you ? { won: state.ranking[0] === you ? 1 : 0 } : {}) });
+        if (soloColor) {
+            const id = gameId.current;
+            void report({
+                gameId: id,
+                won: state.ranking[0] === soloColor,
+                seconds,
+                ...soloStats.current,
+                home: getPlayer(state, soloColor)?.tokens.filter(t => t === HOME_POS).length ?? 0,
+            }).then(r => {
+                // Only if this game is still the one on screen.
+                if (r && gameId.current === id) setReward(r);
+            });
+        }
     }, [isOver]);
     const restart = () => {
         if (isOver) track('rematch', { mode });
+        soloStats.current = { moves: 0, captures: 0, sixes: 0 };
+        gameId.current = newGameId();
+        setReward(null);
         startedAt.current = Date.now();
         track('game_start', { mode, players });
         game.restart();
@@ -267,6 +312,7 @@ export default function LocalBoardScreen() {
                                 </RNView>
                             ))}
                         </RNView>
+                        {reward && <GameRewardLine reward={reward} />}
                         <RNView style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
                             <TouchableOpacity style={[styles.winBtn, styles.winBtnGhost]} onPress={goHome} activeOpacity={0.85}>
                                 <Text weight="bold" style={styles.winBtnText}>Home</Text>

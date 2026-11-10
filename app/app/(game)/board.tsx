@@ -11,6 +11,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { leaveRoom } from '@/apis/game-api';
+import type { GameReward } from '@/apis/progress-api';
 import { ChatSheet } from '@/components/chat/ChatSheet';
 import { ReactionBubble } from '@/components/chat/ReactionBubble';
 import { ReactionPicker } from '@/components/chat/ReactionPicker';
@@ -20,6 +21,7 @@ import { BOARD_SIZE, COLOR_HEX, layoutTokens, stripRows, turnsFor } from '@/comp
 import { LudoBoard } from '@/components/ludo/LudoBoard';
 import { PlayerStrip, type PlayerStripProps } from '@/components/ludo/PlayerStrip';
 import { PlayerSheet, type SheetPlayer } from '@/components/PlayerSheet';
+import { GameRewardLine } from '@/components/progress/GameRewardLine';
 import { Token } from '@/components/ludo/Token';
 import type { TurnDeadline } from '@/components/ludo/TurnTimer';
 import { Text } from '@/components/Themed';
@@ -33,6 +35,7 @@ import { setActiveRoom } from '@/util/active-room';
 import { track } from '@/util/analytics';
 import { playEffect } from '@/util/audio';
 import { feedbackForEvents, haptic } from '@/util/feedback';
+import { diceLabel } from '@/util/remote-config';
 import { supabase } from '@/util/supabase-client';
 
 
@@ -60,7 +63,7 @@ export default function GameBoardScreen() {
     const gameCode = typeof rawCode === 'string' ? rawCode : String(rawCode?.[0] ?? '');
     const roomId = typeof rawRoomId === 'string' ? rawRoomId : String(rawRoomId?.[0] ?? '');
 
-    const { connectionPhase, isRealtimeReady } = useSocket();
+    const { socket, connectionPhase, isRealtimeReady } = useSocket();
     const { rollDice, moveToken, requestRematch } = useGameActions(gameCode);
 
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -78,6 +81,8 @@ export default function GameBoardScreen() {
     const [chatOpen, setChatOpen] = useState(false);
     const [sheetPlayer, setSheetPlayer] = useState<SheetPlayer | null>(null);
     const [rematching, setRematching] = useState(false);
+    /** What this game paid, once the server has saved the result (a moment after it ends). */
+    const [reward, setReward] = useState<GameReward | null>(null);
     const [dialog, setDialog] = useState({
         visible: false, title: '', message: '' as string | undefined,
         actions: undefined as undefined | { label: string; onPress: () => void }[],
@@ -135,6 +140,7 @@ export default function GameBoardScreen() {
                         players: room.players.length,
                         seconds: room.startedAt ? Math.round((Date.now() - Date.parse(room.startedAt)) / 1000) : 0,
                         won: e.winnerId === currentUserIdRef.current ? 1 : 0,
+                        dice: diceLabel(),
                     });
                 }
             }
@@ -438,6 +444,15 @@ export default function GameBoardScreen() {
         return unsub;
     }, [navigation]);
 
+    useEffect(() => {
+        if (!socket) return;
+        const onReward = (r: GameReward & { roomId: string }) => {
+            if (r.roomId === roomId) setReward(r);
+        };
+        socket.on('progress:reward', onReward);
+        return () => void socket.off('progress:reward', onReward);
+    }, [socket, roomId]);
+
     // Another player opened a rematch: their name, for the result screen.
     const rematchBy = room?.rematch && room.rematch.byUserId !== currentUserId ? room.rematch.byUserId : null;
     const rematchOffer = rematchBy ? players.find(p => p.userId === rematchBy)?.user.username ?? 'A player' : null;
@@ -628,6 +643,7 @@ export default function GameBoardScreen() {
                                 ? 'Champion of this round!'
                                 : `Winner: ${players.find(p => p.userId === winnerInfo.winnerId)?.user.username ?? 'Unknown'}`}
                         </Text>
+                        {reward && <GameRewardLine reward={reward} />}
                         {rematchOffer && (
                             <RNView style={styles.rematchOffer}>
                                 <MaterialCommunityIcons name="sword-cross" size={14} color="#37BD6A" />
