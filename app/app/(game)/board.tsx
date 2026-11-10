@@ -61,7 +61,7 @@ export default function GameBoardScreen() {
     const roomId = typeof rawRoomId === 'string' ? rawRoomId : String(rawRoomId?.[0] ?? '');
 
     const { connectionPhase, isRealtimeReady } = useSocket();
-    const { rollDice, moveToken } = useGameActions(gameCode);
+    const { rollDice, moveToken, requestRematch } = useGameActions(gameCode);
 
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [rolling, setRolling] = useState(false);
@@ -77,6 +77,7 @@ export default function GameBoardScreen() {
     const [pickerOpen, setPickerOpen] = useState(false);
     const [chatOpen, setChatOpen] = useState(false);
     const [sheetPlayer, setSheetPlayer] = useState<SheetPlayer | null>(null);
+    const [rematching, setRematching] = useState(false);
     const [dialog, setDialog] = useState({
         visible: false, title: '', message: '' as string | undefined,
         actions: undefined as undefined | { label: string; onPress: () => void }[],
@@ -437,6 +438,33 @@ export default function GameBoardScreen() {
         return unsub;
     }, [navigation]);
 
+    // Another player opened a rematch: their name, for the result screen.
+    const rematchBy = room?.rematch && room.rematch.byUserId !== currentUserId ? room.rematch.byUserId : null;
+    const rematchOffer = rematchBy ? players.find(p => p.userId === rematchBy)?.user.username ?? 'A player' : null;
+    useEffect(() => {
+        if (rematchOffer) haptic.light();
+    }, [!!rematchOffer]);
+
+    /** Opens the rematch room (or joins the one another player opened) and goes to its lobby. */
+    const startRematch = async () => {
+        if (rematching) return;
+        setRematching(true);
+        const r = await requestRematch();
+        if (!r.ok || !r.data) {
+            setRematching(false);
+            showError('No rematch', r.ok ? 'Something went wrong. Try again.' : r.error);
+            return;
+        }
+        track('rematch', { mode: room?.isPrivate ? 'online_private' : 'online_public' });
+        const next = r.data;
+        await setActiveRoom({ roomId: next.roomId, gameCode: next.gameCode, maxPlayers: next.maxPlayers, screen: 'lobby' });
+        leftRef.current = true;
+        router.replace({
+            pathname: '/(game)/lobby',
+            params: { gameCode: next.gameCode, maxPlayers_: String(next.maxPlayers), roomId: next.roomId },
+        });
+    };
+
     // Win screen handlers
     const closeWin = () => {
         void (async () => {
@@ -600,9 +628,34 @@ export default function GameBoardScreen() {
                                 ? 'Champion of this round!'
                                 : `Winner: ${players.find(p => p.userId === winnerInfo.winnerId)?.user.username ?? 'Unknown'}`}
                         </Text>
-                        <TouchableOpacity style={styles.winBtn} onPress={closeWin} activeOpacity={0.85}>
-                            <Text weight="bold" style={styles.winBtnText}>Back to Home</Text>
-                        </TouchableOpacity>
+                        {rematchOffer && (
+                            <RNView style={styles.rematchOffer}>
+                                <MaterialCommunityIcons name="sword-cross" size={14} color="#37BD6A" />
+                                <Text weight="semiBold" style={styles.rematchOfferText} numberOfLines={1}>
+                                    {rematchOffer} wants a rematch
+                                </Text>
+                            </RNView>
+                        )}
+                        <RNView style={styles.winActions}>
+                            <TouchableOpacity
+                                style={[styles.winBtn, styles.winBtnGhost]}
+                                onPress={closeWin}
+                                disabled={rematching}
+                                activeOpacity={0.85}
+                            >
+                                <Text weight="bold" style={styles.winBtnText}>Home</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.winBtn, (rematching || !isRealtimeReady) && { opacity: 0.6 }]}
+                                onPress={startRematch}
+                                disabled={rematching || !isRealtimeReady}
+                                activeOpacity={0.85}
+                            >
+                                <Text weight="bold" style={styles.winBtnText}>
+                                    {rematching ? 'Opening…' : rematchOffer ? 'Join rematch' : 'Rematch'}
+                                </Text>
+                            </TouchableOpacity>
+                        </RNView>
                     </RNView>
                 </RNView>
             )}
@@ -785,11 +838,20 @@ const styles = StyleSheet.create({
     },
     winTitle: { fontSize: 22, color: palette.text },
     winSub: { fontSize: 13, color: palette.mutedText, textAlign: 'center' },
+    rematchOffer: {
+        flexDirection: 'row', alignItems: 'center', gap: 6,
+        maxWidth: '100%',
+        paddingVertical: 6, paddingHorizontal: 12,
+        borderRadius: 999,
+        backgroundColor: 'rgba(55,189,106,0.14)',
+    },
+    rematchOfferText: { flexShrink: 1, fontSize: 12, color: '#37BD6A' },
+    winActions: { flexDirection: 'row', gap: 10, marginTop: 8 },
     winBtn: {
-        marginTop: 8,
-        paddingVertical: 14, paddingHorizontal: 28,
+        paddingVertical: 14, paddingHorizontal: 22,
         borderRadius: 14,
         backgroundColor: '#37BD6A',
     },
+    winBtnGhost: { backgroundColor: 'rgba(255,255,255,0.1)' },
     winBtnText: { color: '#fff', fontSize: 14, letterSpacing: 0.3 },
 });

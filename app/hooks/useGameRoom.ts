@@ -56,6 +56,8 @@ export type GameRoom = {
     localTurnEndsAt?: number | null;
     /** Set on arrival: `turnStartsAt` in this device's clock. */
     localTurnStartsAt?: number;
+    /** A finished game: the rematch room a player opened, for the others to join. */
+    rematch?: { roomId: string; gameCode: string; byUserId: string } | null;
 };
 
 type Color = RoomPlayer['color'];
@@ -74,7 +76,8 @@ export type SyncEvent =
     | { type: 'COLORS_CHANGED'; byUserId: string; changes: ColorChange[] }
     | { type: 'PLAYER_LEFT'; userId: string }
     | { type: 'STARTED' }
-    | { type: 'CANCELLED'; reason: string };
+    | { type: 'CANCELLED'; reason: string }
+    | { type: 'REMATCH'; byUserId: string };
 
 type RoomSync = { version: number; room: GameRoom; events: SyncEvent[] };
 

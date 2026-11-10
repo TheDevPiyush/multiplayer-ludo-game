@@ -93,6 +93,13 @@
   - Saved games without `luck` keep working (treated as 0).
   - Tune with `bun scripts/dice-report.ts` in `packages/ludo-engine` (`--engine=` compares another copy, `--fair=1` turns adapting off). Against the old dice over 2,000 games: sixes unchanged (about 17%), lead changes up 20–27%, the roll after three hot rolls averages 3.35 and after three cold 3.64, and the better bot wins more (73% vs 69%).
 
+- **Online rematch**:
+  - The online result screen has **Rematch** next to Home. The first player to tap it opens a room like the last one (same size, public or private) and hosts it; everyone else's result screen then says "<name> wants a rematch" with a **Join rematch** button. Players tapping at the same moment land in the same room.
+  - Everyone keeps their colour when it's free (2-player games keep opposite corners).
+  - Public rematches: each bot from the last game comes back with a 70% chance, 2.5–8 s later, with its colour. Free seats then fill as in any public lobby, and Join Public can seat strangers there too.
+  - If the rematch's host leaves its lobby, the next player to tap opens a fresh one. Once it has started, only its own players can get back in.
+  - Socket action `room:rematch` (`GameService.rematch`). The link from the old room lives in memory only, so after a server restart a tap opens a new room.
+
 ## Supabase settings for guests
 - Authentication → Sign In / Providers: turn on **Allow anonymous sign-ins** and **Allow manual linking**.
 - Authentication → Emails → **Change email address** template: include `{{ .Token }}`, so guests saving with email get the 6-digit code the app asks for.

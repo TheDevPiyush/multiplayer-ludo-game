@@ -197,6 +197,11 @@ export function attachSocketServer(httpServer: HttpServer, games: GameService) {
         socket.on('room:countdown-cancel', gameAction('room:countdown-cancel', async p => {
             await games.cancelCountdown(userId, p.gameCode);
         }));
+        /** After a finished game: opens the rematch room, or joins the one another player opened. */
+        socket.on('room:rematch', gameAction('room:rematch', async p => {
+            const { room } = await games.rematch(userId, p.gameCode);
+            return { roomId: room.id, gameCode: room.gameCode, maxPlayers: room.maxPlayers };
+        }));
         socket.on('game:roll-dice', gameAction('game:roll-dice', async p => {
             const r = await games.act(userId, p.gameCode, { kind: 'ROLL' });
             return { diceValue: r.diceValue };

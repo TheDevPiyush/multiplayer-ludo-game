@@ -408,6 +408,14 @@ describe('seating', async () => {
         expect(nextColor(4, [seat('a', 'RED'), seat('b', 'BLUE'), seat('c', 'GREEN'), seat('d', 'YELLOW')])).toBeNull();
     });
 
+    test('a preferred color is kept when free, and never breaks 2-player corners', () => {
+        expect(nextColor(2, [], 'BLUE')).toBe('BLUE');
+        expect(nextColor(2, [seat('a', 'BLUE')], 'YELLOW')).toBe('YELLOW');
+        expect(nextColor(2, [seat('a', 'BLUE')], 'RED')).toBe('YELLOW');
+        expect(nextColor(4, [seat('a', 'RED')], 'GREEN')).toBe('GREEN');
+        expect(nextColor(4, [seat('a', 'RED')], 'RED')).toBe('BLUE');
+    });
+
     test('a color held by someone else cannot be picked; a free one moves only you', () => {
         const seats = [seat('a', 'RED'), seat('b', 'BLUE'), seat('c', 'GREEN')];
         expect(pickColor(4, seats, 'a', 'BLUE')).toBeNull();

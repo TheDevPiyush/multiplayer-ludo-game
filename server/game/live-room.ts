@@ -64,6 +64,14 @@ export interface LiveRoom {
     moveLog: MoveEntry[];
     /** Public rooms in the lobby only. */
     lobby?: LobbyAuto;
+    /** Finished rooms: the room someone opened for a rematch, which the other players can join. */
+    rematch?: Rematch;
+}
+
+export interface Rematch {
+    roomId: string;
+    gameCode: string;
+    byUserId: string;
 }
 
 /** Shape the app renders (kept compatible with the previous REST payload). */
@@ -97,6 +105,7 @@ export function toRoomDto(room: LiveRoom) {
         serverNow: now,
         /** Lobby countdown: the game starts in this many ms; null when no countdown runs. */
         startsInMs: room.lobby?.startsAt ? Math.max(0, room.lobby.startsAt - now) : null,
+        rematch: room.rematch ?? null,
         players: room.players.map(p => {
             const ps = g ? getPlayer(g, p.color) : undefined;
             return {
@@ -126,7 +135,9 @@ export type RoomEvent =
     | { type: 'COLORS_CHANGED'; byUserId: string; changes: { userId: string; from: Color; to: Color }[] }
     | { type: 'PLAYER_LEFT'; userId: string }
     | { type: 'STARTED' }
-    | { type: 'CANCELLED'; reason: string };
+    | { type: 'CANCELLED'; reason: string }
+    /** A finished game's player opened a rematch room (`room.rematch` has it). */
+    | { type: 'REMATCH'; byUserId: string };
 
 export type SyncEvent = GameEvent | RoomEvent;
 
