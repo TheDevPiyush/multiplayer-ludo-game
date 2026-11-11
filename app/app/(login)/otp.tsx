@@ -10,6 +10,7 @@ import {
     TextInput,
     TouchableOpacity,
     View as RNView,
+    type TextInputInstance,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -52,7 +53,7 @@ export function EmailCodeScreen({ mode }: { mode: 'signin' | 'link' }) {
     const [email, setEmail] = useState('');
     const [code, setCode] = useState('');
     const [resendIn, setResendIn] = useState(0);
-    const codeInputRef = useRef<TextInput>(null);
+    const codeInputRef = useRef<TextInputInstance>(null);
 
     const emailValid = EMAIL_RE.test(email.trim());
     const busy = loading.otpLoading;

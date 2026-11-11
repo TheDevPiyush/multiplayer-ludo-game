@@ -401,7 +401,7 @@ function FriendsSheet() {
                             ListFooterComponent={
                                 !isSearching && activeList.loadingMore
                                     ? <ActivityIndicator color={INDIGO} style={{ marginVertical: 16 }} />
-                                    : null
+                                    : undefined
                             }
                             keyboardShouldPersistTaps="handled"
                             keyboardDismissMode="on-drag"

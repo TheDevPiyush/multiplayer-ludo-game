@@ -92,7 +92,7 @@ export function AnnouncementsHost() {
         const { data: auth } = supabase.auth.onAuthStateChange((event, session) => {
             if (session && (event === 'INITIAL_SESSION' || event === 'SIGNED_IN')) void load();
         });
-        let state = AppState.currentState;
+        let state: string = AppState.currentState ?? 'active';
         let leftAt = 0;
         const appState = AppState.addEventListener('change', next => {
             if (next === 'background') leftAt = Date.now();

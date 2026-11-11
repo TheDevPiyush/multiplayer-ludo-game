@@ -58,7 +58,7 @@ function quietly(run: (fb: Firebase) => Promise<unknown>) {
 
 export function track<E extends keyof Events>(name: E, params: Events[E]) {
     if (__DEV__) console.log(`[analytics] ${name}`, params);
-    quietly(fb => fb.logEvent(fb.getAnalytics(), name as string, params));
+    quietly(async fb => fb.logEvent(fb.getAnalytics(), name as string, params));
 }
 
 /** Our internal user id, plus whether they're a guest, so retention can be split by the two. */

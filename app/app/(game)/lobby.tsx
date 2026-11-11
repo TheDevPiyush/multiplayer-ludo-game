@@ -1,7 +1,7 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import type { Color } from '@ludo/engine';
 import * as Clipboard from 'expo-clipboard';
-import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useLocalSearchParams, usePreventRemove, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Pressable,
@@ -171,7 +171,6 @@ function connectionLabel(phase: string): string {
 export default function LobbyScreen() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
-    const navigation = useNavigation();
     const { connectionPhase, isRealtimeReady } = useSocket();
 
     const { gameCode: rawGameCode, maxPlayers_: maxPlayersParam, roomId: rawRoomId } =
@@ -275,7 +274,7 @@ export default function LobbyScreen() {
     useEffect(() => {
         if (room?.status === 'PLAYING') {
             void setActiveRoom({ roomId, gameCode: roomCode, maxPlayers, screen: 'board' });
-            serverLeaveDoneRef.current = true;
+            allowLeaveRef.current();
             router.replace({ pathname: '/(game)/board', params: { gameCode: roomCode, roomId } });
         }
         // A room that's over can't be reopened (e.g. resumed from a stale active room).
@@ -286,7 +285,7 @@ export default function LobbyScreen() {
             );
             setTimeout(() => {
                 void setActiveRoom(null);
-                serverLeaveDoneRef.current = true;
+                allowLeaveRef.current();
                 router.replace('/(tabs)');
             }, 1800);
         }
@@ -335,7 +334,7 @@ export default function LobbyScreen() {
                                 return;
                             }
                             await setActiveRoom(null);
-                            serverLeaveDoneRef.current = true;
+                            allowLeaveRef.current();
                             hideDialog();
                             if (then) then();
                             else router.back();
@@ -349,15 +348,19 @@ export default function LobbyScreen() {
     // System back / swipe: ask first — for the host, leaving cancels the room for everyone.
     const openLeaveRef = useRef(openLeaveDialog);
     openLeaveRef.current = openLeaveDialog;
-    useEffect(() => {
-        const unsub = navigation.addListener('beforeRemove', (e) => {
-            if (serverLeaveDoneRef.current) { serverLeaveDoneRef.current = false; return; }
-            if (!roomCode) return;
-            e.preventDefault();
-            openLeaveRef.current(() => navigation.dispatch(e.data.action));
+    const [guardLeave, setGuardLeave] = useState(true);
+    const disablePrevention = usePreventRemove(guardLeave && !!roomCode, ({ repeat }) => {
+        openLeaveRef.current(() => {
+            allowLeaveRef.current();
+            repeat();
         });
-        return unsub;
-    }, [navigation, roomCode]);
+    });
+    const allowLeaveRef = useRef(() => {});
+    allowLeaveRef.current = () => {
+        serverLeaveDoneRef.current = true;
+        setGuardLeave(false);
+        disablePrevention();
+    };
 
     const handleStart = async () => {
         if (!canStart) { showError('Not enough players', 'Need at least 2 players to start.'); return; }

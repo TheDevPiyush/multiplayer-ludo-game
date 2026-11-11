@@ -79,7 +79,7 @@ function GridBackground({ opacity }: { opacity: Animated.Value }) {
     const rows = Math.ceil(H / CELL) + 1;
 
     return (
-        <Animated.View style={[StyleSheet.absoluteFillObject, { opacity }]} pointerEvents="none">
+        <Animated.View style={[StyleSheet.absoluteFill, { opacity }]} pointerEvents="none">
             {Array.from({ length: cols }).map((_, c) => (
                 <View
                     key={`col-${c}`}

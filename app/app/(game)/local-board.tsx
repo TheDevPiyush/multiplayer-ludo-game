@@ -1,6 +1,6 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { getPlayer, HOME_POS, type GameEvent } from '@ludo/engine';
-import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useLocalSearchParams, usePreventRemove, useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -62,7 +62,6 @@ async function report(game: Parameters<typeof reportOfflineGame>[1]): Promise<Ga
 export default function LocalBoardScreen() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
-    const navigation = useNavigation();
     const { config: rawConfig } = useLocalSearchParams<{ config?: string }>();
     const config = useMemo(() => parseConfig(rawConfig), [rawConfig]);
 
@@ -154,17 +153,14 @@ export default function LocalBoardScreen() {
     }, [state.dice]);
 
     // ── Leaving ──
-    useEffect(() => {
-        const unsub = navigation.addListener('beforeRemove', (e) => {
-            if (leavingRef.current || isOver) return;
-            e.preventDefault();
-            setExitDialog(true);
-        });
-        return unsub;
-    }, [navigation, isOver]);
+    // System back / swipe mid-game asks first; a finished game, or Quit, just leaves.
+    const [guardLeave, setGuardLeave] = useState(true);
+    const disablePrevention = usePreventRemove(guardLeave && !isOver, () => setExitDialog(true));
 
     const goHome = () => {
         leavingRef.current = true;
+        setGuardLeave(false);
+        disablePrevention();
         setExitDialog(false);
         // A full-screen ad only after a finished game against the computer, on the way home.
         if (isOver && soloColor) {

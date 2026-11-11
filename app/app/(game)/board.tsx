@@ -1,6 +1,6 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
-import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useLocalSearchParams, usePreventRemove, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Pressable,
@@ -60,7 +60,6 @@ const palette = Colors['dark'];
 export default function GameBoardScreen() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
-    const navigation = useNavigation();
     const { gameCode: rawCode, roomId: rawRoomId } = useLocalSearchParams<any>();
     const gameCode = typeof rawCode === 'string' ? rawCode : String(rawCode?.[0] ?? '');
     const roomId = typeof rawRoomId === 'string' ? rawRoomId : String(rawRoomId?.[0] ?? '');
@@ -91,6 +90,15 @@ export default function GameBoardScreen() {
     });
 
     const leftRef = useRef(false);
+    // System back / swipe asks first; leaving on purpose (Home, rematch, a closed room) turns this off.
+    const [guardLeave, setGuardLeave] = useState(true);
+    const openExitRef = useRef<() => void>(() => {});
+    const disablePrevention = usePreventRemove(guardLeave, () => openExitRef.current());
+    const allowLeave = () => {
+        leftRef.current = true;
+        setGuardLeave(false);
+        disablePrevention();
+    };
     const rollingRef = useRef(false);
     const currentUserIdRef = useRef<string | null>(null);
     /** This player's color, for sounds fired from socket callbacks. */
@@ -150,7 +158,7 @@ export default function GameBoardScreen() {
             if (e.type === 'cancelled') {
                 showError('Room ended', 'The room has been closed.');
                 setTimeout(() => {
-                    leftRef.current = true;
+                    allowLeave();
                     void setActiveRoom(null);
                     router.replace('/(tabs)');
                 }, 1500);
@@ -432,7 +440,7 @@ export default function GameBoardScreen() {
                         void (async () => {
                             await notifyServerLeave();
                             await setActiveRoom(null);
-                            leftRef.current = true;
+                            allowLeave();
                             hideDialog();
                             router.replace('/(tabs)');
                         })();
@@ -441,18 +449,8 @@ export default function GameBoardScreen() {
             ],
         });
     };
+    openExitRef.current = openExit;
 
-    useEffect(() => {
-        const unsub = navigation.addListener('beforeRemove', (e) => {
-            if (leftRef.current) {
-                leftRef.current = false;
-                return;
-            }
-            e.preventDefault();
-            openExit();
-        });
-        return unsub;
-    }, [navigation]);
 
     useEffect(() => {
         if (!socket) return;
@@ -483,7 +481,7 @@ export default function GameBoardScreen() {
         track('rematch', { mode: room?.isPrivate ? 'online_private' : 'online_public' });
         const next = r.data;
         await setActiveRoom({ roomId: next.roomId, gameCode: next.gameCode, maxPlayers: next.maxPlayers, screen: 'lobby' });
-        leftRef.current = true;
+        allowLeave();
         router.replace({
             pathname: '/(game)/lobby',
             params: { gameCode: next.gameCode, maxPlayers_: String(next.maxPlayers), roomId: next.roomId },
@@ -494,7 +492,7 @@ export default function GameBoardScreen() {
     const closeWin = () => {
         void (async () => {
             await setActiveRoom(null);
-            leftRef.current = true;
+            allowLeave();
             await notifyServerLeave();
             // A full-screen ad only here, on the way home after a finished game (never on Rematch).
             if (await leavingResult()) track('interstitial_shown', {});

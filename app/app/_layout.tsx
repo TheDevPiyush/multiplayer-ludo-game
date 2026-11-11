@@ -1,6 +1,6 @@
 // Must stay first: a real crypto.getRandomValues for Supabase PKCE.
 import 'react-native-get-random-values';
-import { ThemeProvider } from '@react-navigation/native';
+import { ThemeProvider } from 'expo-router';
 import { useFonts } from 'expo-font';
 import { ErrorBoundary as RouterErrorBoundary, useRouter, Stack, type ErrorBoundaryProps } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -37,8 +37,9 @@ export function ErrorBoundary(props: ErrorBoundaryProps) {
   return <RouterErrorBoundary {...props} />;
 }
 
+// Expo Router 58: the anchor is the screen kept under a deep-linked one (was initialRouteName).
 export const unstable_settings = {
-  initialRouteName: '(login)',
+  anchor: '(login)',
 };
 
 SplashScreen.preventAutoHideAsync();
@@ -180,7 +181,6 @@ function RootLayoutNav() {
           <ThemeProvider value={navigationTheme(colorScheme)}>
             <LudoBackground style={{ flex: 1 }}>
               <Stack
-                initialRouteName={"(login)"}
                 screenOptions={{
                   contentStyle: { backgroundColor: 'transparent' },
                   animation: 'fade',

@@ -92,16 +92,22 @@ export function RewardedButton({ placement, customData, coins, label, tone = 'da
         }
         track('ad_watched', { placement });
         let paid: number | null = null;
-        if (remoteAds()?.trustClient) {
-            // Development: test ads never reach Google's verification, so claim it directly.
+        // Test ads never reach Google's verification, so a server that trusts the app takes a claim
+        // instead. Development builds always try it: the saved /config can predate the server's
+        // ADS_TRUST_CLIENT change. A server that doesn't trust it answers 404, then we wait as usual.
+        let claimed = false;
+        if (__DEV__ || remoteAds()?.trustClient) {
             const r = await claimAdReward(session.access_token, customData);
             if (r.ok) {
+                claimed = true;
                 paid = r.data.coins;
                 void showProgress(r.data.progress);
-            } else {
+            } else if (r.status !== 404) {
+                claimed = true;
                 setMessage(r.error);
             }
-        } else {
+        }
+        if (!claimed) {
             paid = await confirmed;
             void refreshProgress();
         }
@@ -110,7 +116,7 @@ export function RewardedButton({ placement, customData, coins, label, tone = 'da
             haptic.success();
             playEffect('home');
             onRewarded?.(paid);
-        } else if (!remoteAds()?.trustClient) {
+        } else if (!claimed) {
             // It can still land late; the coins show as soon as it does.
             setMessage('Thanks for watching! Your coins are on their way.');
         }

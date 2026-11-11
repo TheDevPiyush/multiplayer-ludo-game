@@ -77,6 +77,7 @@
   - "Come and play" reminders at 13:00 and 19:30 IST (`REMINDER_TIMES`). They go to people who opened the app in the last 30 days but not in the last 3 hours, and aren't online.
   - Each Home visit syncs the device's token. The server keeps each user's 3 newest devices. A device that signs into another account moves to it, signing out removes it, and tokens Expo reports as dead are dropped.
   - Android channels: Game invites, Friends and Game reminders, each of which people can turn off separately. Tapping a notification opens the invite's room or the friends screen.
+  - Notifications play the game's own sound (`assets/sounds/custom_notification.wav`). Android can't change a channel's sound after it exists, so the channels moved to new ids (`invites-v2` and so on) and the old ones are deleted. The app's `CHANNELS` and the server's `CHANNEL` must use the same ids. Older app builds fall back to their old `invites` channel with the system sound.
 
 - **Analytics and crash reports**:
   - Firebase Analytics on Android (`util/analytics.ts`): `game_start`, `game_finish`, `rematch`, `invite_share`, `invite_join`. Development builds only log them to the console. iOS is left out until it has a Firebase config (`expo.autolinking.ios.exclude` in `app/package.json`).
@@ -141,11 +142,15 @@
   - Google's test ads never call `/ssv`, so development servers set `ADS_TRUST_CLIENT=true` and the app claims test rewards through `POST /ads/claim`. Ignored when `NODE_ENV=production`.
   - **Full-screen ads, rarely:** only when leaving a finished game's result screen with Home (never Rematch, never in a game or lobby). At most one per 3 finished games, 10 minutes apart, 3 a day, none in a player's first 3 games or first 24 hours, and none within 3 minutes of a rewarded ad. The caps come from `/config` (`ADS` in `server/progress/config.ts`); the app loads the ad in advance and never waits for one.
   - **Consent and age:** Home starts the SDK after Google's consent form (shown where the law requires it). Before the first rewarded ad the app asks once whether the player is 18 or older; under 18s, and anyone who hasn't answered, get only non-personalised ads. Content rating T.
-  - **Library:** `react-native-google-mobile-ads` is pinned to **17.0.0** with a two-line patch (`app/patches/`, applied by `patch-package` on install). 17.1 and later need React Native 0.86; 16.x needs Kotlin 2.3; 17.0.0 passes a possibly-null string to `promise.reject`, which React Native 0.81 refuses. Drop the patch when the app moves to React Native 0.86.
+  - **Library:** `react-native-google-mobile-ads` 17.4 (it needs React Native 0.86+, which came with the SDK 58 upgrade below).
   - **Config:** AdMob app IDs are build-time (`ADMOB_ANDROID_APP_ID`, `ADMOB_IOS_APP_ID` on EAS; without them, Google's sample IDs). Unit IDs are `EXPO_PUBLIC_ADMOB_*`; without them, development builds show test ads and release builds show none. The advertising ID permission is no longer blocked.
   - **Website:** the privacy policy describes the ads, consent and the under-18 rule; the Terms say coins have no money value and can't be bought, traded or cashed out. `/app-ads.txt` is served once `ADMOB_PUBLISHER_ID` is set.
   - New events: `ad_offered`, `ad_watched`, `interstitial_shown`. Results also carry `gameCoins`, the game's own coins that a rewarded ad can double.
-
+- **Expo SDK 58** (from 54): React Native 0.88, React 19.3, Expo Router 58, Reanimated 4.7, worklets 0.13, Sentry 8, Firebase 27, WebView 14. `expo-doctor` passes all checks.
+  - Expo Router 58 ships its own navigation core: React Navigation imports now come from `expo-router` (`ThemeProvider`, `DarkTheme`, `useIsFocused`, `useFocusEffect`). The "leave the game?" guards on the board, lobby and offline board use `usePreventRemove` instead of the removed `beforeRemove` listener. The custom tab bar uses the new `emitter` and `navigateToTab`. Hidden tabs pause with React Activity (`activityEnabled`), which replaces `freezeOnBlur`. `initialRouteName` became `unstable_settings.anchor`.
+  - React Native's strict TypeScript API: `TextInputInstance` refs, `StyleSheet.absoluteFill` (`absoluteFillObject` is gone), `AppState.currentState` may be null, list footers take `undefined` rather than `null`.
+  - `app.json`: the splash screen moved into the `expo-splash-screen` plugin; `newArchEnabled` and `edgeToEdgeEnabled` are gone (both are always on). `expo-asset` is now installed for `expo-audio`.
+  - Release builds now shrink code with R8 by default.
 ## Supabase settings for guests
 - Authentication → Sign In / Providers: turn on **Allow anonymous sign-ins** and **Allow manual linking**.
 - Authentication → Emails → **Change email address** template: include `{{ .Token }}`, so guests saving with email get the 6-digit code the app asks for.

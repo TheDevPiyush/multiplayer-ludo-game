@@ -1,5 +1,5 @@
 import Colors from "@/constants/Colors";
-import { DarkTheme, DefaultTheme } from "@react-navigation/native";
+import { DarkTheme, DefaultTheme } from "expo-router";
 
 export function navigationTheme(colorScheme: 'light' | 'dark' | null | undefined) {
     const palette = Colors[colorScheme === 'dark' ? 'dark' : 'light'];

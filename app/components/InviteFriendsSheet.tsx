@@ -132,7 +132,7 @@ export function InviteFriendsSheet({
                         onEndReachedThreshold={0.5}
                         style={{ flexGrow: 0 }}
                         contentContainerStyle={{ paddingBottom: 8 }}
-                        ListFooterComponent={loadingMore ? <ActivityIndicator color={INDIGO} style={{ marginVertical: 12 }} /> : null}
+                        ListFooterComponent={loadingMore ? <ActivityIndicator color={INDIGO} style={{ marginVertical: 12 }} /> : undefined}
                         ListEmptyComponent={
                             items === null && !error ? (
                                 <ActivityIndicator color={INDIGO} style={{ marginVertical: 32 }} />

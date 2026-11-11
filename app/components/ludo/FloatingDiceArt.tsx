@@ -1,4 +1,4 @@
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { StyleSheet, View as RNView, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {

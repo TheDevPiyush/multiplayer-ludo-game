@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import { existsSync } from 'fs';
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
