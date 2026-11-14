@@ -29,3 +29,13 @@ export async function leaveGuest() {
     await supabase.auth.signOut();
     await AsyncStorage.setItem('user', 'null');
 }
+
+/**
+ * After the server deleted the account: sign out here too. The push token went with the account,
+ * so there's nothing to tell the server.
+ */
+export async function afterAccountDeleted() {
+    await setActiveRoom(null);
+    await supabase.auth.signOut();
+    await AsyncStorage.setItem('user', 'null');
+}

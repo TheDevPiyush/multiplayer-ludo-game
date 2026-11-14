@@ -21,6 +21,7 @@ import { AudioDirector } from '@/components/AudioDirector';
 import { AnnouncementsHost } from '@/components/AnnouncementsHost';
 import { friendsHref, setInitialRouteDone, takePendingLink } from '@/util/links';
 import { listenForNotificationTaps, startPushTokenSync } from '@/util/push';
+import { startPurchases } from '@/util/purchases';
 import { setAnalyticsUser } from '@/util/analytics';
 import { reportError, setMonitoringUser, startMonitoring } from '@/util/monitoring';
 import { loadRemoteConfig } from '@/util/remote-config';
@@ -78,6 +79,7 @@ export default function RootLayout() {
 
   // Push token to the server on every app open, sign-in and token change (newest 3 devices are kept).
   useEffect(() => startPushTokenSync(), []);
+  useEffect(() => startPurchases(), []);
 
   // getting session from supabase + auto-resume active room
   useEffect(() => {

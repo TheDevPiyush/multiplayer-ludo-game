@@ -3,6 +3,7 @@ import { ServiceError } from '../game/game-service';
 import { prisma } from '../lib/prisma';
 import { dayOf } from '../progress/rules';
 import { CATALOG, DEFAULT_ITEM, EQUIP_COLUMN, equippedItem, itemById, type ItemKind } from './catalog';
+import { PERK, PRODUCTS } from './products';
 
 const TX = { timeout: 20_000, maxWait: 10_000 };
 const KINDS = Object.keys(EQUIP_COLUMN) as ItemKind[];
@@ -16,20 +17,28 @@ async function usableItems(userId: string, now: Date, db: Prisma.TransactionClie
     return new Set(rows.map(r => r.itemId));
 }
 
-/** The shop as one player sees it: their coins, every item with whether they own it, and what's equipped. */
+/**
+ * The shop as one player sees it: their coins, every item with whether they own it, what's
+ * equipped, and the paid products (prices come from the store, in the app) with whether bought.
+ */
 export async function getShop(userId: string, now = new Date()) {
-    const [user, usable] = await Promise.all([
+    const [user, usable, bought] = await Promise.all([
         prisma.user.findUnique({ where: { id: userId }, select: { coins: true, pawnSkin: true, diceSkin: true, boardTheme: true } }),
         usableItems(userId, now),
+        prisma.purchase.findMany({ where: { userId, revokedAt: null }, select: { productId: true } }),
     ]);
     if (!user) throw new ServiceError(404, 'Player not found.');
     const equipped = Object.fromEntries(
         KINDS.map(kind => [kind, equippedItem(kind, user[EQUIP_COLUMN[kind]], usable) ?? DEFAULT_ITEM[kind]]),
     ) as Record<ItemKind, string>;
+    const boughtIds = new Set(bought.map(b => b.productId));
     return {
         coins: user.coins,
         equipped,
         items: CATALOG.map(item => ({ ...item, owned: item.price === 0 || usable.has(item.id) })),
+        products: PRODUCTS.map(p => ({ id: p.id, kind: p.kind, name: p.name, items: p.grants.filter(g => itemById(g)), bought: boughtIds.has(p.id) })),
+        /** Remove Ads is owned: no full-screen ads. */
+        noAds: usable.has(PERK.noAds),
     };
 }
 

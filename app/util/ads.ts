@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform, TurboModuleRegistry } from 'react-native';
 
+import { adsRemoved } from '@/hooks/useShop';
 import { remoteAds, type AdCaps } from '@/util/remote-config';
 
 /**
@@ -224,7 +225,7 @@ export async function noteGameFinished() {
     await writeState(s);
     const ads = load();
     const unit = unitId('interstitial');
-    if (!ads || !unit || ready || !interstitialDue(s, caps(), now, lastRewardedAt)) return;
+    if (!ads || !unit || ready || adsRemoved() || !interstitialDue(s, caps(), now, lastRewardedAt)) return;
     if (!(await startAds())) return;
     const ad = ads.InterstitialAd.createForAdRequest(unit, { requestNonPersonalizedAdsOnly: !(await personalised()) });
     const offLoaded = ad.addAdEventListener(ads.AdEventType.LOADED, () => { ready = ad; offLoaded(); });
@@ -238,7 +239,7 @@ export async function noteGameFinished() {
 export async function leavingResult(): Promise<boolean> {
     const ad = ready;
     const ads = load();
-    if (!ad || !ads) return false;
+    if (!ad || !ads || adsRemoved()) return false;
     const now = Date.now();
     const s = await readState(now);
     if (!interstitialDue(s, caps(), now, lastRewardedAt)) return false;

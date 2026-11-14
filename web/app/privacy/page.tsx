@@ -44,6 +44,11 @@ export default function Privacy() {
                     items you own and use. Coins are only earned in the game; they are not bought and have no money
                     value.
                 </li>
+                <li>
+                    If you buy something with money: what you bought, when, the store’s order number and whether it
+                    was a test purchase. We get these from RevenueCat, which handles purchases for us with Google Play.
+                    Your card, UPI or other payment details go only to Google Play: we never see them.
+                </li>
                 <li>Friends, friend requests, room invites and in-app notifications.</li>
                 <li>
                     Players you block, and reports you make or that are made about you, including the reason, any note
@@ -74,7 +79,7 @@ export default function Privacy() {
                 <li>
                     Usage analytics on Android: events such as a game starting or finishing, its mode and length, the
                     number of players, whether you won, whether an invite was shared or used, rewards collected, shop
-                    visits and purchases with coins, and whether an ad was offered, watched or shown, together with your
+                    visits, purchases with coins, real-money purchases (the product, never payment details), and whether an ad was offered, watched or shown, together with your
                     internal player ID, whether you are a guest, and basic device and app details. We use these to see
                     what works and which features people come back for. They never include your username, chat or room
                     codes.
@@ -150,8 +155,12 @@ export default function Privacy() {
                             <td>Google</td>
                             <td>
                                 “Sign in with Google”, if you choose it; usage analytics (Firebase Analytics); ads and the
-                                ad consent form (Google AdMob)
+                                ad consent form (Google AdMob); payments (Google Play)
                             </td>
+                        </tr>
+                        <tr>
+                            <td>RevenueCat</td>
+                            <td>Handling purchases made through Google Play</td>
                         </tr>
                         <tr>
                             <td>Sentry</td>
@@ -177,7 +186,12 @@ export default function Privacy() {
             <ul>
                 <li>Saved accounts: until you delete your account.</li>
                 <li>
-                    Guest accounts: deleted automatically, with their data, after 30 days without opening the app.
+                    Guest accounts: deleted automatically, with their data, after 30 days without opening the app,
+                    unless they have bought something.
+                </li>
+                <li>
+                    Purchase records: kept after you delete your account, without your username or anything else
+                    about you, for refunds, tax and accounting, and so a restore can bring them to a new account.
                 </li>
                 <li>Room chat: only while the room is open (see above).</li>
                 <li>Reports: as long as needed to review them and handle repeated abuse.</li>
@@ -188,7 +202,8 @@ export default function Privacy() {
             <ul>
                 <li>Change your username, and block or mute other players, inside the app.</li>
                 <li>
-                    Ask for a copy of your data, a correction, or deletion of your account by writing to {mail}. See{' '}
+                    Delete your account at any time from Profile → Delete account in the app. You can also ask for a
+                    copy of your data, a correction, or deletion of your account by writing to {mail}. See{' '}
                     <Link href="/delete-account">how to delete your account</Link>.
                 </li>
                 <li>

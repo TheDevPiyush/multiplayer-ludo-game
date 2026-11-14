@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 
-import { GUEST_PROVIDER, type AuthUser } from '../lib/auth.ts';
+import { canDeleteAuthUsers, GUEST_PROVIDER, type AuthUser } from '../lib/auth.ts';
+import { removeUser } from './remove-user.ts';
 import { prisma } from '../lib/prisma.ts';
 import { games } from '../game/services.ts';
 import { getUserRow, userRows, type UserRow } from '../game/user-cache.ts';
@@ -224,5 +225,28 @@ export async function removePushTokenHandler(req: Request, res: Response) {
     } catch (error) {
         log.error('removePushToken failed', { user: req.user?.id, error: (error as Error)?.message });
         return res.status(500).json({ message: 'Failed to remove push token' });
+    }
+}
+
+/**
+ * Profile → Delete account (Google Play requires it in the app). Everything about the player
+ * goes, at once; purchases stay without an owner, for refunds and tax. Not while they're in a
+ * room, which would leave the other players a seat with nobody behind it.
+ */
+export async function deleteAccount(req: Request, res: Response) {
+    const userId = req.user!.id;
+    try {
+        if (!canDeleteAuthUsers()) return res.status(503).json({ message: "Accounts can't be deleted right now. Try again later." });
+        const seated = await prisma.gamePlayer.findFirst({
+            where: { userId, status: { not: 'LEFT' }, gameRoom: { status: { in: ['WAITING', 'PLAYING'] } } },
+            select: { id: true },
+        });
+        if (seated) return res.status(409).json({ message: 'Leave your game first, then delete your account.' });
+        if (!(await removeUser(userId))) return res.status(502).json({ message: "Couldn't delete your account. Try again in a moment." });
+        log.info('account deleted', { user: userId });
+        return res.status(200).json({ deleted: true });
+    } catch (error) {
+        log.error('deleteAccount failed', { user: userId, error: (error as Error)?.message });
+        return res.status(500).json({ message: 'Something went wrong.' });
     }
 }

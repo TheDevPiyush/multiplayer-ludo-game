@@ -1,25 +1,32 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
-import { useFocusEffect } from 'expo-router';
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, Platform, Pressable, StyleSheet, useWindowDimensions, View as RNView } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import type { ItemKind, ShopItem } from '@/apis/shop-api';
+import type { ItemKind, ShopItem, ShopProduct } from '@/apis/shop-api';
 import { PREVIEW_ASPECT, PREVIEWS } from '@/components/cosmetics/previews';
 import AppDialog from '@/components/Dialog';
 import { Coin } from '@/components/progress/Coin';
+import { PaidOffers } from '@/components/shop/PaidOffers';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
+import { useIsGuest } from '@/hooks/useIsGuest';
 import { useShop } from '@/hooks/useShop';
 import { track } from '@/util/analytics';
 import { playEffect } from '@/util/audio';
 import { haptic } from '@/util/feedback';
+import { purchasesAvailable, storeProducts } from '@/util/purchases';
 
 const palette = Colors.dark;
 const GOLD = '#FFCB3D';
 const GREEN = '#37BD6A';
 
-const KINDS: { kind: ItemKind; label: string; icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'] }[] = [
+/** The paid tab, then one per item kind. */
+type Tab = ItemKind | 'sets';
+
+const TABS: { kind: Tab; label: string; icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'] }[] = [
+    { kind: 'sets', label: 'Sets', icon: 'gift' },
     { kind: 'pawn', label: 'Pawns', icon: 'chess-pawn' },
     { kind: 'dice', label: 'Dice', icon: 'dice-5' },
     { kind: 'board', label: 'Boards', icon: 'checkerboard' },
@@ -97,16 +104,33 @@ const ItemCard = memo(function ItemCard({
 export default function ShopScreen() {
     const insets = useSafeAreaInsets();
     const { width } = useWindowDimensions();
-    const { shop, items, buy, equip } = useShop();
-    const [kind, setKind] = useState<ItemKind>('pawn');
+    const router = useRouter();
+    const isGuest = useIsGuest();
+    const { shop, items, buy, equip, buyPaid, restore } = useShop();
+    const [kind, setKind] = useState<Tab>('pawn');
     const [busy, setBusy] = useState<string | null>(null);
+    const [restoring, setRestoring] = useState(false);
     const [confirm, setConfirm] = useState<ShopItem | null>(null);
-    const [dialog, setDialog] = useState<{ title: string; message: string } | null>(null);
+    const [dialog, setDialog] = useState<{ title: string; message: string; saveProgress?: boolean } | null>(null);
+    /** The store's price for each product it sells; empty hides the Sets tab. */
+    const [prices, setPrices] = useState<Map<string, string>>(new Map());
+
+    const productIds = shop?.products?.map(p => p.id).join(',') ?? '';
+    useEffect(() => {
+        if (!productIds || !purchasesAvailable()) return;
+        let live = true;
+        void storeProducts(productIds.split(',')).then(found => {
+            if (live) setPrices(new Map([...found].map(([id, p]) => [id, p.priceString])));
+        });
+        return () => { live = false; };
+    }, [productIds]);
+    const tabs = prices.size > 0 ? TABS : TABS.filter(t => t.kind !== 'sets');
 
     useFocusEffect(useCallback(() => track('shop_view', {}), []));
 
     const cardWidth = Math.floor((Math.min(width, 520) - 40 - 12) / 2);
     const shown = useMemo(() => items?.filter(i => i.kind === kind) ?? [], [items, kind]);
+    const products = shop?.products ?? [];
     // Read through a ref, so the card callbacks stay the same and cards don't all re-render.
     const shopRef = useRef(shop);
     shopRef.current = shop;
@@ -137,6 +161,50 @@ export default function ShopScreen() {
         }
     };
 
+    const doBuyPaid = async (product: ShopProduct) => {
+        if (busy) return;
+        setBusy(product.id);
+        const r = await buyPaid(product.id);
+        setBusy(null);
+        if (r.kind === 'cancelled') return;
+        if (r.kind === 'failed') {
+            setDialog({ title: "Couldn't buy that", message: r.error });
+            return;
+        }
+        if (r.kind === 'pending') {
+            setDialog({
+                title: 'Payment processing',
+                message: `Google Play is still confirming your payment. ${product.name} arrives as soon as it goes through, even if you close the app.`,
+            });
+            return;
+        }
+        haptic.success();
+        playEffect('home');
+        const what = product.kind === 'noads'
+            ? 'No more full-screen ads after games.'
+            : `${product.name} is yours, and it's equipped.`;
+        const message = r.kind === 'later'
+            ? 'Thanks! Your payment went through. It can take a minute to show here; if it doesn\'t, tap Restore purchases.'
+            : isGuest
+                ? `${what}\n\nYou're playing as a guest. Save your progress so you never lose it, even on a new phone.`
+                : what;
+        setDialog({ title: 'Thank you!', message, saveProgress: isGuest && r.kind === 'bought' });
+    };
+
+    const doRestore = async () => {
+        if (restoring) return;
+        setRestoring(true);
+        const r = await restore();
+        setRestoring(false);
+        if (!r.ok) setDialog({ title: "Couldn't restore", message: r.error });
+        else setDialog({
+            title: r.restored > 0 ? 'Purchases restored' : 'Nothing new to restore',
+            message: r.restored > 0
+                ? `${r.restored === 1 ? 'One purchase is' : `${r.restored} purchases are`} back on this account.`
+                : 'Everything bought with this Google account is already here.',
+        });
+    };
+
     const doEquip = useCallback(async (item: ShopItem) => {
         setBusy(item.id);
         const r = await equip(item.id);
@@ -161,7 +229,7 @@ export default function ShopScreen() {
             </RNView>
 
             <RNView style={styles.tabs}>
-                {KINDS.map(k => {
+                {tabs.map(k => {
                     const active = k.kind === kind;
                     return (
                         <Pressable key={k.kind} onPress={() => setKind(k.kind)} style={[styles.tab, active && styles.tabActive]}>
@@ -174,6 +242,18 @@ export default function ShopScreen() {
 
             {!items ? (
                 <RNView style={styles.center}><ActivityIndicator color={palette.text} /></RNView>
+            ) : kind === 'sets' ? (
+                <PaidOffers
+                    width={width}
+                    products={products}
+                    prices={prices}
+                    items={items}
+                    busy={busy}
+                    restoring={restoring}
+                    onBuy={p => void doBuyPaid(p)}
+                    onRestore={() => void doRestore()}
+                    bottomInset={insets.bottom}
+                />
             ) : (
                 // A list, not a scroll view: only the cards on screen are drawn (boards are big drawings).
                 <FlatList
@@ -218,7 +298,16 @@ export default function ShopScreen() {
                     { label: 'Buy', onPress: () => void doBuy(confirm) },
                 ] : undefined}
             />
-            <AppDialog visible={!!dialog} title={dialog?.title ?? ''} message={dialog?.message} onDismiss={() => setDialog(null)} />
+            <AppDialog
+                visible={!!dialog}
+                title={dialog?.title ?? ''}
+                message={dialog?.message}
+                onDismiss={() => setDialog(null)}
+                actions={dialog?.saveProgress ? [
+                    { label: 'Later', onPress: () => setDialog(null) },
+                    { label: 'Save progress', onPress: () => { setDialog(null); router.navigate('/(tabs)/profile'); } },
+                ] : undefined}
+            />
         </RNView>
     );
 }

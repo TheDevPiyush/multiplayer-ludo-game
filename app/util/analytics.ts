@@ -18,6 +18,9 @@ type Events = {
     /** A shop item bought; `currency` is 'coins' until store purchases arrive. */
     purchase: { item: string; currency: 'coins'; price: number };
     shop_equip: { item: string };
+    /** Real-money products (Google Play through RevenueCat): bought, or restored. */
+    iap_purchase: { product: string; result: 'bought' | 'pending' };
+    iap_restore: { restored: number };
     /** A rewarded ad offer was shown, and one was watched to the end. */
     ad_offered: { placement: string };
     ad_watched: { placement: string };

@@ -47,7 +47,7 @@ type Summary = { unreadNotifications: number; incomingRequests: number; outgoing
  */
 const summaries = new TtlCache<string, Summary>(20_000, 10 * 60_000);
 
-function summaryChanged(...userIds: string[]) {
+export function summaryChanged(...userIds: string[]) {
     for (const id of userIds) summaries.delete(id);
 }
 

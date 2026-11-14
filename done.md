@@ -151,6 +151,17 @@
   - React Native's strict TypeScript API: `TextInputInstance` refs, `StyleSheet.absoluteFill` (`absoluteFillObject` is gone), `AppState.currentState` may be null, list footers take `undefined` rather than `null`.
   - `app.json`: the splash screen moved into the `expo-splash-screen` plugin; `newArchEnabled` and `edgeToEdgeEnabled` are gone (both are always on). `expo-asset` is now installed for `expo-audio`.
   - Release builds now shrink code with R8 by default.
+- **Purchases** (RevenueCat, `server/purchases/`, `app/util/purchases.ts`; guests too):
+  - Products (`server/shop/products.ts`, store ids): Starter Pack (`starter_pack`, ₹19, offered once), four sets at ₹79 (`set_festival`, `set_space`, `set_royal`, `set_spooky`, each an existing pawn, dice and board) and Remove Ads (`remove_ads`, ₹149, no full-screen ads; rewarded ads stay). Prices live in Play Console. Nothing sells coins, and everything in a set can still be earned with coins.
+  - The shop has a **Sets** tab with the store's local prices, "You already have 1 of 3", and Restore purchases. It's hidden without a RevenueCat key or a store. A bought set is equipped at once. Guests who buy are asked to save their progress.
+  - **The server never trusts the app or the webhook body.** After a purchase or restore the app calls `POST /purchases/sync`; RevenueCat's webhook (`POST /purchases/webhook`, checked against `REVENUECAT_WEBHOOK_AUTH`) does the same for every account it names. Both fetch the customer from RevenueCat's API (`REVENUECAT_SECRET_KEY`) and make the account's `Entitlement` rows match its active purchases. Coin-bought items are never touched.
+  - `Purchase` table: one row per store purchase. A refund (`CANCELLATION`) sets `revokedAt` for good. A restore on another account moves the purchase there and takes its items from the old one. Items covered by two purchases (Gold dice) stay until both are gone.
+  - Pending payments (UPI) say so and arrive by webhook once they clear. "Already owned" on Play restores instead.
+  - Guest clean-up never deletes a buyer. Remove Ads is remembered on the device, so a cold start never shows a full-screen ad to a buyer.
+  - New events: `iap_purchase`, `iap_restore`.
+  - `react-native-purchases` is on 10.16 (11.x tells Expo apps to wait). Products must be **non-consumable** in RevenueCat, or Play consumes them and Restore can't find them.
+- **Delete account** (Profile, Google Play requires it): deletes the Supabase user and everything about the player at once (`DELETE /auth/me`), not while they're in a room. Purchase records stay without an owner, for refunds and tax; Restore purchases on a new account brings them back. The deleted account's still-valid tokens are refused for 2 hours, and its sockets are closed. The website's delete-account page, privacy policy and terms describe in-app deletion and purchases.
+
 ## Supabase settings for guests
 - Authentication → Sign In / Providers: turn on **Allow anonymous sign-ins** and **Allow manual linking**.
 - Authentication → Emails → **Change email address** template: include `{{ .Token }}`, so guests saving with email get the 6-digit code the app asks for.

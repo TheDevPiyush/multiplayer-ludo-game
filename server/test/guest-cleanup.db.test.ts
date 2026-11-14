@@ -7,7 +7,8 @@ const hasDb = !!process.env.DATABASE_URL;
 
 describe.skipIf(!hasDb)('inactive guest cleanup', async () => {
     const { prisma } = await import('../lib/prisma');
-    const { findInactiveGuests, removeGuest, GUEST_RETENTION_MS } = await import('../auth/guest-cleanup');
+    const { findInactiveGuests, GUEST_RETENTION_MS } = await import('../auth/guest-cleanup');
+    const { removeUser: removeGuest } = await import('../auth/remove-user');
 
     const tag = randomUUID().slice(0, 6);
     const old = new Date(Date.now() - GUEST_RETENTION_MS - 24 * 60 * 60 * 1000);

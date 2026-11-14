@@ -115,6 +115,7 @@ model User {
   coinLedger      CoinLedger[]
   missionProgress MissionProgress[]
   entitlements    Entitlement[]
+  purchases       Purchase[]
 
   @@index([providerId])
   @@index([lastSeenAt])
@@ -373,4 +374,33 @@ model Entitlement {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, itemId])
+}
+
+/// A paid purchase, as RevenueCat reports it (server/purchases). Its items are `Entitlement`
+/// rows with source PLAY or APPSTORE, worked out again on every sync.
+model Purchase {
+  id                 String    @id @default(uuid())
+  /// The account holding it. Null once that account is deleted (the record stays, without
+  /// personal details, for refunds and tax), or while a restore has moved it to an account
+  /// that hasn't synced yet.
+  userId             String?
+  /// Store product id (server/shop/products.ts).
+  productId          String
+  /// RevenueCat's id for this purchase.
+  rcId               String    @unique
+  /// The store's order id (Play: "GPA.…"). Refund events name it.
+  storeTransactionId String?   @unique
+  /// RevenueCat's store name: play_store, app_store.
+  store              String
+  /// A licence tester's or TestFlight purchase: nothing was charged.
+  sandbox            Boolean   @default(false)
+  purchasedAt        DateTime
+  /// Refunded or revoked: it grants nothing, even if RevenueCat lists it again.
+  revokedAt          DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
 }
