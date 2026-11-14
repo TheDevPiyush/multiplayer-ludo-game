@@ -4,8 +4,7 @@ import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 
 import { TtlCache } from './ttl-cache';
 
-/** `User.provider` for guests (Supabase anonymous sign-in). */
-export const GUEST_PROVIDER = 'anonymous';
+export { GUEST_PROVIDER } from './providers';
 
 export interface AuthUser {
     id: string;
@@ -28,6 +27,15 @@ const hsKey = jwtSecret ? new TextEncoder().encode(jwtSecret) : null;
 
 /** Verified tokens, keyed by hash, kept until the token itself expires. */
 const verified = new TtlCache<string, AuthUser>(5_000, 60 * 60 * 1000);
+/**
+ * Accounts deleted here. Their access tokens stay valid until they expire (an hour at most), and
+ * any request with one would create the player again, so they're refused for longer than that.
+ */
+const deleted = new TtlCache<string, true>(10_000, 2 * 60 * 60 * 1000);
+
+export function markAccountDeleted(id: string) {
+    deleted.set(id, true);
+}
 
 function fromClaims(p: JWTPayload): AuthUser | null {
     if (typeof p.sub !== 'string') return null;
@@ -64,6 +72,11 @@ async function verifyLocally(token: string): Promise<{ user: AuthUser; exp?: num
  * falling back to Supabase's API for projects on legacy secrets we don't hold.
  */
 export async function verifyAccessToken(token: string): Promise<AuthUser | null> {
+    const user = await verifyToken(token);
+    return user && !deleted.get(user.id) ? user : null;
+}
+
+async function verifyToken(token: string): Promise<AuthUser | null> {
     const cacheKey = createHash('sha256').update(token).digest('base64url');
     const cached = verified.get(cacheKey);
     if (cached) return cached;

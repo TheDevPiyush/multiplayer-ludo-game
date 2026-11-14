@@ -1,3 +1,5 @@
+// Must stay first: reports errors from everything imported below.
+import { flushErrorReports, reportRouteErrors } from './lib/sentry.ts';
 import type { Request, Response } from 'express';
 import express from 'express';
 import { createServer } from 'http';
@@ -14,6 +16,10 @@ import { log, requestLogger } from './lib/logger.ts';
 import { rateLimit } from './lib/rate-limit.ts';
 import { startReminders } from './notifications/reminders.ts';
 import linksRouter from './links/links.routes.ts';
+import progressRouter, { getConfig } from './progress/progress.routes.ts';
+import shopRouter from './shop/shop.routes.ts';
+import adsRouter from './ads/ads.routes.ts';
+import purchasesRouter from './purchases/purchases.routes.ts';
 import rtcRouter from './rtc/rtc.routes.ts';
 import { startNotificationCleanup } from './social/social.controller.ts';
 import socialRouter from './social/social.routes.ts';
@@ -27,8 +33,10 @@ app.use(requestLogger);
 // Per IP and generous: many mobile users can share one carrier IP. Per-user limits sit behind auth.
 app.use(rateLimit('ip', 300, 50));
 const json = express.json({ limit: '16kb' });
-// Admin announcements carry HTML: their router parses the body itself, with a larger limit.
-app.use((req, res, next) => (req.path.startsWith('/admin/announcements') ? next() : json(req, res, next)));
+// Admin announcements carry HTML, and RevenueCat's webhook can be large: their routers parse the
+// body themselves, with a larger limit.
+const ownParser = (path: string) => path.startsWith('/admin/announcements') || path === '/purchases/webhook';
+app.use((req, res, next) => (ownParser(req.path) ? next() : json(req, res, next)));
 
 app.get('/', (_: Request, res: Response) => {
     res.send('Server is Live');
@@ -42,9 +50,15 @@ app.use('/admin', adminRouter);
 app.use('/announcements', announcementsRouter);
 app.use('/auth', authRouter);
 app.use('/game', gameRouter);
+app.get('/config', getConfig);
+app.use('/progress', progressRouter);
+app.use('/shop', shopRouter);
+app.use('/ads', adsRouter);
+app.use('/purchases', purchasesRouter);
 app.use('/rtc', rtcRouter);
 app.use('/social', socialRouter);
 app.use(linksRouter);
+reportRouteErrors(app);
 
 const httpServer = createServer(app);
 attachSocketServer(httpServer, games);
@@ -69,6 +83,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         shuttingDown = true;
         log.info(`${signal}: flushing live games…`);
         await games.stop().catch(e => log.error('flush on shutdown failed', { error: (e as Error)?.message }));
+        await flushErrorReports().catch(() => {});
         process.exit(0);
     });
 }

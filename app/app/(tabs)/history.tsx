@@ -166,7 +166,7 @@ export default function HistoryTabScreen() {
                     keyExtractor={historyKey}
                     onEndReached={() => void list.loadMore()}
                     onEndReachedThreshold={0.5}
-                    ListFooterComponent={list.loadingMore ? <ActivityIndicator color={palette.text} style={{ marginVertical: 16 }} /> : null}
+                    ListFooterComponent={list.loadingMore ? <ActivityIndicator color={palette.text} style={{ marginVertical: 16 }} /> : undefined}
                     contentContainerStyle={{
                         paddingHorizontal: 20,
                         paddingBottom: insets.bottom + 24,

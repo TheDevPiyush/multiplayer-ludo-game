@@ -1,17 +1,23 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View as RNView } from 'react-native';
-import Animated, { FadeInDown } from 'react-native-reanimated';
+import Animated, { FadeInDown, LinearTransition } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import AppDialog from '@/components/Dialog';
 import { GameTile } from '@/components/GameTile';
+import { Coin } from '@/components/progress/Coin';
+import { DailyRewardCard } from '@/components/progress/DailyRewardCard';
+import { MissionsPanel } from '@/components/progress/MissionsPanel';
 import { useSocial } from '@/components/SocialProvider';
 import { useSocket } from '@/components/SocketProvider';
 import { UserAvatar } from '@/components/UserAvatar';
 import { FloatingDiceArt } from '@/components/ludo/FloatingDiceArt';
 import { Text } from '@/components/Themed';
-import { useCurrentUser } from '@/hooks/useCurrentUser';
+import { refreshCurrentUser, useCurrentUser } from '@/hooks/useCurrentUser';
+import { startAds } from '@/util/ads';
+import { useProgress } from '@/hooks/useProgress';
 import { friendsHref } from '@/util/links';
 import { syncPushToken } from '@/util/push';
 
@@ -79,10 +85,16 @@ export default function HomeTabScreen() {
     const { connectionPhase } = useSocket();
     const connected = connectionPhase === 'connected';
     const requests = summary.incomingRequests;
+    const { progress, claimDaily, claimMission } = useProgress();
+    const [error, setError] = useState<string | null>(null);
 
     // Home is where we ask for notification permission; once granted, the token is also
     // synced on every app open (startPushTokenSync in the root layout).
     useFocusEffect(useCallback(() => void syncPushToken({ prompt: true }), []));
+    // Ads start here, once signed in: Google's consent form shows first where the law needs it.
+    useEffect(() => void startAds(), []);
+    // Shared with Profile; this retries a profile that didn't load (slow or no network).
+    useFocusEffect(useCallback(() => void refreshCurrentUser(), []));
 
     const username = user?.username ?? 'player';
     const games = user?.totalGames ?? 0;
@@ -114,9 +126,32 @@ export default function HomeTabScreen() {
                     <RNView style={[styles.connDot, { backgroundColor: connected ? '#22C55E' : '#FF3B4E' }]} />
                 </Pressable>
                 <RNView style={{ flex: 1 }}>
-                    <Text weight="medium" style={styles.hello}>Ready to roll?</Text>
                     <Text weight="bold" style={styles.name} numberOfLines={1}>@{username}</Text>
+                    {progress ? (
+                        <RNView style={styles.levelRow} accessibilityLabel={`Level ${progress.level}, ${progress.levelXp} of ${progress.levelXpNeeded} XP`}>
+                            <RNView style={styles.levelChip}>
+                                <Text weight="bold" style={styles.levelText}>Lv {progress.level}</Text>
+                            </RNView>
+                            <RNView style={styles.xpTrack}>
+                                <RNView style={[styles.xpFill, { width: `${Math.round((progress.levelXp / progress.levelXpNeeded) * 100)}%` }]} />
+                            </RNView>
+                        </RNView>
+                    ) : (
+                        <Text weight="medium" style={styles.hello}>Ready to roll?</Text>
+                    )}
                 </RNView>
+                {progress && (
+                    <Pressable
+                        onPress={() => router.navigate('/(tabs)/shop')}
+                        style={({ pressed }) => [styles.coins, pressed && { transform: [{ scale: 0.95 }] }]}
+                        hitSlop={6}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${progress.coins} coins. Open the shop`}
+                    >
+                        <Coin size={18} />
+                        <Text weight="bold" style={styles.coinsText}>{progress.coins.toLocaleString('en-IN')}</Text>
+                    </Pressable>
+                )}
                 <Pressable
                     onPress={() => router.push(friendsHref(requests > 0 ? 'requests' : 'friends'))}
                     style={({ pressed }) => [styles.friendsBtn, pressed && { transform: [{ scale: 0.94 }] }]}
@@ -175,8 +210,22 @@ export default function HomeTabScreen() {
                 </RNView>
             </Animated.View>
 
+            {/* Missions */}
+            {progress && (
+                <Animated.View entering={FadeInDown.delay(200).duration(450)} layout={LinearTransition}>
+                    <MissionsPanel progress={progress} onClaim={claimMission} onError={setError} />
+                </Animated.View>
+            )}
+
+            {/* Daily reward: always here, this week with what's collected and missed */}
+            {progress && (
+                <Animated.View entering={FadeInDown.delay(220).duration(450)} layout={LinearTransition}>
+                    <DailyRewardCard progress={progress} onClaim={claimDaily} onError={setError} />
+                </Animated.View>
+            )}
+
             {/* Stats */}
-            <Animated.View entering={FadeInDown.delay(240).duration(450)} style={styles.stats}>
+            <Animated.View entering={FadeInDown.delay(240).duration(450)} layout={LinearTransition} style={styles.stats}>
                 {[
                     { label: 'Games', value: String(games), icon: 'dice-multiple' as IconName },
                     { label: 'Wins', value: String(wins), icon: 'crown' as IconName },
@@ -189,6 +238,13 @@ export default function HomeTabScreen() {
                     </RNView>
                 ))}
             </Animated.View>
+
+            <AppDialog
+                visible={!!error}
+                title="Couldn't collect"
+                message={error ?? undefined}
+                onDismiss={() => setError(null)}
+            />
         </ScrollView>
     );
 }
@@ -222,8 +278,33 @@ const styles = StyleSheet.create({
         borderWidth: 2.5,
         borderColor: '#4B3BF2',
     },
-    hello: { fontSize: 13, color: 'rgba(255,255,255,0.75)' },
+    hello: { fontSize: 13, color: 'rgba(255,255,255,0.75)', marginTop: 2 },
     name: { fontSize: 18, color: '#FFFFFF' },
+    levelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+    levelChip: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 999, backgroundColor: '#FFD54A' },
+    levelText: { fontSize: 10, color: '#5A2E00' },
+    xpTrack: {
+        flex: 1,
+        maxWidth: 120,
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: 'rgba(10, 8, 60, 0.3)',
+        overflow: 'hidden',
+    },
+    xpFill: { height: 6, borderRadius: 3, backgroundColor: '#FFD54A' },
+    coins: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        height: 36,
+        paddingLeft: 7,
+        paddingRight: 12,
+        borderRadius: 18,
+        backgroundColor: 'rgba(10, 8, 60, 0.28)',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.18)',
+    },
+    coinsText: { fontSize: 14, color: '#FFFFFF' },
     friendsBtn: {
         width: 46,
         height: 46,

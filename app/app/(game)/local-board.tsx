@@ -1,26 +1,33 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { getPlayer, type GameEvent } from '@ludo/engine';
-import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { getPlayer, HOME_POS, type GameEvent } from '@ludo/engine';
+import { useLocalSearchParams, usePreventRemove, useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { reportOfflineGame, type GameReward } from '@/apis/progress-api';
 import AppDialog from '@/components/Dialog';
 import { RollingDice } from '@/components/ludo/Dice';
 import { BOARD_SIZE, COLOR_HEX, layoutTokens, stripRows, turnsFor } from '@/components/ludo/geometry';
 import { LudoBoard } from '@/components/ludo/LudoBoard';
 import { PlayerStrip, type PlayerStripProps } from '@/components/ludo/PlayerStrip';
 import { Token } from '@/components/ludo/Token';
+import { GameRewardLine } from '@/components/progress/GameRewardLine';
+import { leavingResult, noteGameFinished } from '@/util/ads';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
 import { useLocalGame, type LocalGameConfig } from '@/hooks/useLocalGame';
+import { useEquipped } from '@/hooks/useShop';
+import { showProgress } from '@/hooks/useProgress';
+import { track, type GameMode } from '@/util/analytics';
 import { playEffect } from '@/util/audio';
 import { feedbackForEvents, haptic } from '@/util/feedback';
+import { diceLabel } from '@/util/remote-config';
+import { supabase } from '@/util/supabase-client';
 
 const palette = Colors.dark;
 
 const FALLBACK: LocalGameConfig = {
-    dynamicDice: true,
     seats: [
         { color: 'RED', kind: 'human', name: 'You', level: 'medium' },
         { color: 'GREEN', kind: 'bot', name: 'Green Bot', level: 'medium' },
@@ -38,10 +45,23 @@ function parseConfig(raw: unknown): LocalGameConfig {
 
 const RANK_LABEL = ['1st', '2nd', '3rd', '4th'];
 
+/** Names one game for the server, so reporting it twice pays once. */
+const newGameId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+
+/** Sends a finished Vs Computer game to the server; resolves to what it paid, if anything. */
+async function report(game: Parameters<typeof reportOfflineGame>[1]): Promise<GameReward | null> {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) return null;
+    const r = await reportOfflineGame(token, game);
+    if (!r.ok) return null;
+    void showProgress(r.data.progress);
+    return r.data.reward;
+}
+
 export default function LocalBoardScreen() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
-    const navigation = useNavigation();
     const { config: rawConfig } = useLocalSearchParams<{ config?: string }>();
     const config = useMemo(() => parseConfig(rawConfig), [rawConfig]);
 
@@ -51,10 +71,20 @@ export default function LocalBoardScreen() {
 
     // Everyone at this phone hears the game; haptics and "your turn" are for the human seats.
     const isHuman = (color: string) => config.seats.some(s => s.color === color && s.kind === 'human');
+    /** Vs Computer: the one human's color, whose game counts toward rewards and missions. */
+    const humans = config.seats.filter(s => s.kind === 'human');
+    const soloColor = humans.length === 1 ? humans[0]!.color : null;
+    const soloStats = useRef({ moves: 0, captures: 0, sixes: 0 });
+    const gameId = useRef(newGameId());
+    const [reward, setReward] = useState<GameReward | null>(null);
 
     const onEvents = (events: GameEvent[]) => {
         for (const e of events) {
             if (e.type === 'CAPTURED') setCapturedKey(`${e.color}:${e.token}:${Date.now()}`);
+            if (!soloColor) continue;
+            if (e.type === 'MOVED' && e.color === soloColor) soloStats.current.moves++;
+            else if (e.type === 'CAPTURED' && e.by === soloColor) soloStats.current.captures++;
+            else if (e.type === 'ROLLED' && e.color === soloColor && e.value === 6) soloStats.current.sixes++;
         }
         feedbackForEvents(events, isHuman);
     };
@@ -75,7 +105,46 @@ export default function LocalBoardScreen() {
     // The turn as shown: the previous player keeps it until their token has stopped (see useLocalGame).
     const { shownTurn, shownSeat } = game;
     const turnHex = COLOR_HEX[shownTurn] ?? '#fff';
+    // Your equipped pawns and dice are yours alone: on your colour against the computer. Pass & Play
+    // shares one phone between players, so it keeps the defaults; the board is always yours.
+    const equipped = useEquipped();
+    const mySkin = (color: string, kind: 'pawn' | 'dice') => (color === soloColor ? equipped[kind] : null);
     const humanCount = config.seats.filter(s => s.kind === 'human').length;
+
+    // ── Measuring ──
+    const mode: GameMode = humanCount === 0 ? 'watch_bots' : humanCount === 1 ? 'vs_computer' : 'pass_and_play';
+    const players = config.seats.length;
+    const startedAt = useRef(Date.now());
+    useEffect(() => track('game_start', { mode, players }), []);
+    useEffect(() => {
+        if (!isOver) return;
+        const seconds = Math.round((Date.now() - startedAt.current) / 1000);
+        const you = mode === 'vs_computer' ? config.seats.find(s => s.kind === 'human')?.color : undefined;
+        track('game_finish', { mode, players, seconds, dice: diceLabel(), ...(you ? { won: state.ranking[0] === you ? 1 : 0 } : {}) });
+        if (soloColor) {
+            void noteGameFinished();
+            const id = gameId.current;
+            void report({
+                gameId: id,
+                won: state.ranking[0] === soloColor,
+                seconds,
+                ...soloStats.current,
+                home: getPlayer(state, soloColor)?.tokens.filter(t => t === HOME_POS).length ?? 0,
+            }).then(r => {
+                // Only if this game is still the one on screen.
+                if (r && gameId.current === id) setReward(r);
+            });
+        }
+    }, [isOver]);
+    const restart = () => {
+        if (isOver) track('rematch', { mode });
+        soloStats.current = { moves: 0, captures: 0, sixes: 0 };
+        gameId.current = newGameId();
+        setReward(null);
+        startedAt.current = Date.now();
+        track('game_start', { mode, players });
+        game.restart();
+    };
 
     const [lastDice, setLastDice] = useState<number | null>(null);
 
@@ -84,18 +153,23 @@ export default function LocalBoardScreen() {
     }, [state.dice]);
 
     // ── Leaving ──
-    useEffect(() => {
-        const unsub = navigation.addListener('beforeRemove', (e) => {
-            if (leavingRef.current || isOver) return;
-            e.preventDefault();
-            setExitDialog(true);
-        });
-        return unsub;
-    }, [navigation, isOver]);
+    // System back / swipe mid-game asks first; a finished game, or Quit, just leaves.
+    const [guardLeave, setGuardLeave] = useState(true);
+    const disablePrevention = usePreventRemove(guardLeave && !isOver, () => setExitDialog(true));
 
     const goHome = () => {
         leavingRef.current = true;
+        setGuardLeave(false);
+        disablePrevention();
         setExitDialog(false);
+        // A full-screen ad only after a finished game against the computer, on the way home.
+        if (isOver && soloColor) {
+            void leavingResult().then(shown => {
+                if (shown) track('interstitial_shown', {});
+                router.replace('/(tabs)');
+            });
+            return;
+        }
         router.replace('/(tabs)');
     };
 
@@ -171,10 +245,9 @@ export default function LocalBoardScreen() {
                     <FontAwesome name={humanCount > 1 ? 'users' : 'laptop'} size={11} color={palette.mutedText} />
                     <Text weight="medium" style={styles.chipText}>
                         {humanCount > 1 ? 'Pass & Play' : humanCount === 1 ? 'Vs Computer' : 'Bots only'}
-                        {config.dynamicDice ? ' · Easy dice' : ' · Hard dice'}
                     </Text>
                 </RNView>
-                <TouchableOpacity onPress={game.restart} style={styles.iconBtn}>
+                <TouchableOpacity onPress={restart} style={styles.iconBtn}>
                     <FontAwesome name="refresh" size={13} color={palette.mutedText} />
                 </TouchableOpacity>
             </RNView>
@@ -187,11 +260,12 @@ export default function LocalBoardScreen() {
 
             <RNView style={styles.boardWrap}>
                 <RNView style={styles.boardShadow} />
-                <LudoBoard turns={turns} />
+                <LudoBoard turns={turns} theme={equipped.board} />
                 {tokenItems.map(t => (
                     <Token
                         turns={turns}
                         key={t.key}
+                        skin={mySkin(t.color, 'pawn')}
                         color={t.color}
                         coord={t.coord}
                         pos={t.pos}
@@ -221,6 +295,7 @@ export default function LocalBoardScreen() {
                         result={game.rollResult}
                         onSettled={game.diceSettled}
                         color={turnHex}
+                        skin={mySkin(shownTurn, 'dice')}
                         waiting={canRoll}
                         disabled={!canRoll}
                         onPress={game.roll}
@@ -250,11 +325,12 @@ export default function LocalBoardScreen() {
                                 </RNView>
                             ))}
                         </RNView>
+                        {reward && <GameRewardLine reward={reward} doubleRef={`offline:${gameId.current}`} />}
                         <RNView style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
                             <TouchableOpacity style={[styles.winBtn, styles.winBtnGhost]} onPress={goHome} activeOpacity={0.85}>
                                 <Text weight="bold" style={styles.winBtnText}>Home</Text>
                             </TouchableOpacity>
-                            <TouchableOpacity style={styles.winBtn} onPress={game.restart} activeOpacity={0.85}>
+                            <TouchableOpacity style={styles.winBtn} onPress={restart} activeOpacity={0.85}>
                                 <Text weight="bold" style={styles.winBtnText}>Play again</Text>
                             </TouchableOpacity>
                         </RNView>

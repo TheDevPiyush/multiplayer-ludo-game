@@ -27,15 +27,21 @@ export interface ColorChange {
     to: Color;
 }
 
-/** Color for a player joining `seats`: the opposite corner in 2-player games, else the first free one. */
-export function nextColor(maxPlayers: number, seats: ColorSeat[]): Color | null {
+/**
+ * Color for a player joining `seats`: the opposite corner in 2-player games, else the first free one.
+ * `preferred` (a rematch keeps everyone's color) wins when it's free and keeps 2-player corners opposite.
+ */
+export function nextColor(maxPlayers: number, seats: ColorSeat[], preferred?: Color): Color | null {
     const taken = new Set(seats.map(s => s.color));
+    if (preferred && !taken.has(preferred)
+        && (maxPlayers !== 2 || seats.length === 0 || OPPOSITE[seats[0]!.color] === preferred)) {
+        return preferred;
+    }
     if (maxPlayers === 2 && seats.length === 1) {
         const opposite = OPPOSITE[seats[0]!.color];
         return taken.has(opposite) ? null : opposite;
     }
-    const preferred = [...seatColors(maxPlayers), ...COLORS];
-    return preferred.find(c => !taken.has(c)) ?? null;
+    return [...seatColors(maxPlayers), ...COLORS].find(c => !taken.has(c)) ?? null;
 }
 
 /**

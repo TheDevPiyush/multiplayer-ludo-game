@@ -1,6 +1,6 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
-import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useLocalSearchParams, usePreventRemove, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Pressable,
@@ -11,6 +11,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { leaveRoom } from '@/apis/game-api';
+import type { GameReward } from '@/apis/progress-api';
 import { ChatSheet } from '@/components/chat/ChatSheet';
 import { ReactionBubble } from '@/components/chat/ReactionBubble';
 import { ReactionPicker } from '@/components/chat/ReactionPicker';
@@ -20,18 +21,23 @@ import { BOARD_SIZE, COLOR_HEX, layoutTokens, stripRows, turnsFor } from '@/comp
 import { LudoBoard } from '@/components/ludo/LudoBoard';
 import { PlayerStrip, type PlayerStripProps } from '@/components/ludo/PlayerStrip';
 import { PlayerSheet, type SheetPlayer } from '@/components/PlayerSheet';
+import { GameRewardLine } from '@/components/progress/GameRewardLine';
 import { Token } from '@/components/ludo/Token';
 import type { TurnDeadline } from '@/components/ludo/TurnTimer';
 import { Text } from '@/components/Themed';
 import Colors from '@/constants/Colors';
 import { useGameActions } from '@/hooks/useGameActions';
 import { useGameRoom, useRoundTrip } from '@/hooks/useGameRoom';
+import { useEquipped } from '@/hooks/useShop';
 import { useRoomChat } from '@/hooks/useRoomChat';
 import { markHistoryStale } from '@/util/history-cache';
 import { useSocket } from '@/components/SocketProvider';
 import { setActiveRoom } from '@/util/active-room';
+import { track } from '@/util/analytics';
 import { playEffect } from '@/util/audio';
 import { feedbackForEvents, haptic } from '@/util/feedback';
+import { leavingResult, noteGameFinished } from '@/util/ads';
+import { diceLabel } from '@/util/remote-config';
 import { supabase } from '@/util/supabase-client';
 
 
@@ -54,13 +60,12 @@ const palette = Colors['dark'];
 export default function GameBoardScreen() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
-    const navigation = useNavigation();
     const { gameCode: rawCode, roomId: rawRoomId } = useLocalSearchParams<any>();
     const gameCode = typeof rawCode === 'string' ? rawCode : String(rawCode?.[0] ?? '');
     const roomId = typeof rawRoomId === 'string' ? rawRoomId : String(rawRoomId?.[0] ?? '');
 
-    const { connectionPhase, isRealtimeReady } = useSocket();
-    const { rollDice, moveToken } = useGameActions(gameCode);
+    const { socket, connectionPhase, isRealtimeReady } = useSocket();
+    const { rollDice, moveToken, requestRematch } = useGameActions(gameCode);
 
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [rolling, setRolling] = useState(false);
@@ -76,12 +81,24 @@ export default function GameBoardScreen() {
     const [pickerOpen, setPickerOpen] = useState(false);
     const [chatOpen, setChatOpen] = useState(false);
     const [sheetPlayer, setSheetPlayer] = useState<SheetPlayer | null>(null);
+    const [rematching, setRematching] = useState(false);
+    /** What this game paid, once the server has saved the result (a moment after it ends). */
+    const [reward, setReward] = useState<GameReward | null>(null);
     const [dialog, setDialog] = useState({
         visible: false, title: '', message: '' as string | undefined,
         actions: undefined as undefined | { label: string; onPress: () => void }[],
     });
 
     const leftRef = useRef(false);
+    // System back / swipe asks first; leaving on purpose (Home, rematch, a closed room) turns this off.
+    const [guardLeave, setGuardLeave] = useState(true);
+    const openExitRef = useRef<() => void>(() => {});
+    const disablePrevention = usePreventRemove(guardLeave, () => openExitRef.current());
+    const allowLeave = () => {
+        leftRef.current = true;
+        setGuardLeave(false);
+        disablePrevention();
+    };
     const rollingRef = useRef(false);
     const currentUserIdRef = useRef<string | null>(null);
     /** This player's color, for sounds fired from socket callbacks. */
@@ -127,11 +144,21 @@ export default function GameBoardScreen() {
             if (e.type === 'over') {
                 markHistoryStale();
                 setWinnerInfo({ winnerId: e.winnerId, winnerColor: e.winnerColor });
+                void noteGameFinished();
+                if (room) {
+                    track('game_finish', {
+                        mode: room.isPrivate ? 'online_private' : 'online_public',
+                        players: room.players.length,
+                        seconds: room.startedAt ? Math.round((Date.now() - Date.parse(room.startedAt)) / 1000) : 0,
+                        won: e.winnerId === currentUserIdRef.current ? 1 : 0,
+                        dice: diceLabel(),
+                    });
+                }
             }
             if (e.type === 'cancelled') {
                 showError('Room ended', 'The room has been closed.');
                 setTimeout(() => {
-                    leftRef.current = true;
+                    allowLeave();
                     void setActiveRoom(null);
                     router.replace('/(tabs)');
                 }, 1500);
@@ -333,9 +360,16 @@ export default function GameBoardScreen() {
         }
     }, []);
 
+    /** The finished game was too short to pay anything (the server's PROGRESS.minGameSeconds). */
+    const tooShort = !!room?.startedAt && room.status === 'FINISHED'
+        && (Date.parse(room.endedAt ?? new Date().toISOString()) - Date.parse(room.startedAt)) < 120_000;
+
     /** Turns the board so your own home is bottom-right on your phone. */
     const myColor = players.find(p => p.userId === currentUserId)?.color;
     const turns = turnsFor(myColor);
+    // Pawns and dice look as their owner equipped them; the board is the viewer's own.
+    const myBoard = useEquipped().board;
+    const skinOf = (color: string | null | undefined) => players.find(p => p.color === color)?.user;
 
     // Token coords & stacking
     const tokenItems = useMemo(() => {
@@ -406,7 +440,7 @@ export default function GameBoardScreen() {
                         void (async () => {
                             await notifyServerLeave();
                             await setActiveRoom(null);
-                            leftRef.current = true;
+                            allowLeave();
                             hideDialog();
                             router.replace('/(tabs)');
                         })();
@@ -415,25 +449,53 @@ export default function GameBoardScreen() {
             ],
         });
     };
+    openExitRef.current = openExit;
+
 
     useEffect(() => {
-        const unsub = navigation.addListener('beforeRemove', (e) => {
-            if (leftRef.current) {
-                leftRef.current = false;
-                return;
-            }
-            e.preventDefault();
-            openExit();
+        if (!socket) return;
+        const onReward = (r: GameReward & { roomId: string }) => {
+            if (r.roomId === roomId) setReward(r);
+        };
+        socket.on('progress:reward', onReward);
+        return () => void socket.off('progress:reward', onReward);
+    }, [socket, roomId]);
+
+    // Another player opened a rematch: their name, for the result screen.
+    const rematchBy = room?.rematch && room.rematch.byUserId !== currentUserId ? room.rematch.byUserId : null;
+    const rematchOffer = rematchBy ? players.find(p => p.userId === rematchBy)?.user.username ?? 'A player' : null;
+    useEffect(() => {
+        if (rematchOffer) haptic.light();
+    }, [!!rematchOffer]);
+
+    /** Opens the rematch room (or joins the one another player opened) and goes to its lobby. */
+    const startRematch = async () => {
+        if (rematching) return;
+        setRematching(true);
+        const r = await requestRematch();
+        if (!r.ok || !r.data) {
+            setRematching(false);
+            showError('No rematch', r.ok ? 'Something went wrong. Try again.' : r.error);
+            return;
+        }
+        track('rematch', { mode: room?.isPrivate ? 'online_private' : 'online_public' });
+        const next = r.data;
+        await setActiveRoom({ roomId: next.roomId, gameCode: next.gameCode, maxPlayers: next.maxPlayers, screen: 'lobby' });
+        allowLeave();
+        router.replace({
+            pathname: '/(game)/lobby',
+            params: { gameCode: next.gameCode, maxPlayers_: String(next.maxPlayers), roomId: next.roomId },
         });
-        return unsub;
-    }, [navigation]);
+    };
 
     // Win screen handlers
     const closeWin = () => {
         void (async () => {
             await setActiveRoom(null);
-            leftRef.current = true;
+            allowLeave();
             await notifyServerLeave();
+            // A full-screen ad only here, on the way home after a finished game (never on Rematch).
+            if (await leavingResult()) track('interstitial_shown', {});
             router.replace('/(tabs)');
         })();
     };
@@ -483,11 +545,12 @@ export default function GameBoardScreen() {
             {/* BOARD */}
             <RNView style={styles.boardWrap}>
                 <RNView style={styles.boardShadow} />
-                <LudoBoard turns={turns} />
+                <LudoBoard turns={turns} theme={myBoard} />
                 {tokenItems.map(t => (
                     <Token
                         turns={turns}
                         key={t.key}
+                        skin={skinOf(t.color)?.pawnSkin}
                         color={t.color}
                         coord={t.coord}
                         pos={t.pos}
@@ -527,6 +590,7 @@ export default function GameBoardScreen() {
                         result={rollResult}
                         onSettled={onDiceSettled}
                         color={COLOR_HEX[rolling ? rollingColor ?? shownColor : shownColor] ?? '#888'}
+                        skin={skinOf(rolling ? rollingColor ?? shownColor : shownColor)?.diceSkin}
                         waiting={canRoll}
                         disabled={!canRoll}
                         onPress={handleRollDice}
@@ -591,9 +655,40 @@ export default function GameBoardScreen() {
                                 ? 'Champion of this round!'
                                 : `Winner: ${players.find(p => p.userId === winnerInfo.winnerId)?.user.username ?? 'Unknown'}`}
                         </Text>
-                        <TouchableOpacity style={styles.winBtn} onPress={closeWin} activeOpacity={0.85}>
-                            <Text weight="bold" style={styles.winBtnText}>Back to Home</Text>
-                        </TouchableOpacity>
+                        {reward ? <GameRewardLine reward={reward} doubleRef={`game:${roomId}`} /> : tooShort && (
+                            // The server pays nothing for these (it stops farming with quick quits).
+                            <Text weight="medium" style={styles.noReward}>
+                                Games shorter than 2 minutes don't earn coins, XP or mission progress.
+                            </Text>
+                        )}
+                        {rematchOffer && (
+                            <RNView style={styles.rematchOffer}>
+                                <MaterialCommunityIcons name="sword-cross" size={14} color="#37BD6A" />
+                                <Text weight="semiBold" style={styles.rematchOfferText} numberOfLines={1}>
+                                    {rematchOffer} wants a rematch
+                                </Text>
+                            </RNView>
+                        )}
+                        <RNView style={styles.winActions}>
+                            <TouchableOpacity
+                                style={[styles.winBtn, styles.winBtnGhost]}
+                                onPress={closeWin}
+                                disabled={rematching}
+                                activeOpacity={0.85}
+                            >
+                                <Text weight="bold" style={styles.winBtnText}>Home</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.winBtn, (rematching || !isRealtimeReady) && { opacity: 0.6 }]}
+                                onPress={startRematch}
+                                disabled={rematching || !isRealtimeReady}
+                                activeOpacity={0.85}
+                            >
+                                <Text weight="bold" style={styles.winBtnText}>
+                                    {rematching ? 'Opening…' : rematchOffer ? 'Join rematch' : 'Rematch'}
+                                </Text>
+                            </TouchableOpacity>
+                        </RNView>
                     </RNView>
                 </RNView>
             )}
@@ -776,11 +871,21 @@ const styles = StyleSheet.create({
     },
     winTitle: { fontSize: 22, color: palette.text },
     winSub: { fontSize: 13, color: palette.mutedText, textAlign: 'center' },
+    noReward: { fontSize: 12, color: 'rgba(255,255,255,0.6)', textAlign: 'center', paddingHorizontal: 8 },
+    rematchOffer: {
+        flexDirection: 'row', alignItems: 'center', gap: 6,
+        maxWidth: '100%',
+        paddingVertical: 6, paddingHorizontal: 12,
+        borderRadius: 999,
+        backgroundColor: 'rgba(55,189,106,0.14)',
+    },
+    rematchOfferText: { flexShrink: 1, fontSize: 12, color: '#37BD6A' },
+    winActions: { flexDirection: 'row', gap: 10, marginTop: 8 },
     winBtn: {
-        marginTop: 8,
-        paddingVertical: 14, paddingHorizontal: 28,
+        paddingVertical: 14, paddingHorizontal: 22,
         borderRadius: 14,
         backgroundColor: '#37BD6A',
     },
+    winBtnGhost: { backgroundColor: 'rgba(255,255,255,0.1)' },
     winBtnText: { color: '#fff', fontSize: 14, letterSpacing: 0.3 },
 });

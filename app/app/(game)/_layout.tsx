@@ -8,7 +8,7 @@ import React from 'react'
  */
 export default function GameRoomLayout() {
     return (
-        <Stack initialRouteName="create-room" screenOptions={{ headerShown: false }}>
+        <Stack screenOptions={{ headerShown: false }}>
             <Stack.Screen name="create-room" dangerouslySingular />
             <Stack.Screen name="join-room" dangerouslySingular />
             <Stack.Screen name="quick-match" dangerouslySingular options={{ animation: 'fade' }} />

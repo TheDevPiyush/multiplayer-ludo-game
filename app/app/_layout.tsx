@@ -1,8 +1,8 @@
 // Must stay first: a real crypto.getRandomValues for Supabase PKCE.
 import 'react-native-get-random-values';
-import { ThemeProvider } from '@react-navigation/native';
+import { ThemeProvider } from 'expo-router';
 import { useFonts } from 'expo-font';
-import { useRouter, Stack } from 'expo-router';
+import { ErrorBoundary as RouterErrorBoundary, useRouter, Stack, type ErrorBoundaryProps } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import * as SystemUI from 'expo-system-ui';
@@ -21,13 +21,26 @@ import { AudioDirector } from '@/components/AudioDirector';
 import { AnnouncementsHost } from '@/components/AnnouncementsHost';
 import { friendsHref, setInitialRouteDone, takePendingLink } from '@/util/links';
 import { listenForNotificationTaps, startPushTokenSync } from '@/util/push';
+import { startPurchases } from '@/util/purchases';
+import { setAnalyticsUser } from '@/util/analytics';
+import { reportError, setMonitoringUser, startMonitoring } from '@/util/monitoring';
+import { loadRemoteConfig } from '@/util/remote-config';
+import { markInitialRouted, setAuthPhase, useAuthPhase } from '@/util/auth-phase';
+import { loadEquipped } from '@/hooks/useShop';
 
-export {
-  ErrorBoundary,
-} from 'expo-router';
+startMonitoring();
+void loadRemoteConfig();
+void loadEquipped();
 
+/** The router's error screen, plus a report: errors caught here never reach the global crash handler. */
+export function ErrorBoundary(props: ErrorBoundaryProps) {
+  useEffect(() => reportError(props.error), [props.error]);
+  return <RouterErrorBoundary {...props} />;
+}
+
+// Expo Router 58: the anchor is the screen kept under a deep-linked one (was initialRouteName).
 export const unstable_settings = {
-  initialRouteName: '(login)',
+  anchor: '(login)',
 };
 
 SplashScreen.preventAutoHideAsync();
@@ -43,18 +56,22 @@ export default function RootLayout() {
 
 
   const router = useRouter();
-
+  const { routed } = useAuthPhase();
 
   // font loading
   useEffect(() => {
     if (error) throw error;
   }, [error]);
 
+  // The splash stays up until fonts are in and the first sign-in routing has run, so a signed-in
+  // player opens straight onto Home (or their game) instead of glimpsing the login screen.
+  // A moment after routing lets the new screen replace the login one; 4 s is the fallback.
   useEffect(() => {
-    if (loaded) {
-      SplashScreen.hideAsync();
-    }
-  }, [loaded]);
+    if (!loaded) return;
+    const hide = () => void SplashScreen.hideAsync().catch(() => {});
+    const timer = setTimeout(hide, routed ? 200 : 4_000);
+    return () => clearTimeout(timer);
+  }, [loaded, routed]);
 
 
   // Notification taps. Before the sign-in routing below: a tap that launched the app becomes its pending link.
@@ -62,6 +79,7 @@ export default function RootLayout() {
 
   // Push token to the server on every app open, sign-in and token change (newest 3 devices are kept).
   useEffect(() => startPushTokenSync(), []);
+  useEffect(() => startPurchases(), []);
 
   // getting session from supabase + auto-resume active room
   useEffect(() => {
@@ -69,6 +87,7 @@ export default function RootLayout() {
       if (!loggedIn) {
         setInitialRouteDone(false);
         router.replace('/(login)');
+        markInitialRouted();
         return;
       }
       const active = await getActiveRoom();
@@ -77,6 +96,7 @@ export default function RootLayout() {
       // A link opened the app (or arrived while signed out): go there.
       const link = takePendingLink();
       setInitialRouteDone(true);
+      markInitialRouted();
       if (link?.kind === 'join') {
         router.replace({ pathname: '/join/[code]', params: { code: link.code } });
         return;
@@ -112,7 +132,11 @@ export default function RootLayout() {
     // or they yank players out of whatever screen they're on.
     let signedIn: boolean | null = null;
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      // Before the check below: a guest saving their account stays signed in but changes type.
+      setAnalyticsUser(session?.user.id ?? null, session?.user.is_anonymous === true);
+      setMonitoringUser(session?.user.id ?? null);
       const next = !!session;
+      setAuthPhase(next ? 'signedIn' : 'signedOut');
       if (next === signedIn) return;
       signedIn = next;
       void resume(next);
@@ -159,7 +183,6 @@ function RootLayoutNav() {
           <ThemeProvider value={navigationTheme(colorScheme)}>
             <LudoBackground style={{ flex: 1 }}>
               <Stack
-                initialRouteName={"(login)"}
                 screenOptions={{
                   contentStyle: { backgroundColor: 'transparent' },
                   animation: 'fade',

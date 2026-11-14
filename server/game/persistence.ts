@@ -2,12 +2,17 @@ import { createGame, type Color, type GameState } from '@ludo/engine';
 
 import { prisma } from '../lib/prisma';
 import { redis } from '../lib/redis';
+import { payGameRewards, type RewardSummary } from '../progress/progress';
 import { BOT_PROVIDER } from './bots';
+import { equippedItem } from '../shop/catalog';
 import type { LivePlayer, LiveRoom, MoveEntry, RoomStatus } from './live-room';
 
 export interface Profile {
     username: string;
     avatarUrl: string | null;
+    /** Equipped shop items others see in a game (null: the default). */
+    pawnSkin?: string | null;
+    diceSkin?: string | null;
 }
 
 /**
@@ -22,8 +27,11 @@ export interface Persistence {
     setPlayerColors(room: LiveRoom, changes: { playerId: string; color: Color }[]): Promise<void>;
     /** Status / timestamps / game snapshot. */
     saveRoom(room: LiveRoom): Promise<void>;
-    /** One transaction: final state, ranks, move log, user stats. */
-    finishGame(room: LiveRoom): Promise<void>;
+    /**
+     * One transaction: final state, ranks, move log, user stats and rewards. Returns each
+     * player's rewards, or nothing when the game was already saved as finished.
+     */
+    finishGame(room: LiveRoom): Promise<Map<string, RewardSummary> | void>;
     loadRoom(key: { id?: string; gameCode?: string }): Promise<LiveRoom | null>;
     codeExists(gameCode: string): Promise<boolean>;
     getProfile(userId: string): Promise<Profile | null>;
@@ -47,7 +55,7 @@ function findRoom(where: { id: string } | { gameCode: string }) {
         where,
         include: {
             players: {
-                include: { user: { select: { username: true, avatarUrl: true, provider: true } } },
+                include: { user: { select: { username: true, avatarUrl: true, provider: true, pawnSkin: true, diceSkin: true } } },
                 orderBy: { seatNumber: 'asc' },
             },
         },
@@ -93,6 +101,8 @@ function fromDb(db: DbRoom): LiveRoom {
             joinedAt: p.joinedAt.toISOString(),
             username: p.user.username,
             avatarUrl: p.user.avatarUrl,
+            pawnSkin: p.user.pawnSkin,
+            diceSkin: p.user.diceSkin,
             ...(p.user.provider === BOT_PROVIDER ? { isBot: true } : {}),
         })),
         game,
@@ -175,27 +185,29 @@ export const prismaPersistence: Persistence = {
 
     async finishGame(room) {
         const g = room.game!;
-        const playerUpdates = room.players.map(p => {
-            const ps = g.players.find(x => x.color === p.color);
-            return prisma.gamePlayer.update({
-                where: { id: p.id },
-                data: { rank: ps?.rank ?? null, tokenPositions: ps?.tokens ?? [0, 0, 0, 0], status: p.status },
+        return prisma.$transaction(async tx => {
+            // Only the first save of a finished game counts: a retry after a lost reply changes nothing.
+            const first = await tx.gameRoom.updateMany({
+                where: { id: room.id, status: { not: 'FINISHED' } },
+                data: { ...roomColumns(room), moveLog: room.moveLog },
             });
-        });
-        const statUpdates = room.players.map(p =>
-            prisma.user.update({
-                where: { id: p.userId },
-                data: {
-                    totalGames: { increment: 1 },
-                    ...(p.userId === room.winnerId ? { totalWins: { increment: 1 } } : {}),
-                },
-            }),
-        );
-        await prisma.$transaction([
-            prisma.gameRoom.update({ where: { id: room.id }, data: { ...roomColumns(room), moveLog: room.moveLog } }),
-            ...playerUpdates,
-            ...statUpdates,
-        ]);
+            if (first.count === 0) return;
+            for (const p of room.players) {
+                const ps = g.players.find(x => x.color === p.color);
+                await tx.gamePlayer.update({
+                    where: { id: p.id },
+                    data: { rank: ps?.rank ?? null, tokenPositions: ps?.tokens ?? [0, 0, 0, 0], status: p.status },
+                });
+                await tx.user.update({
+                    where: { id: p.userId },
+                    data: {
+                        totalGames: { increment: 1 },
+                        ...(p.userId === room.winnerId ? { totalWins: { increment: 1 } } : {}),
+                    },
+                });
+            }
+            return payGameRewards(tx, room);
+        }, { timeout: 20_000, maxWait: 10_000 });
     },
 
     async loadRoom(key) {
@@ -211,7 +223,22 @@ export const prismaPersistence: Persistence = {
     },
 
     async getProfile(userId) {
-        return prisma.user.findUnique({ where: { id: userId }, select: { username: true, avatarUrl: true } });
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: {
+                username: true, avatarUrl: true, pawnSkin: true, diceSkin: true,
+                // Trials that have ended: their item no longer shows.
+                entitlements: { where: { expiresAt: { lte: new Date() } }, select: { itemId: true } },
+            },
+        });
+        if (!user) return null;
+        const usable = new Set([user.pawnSkin, user.diceSkin].filter((id): id is string => !!id && !user.entitlements.some(e => e.itemId === id)));
+        return {
+            username: user.username,
+            avatarUrl: user.avatarUrl,
+            pawnSkin: equippedItem('pawn', user.pawnSkin, usable),
+            diceSkin: equippedItem('dice', user.diceSkin, usable),
+        };
     },
 };
 

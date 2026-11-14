@@ -13,6 +13,9 @@ export interface LivePlayer {
     joinedAt: string;
     username: string;
     avatarUrl: string | null;
+    /** Equipped pawn and dice (shop item ids); null or missing is the default. */
+    pawnSkin?: string | null;
+    diceSkin?: string | null;
     /** A server-played seat that fills public rooms. Never sent to clients. */
     isBot?: boolean;
 }
@@ -64,6 +67,25 @@ export interface LiveRoom {
     moveLog: MoveEntry[];
     /** Public rooms in the lobby only. */
     lobby?: LobbyAuto;
+    /** Finished rooms: the room someone opened for a rematch, which the other players can join. */
+    rematch?: Rematch;
+    /** What each color did this game, for missions. Optional: snapshots from before it existed. */
+    stats?: Partial<Record<Color, PlayerStats>>;
+}
+
+export interface PlayerStats {
+    captures: number;
+    /** Pawns brought home. */
+    home: number;
+    sixes: number;
+    /** Got all pawns home (still earns if they leave the results afterwards). */
+    finished?: boolean;
+}
+
+export interface Rematch {
+    roomId: string;
+    gameCode: string;
+    byUserId: string;
 }
 
 /** Shape the app renders (kept compatible with the previous REST payload). */
@@ -97,6 +119,7 @@ export function toRoomDto(room: LiveRoom) {
         serverNow: now,
         /** Lobby countdown: the game starts in this many ms; null when no countdown runs. */
         startsInMs: room.lobby?.startsAt ? Math.max(0, room.lobby.startsAt - now) : null,
+        rematch: room.rematch ?? null,
         players: room.players.map(p => {
             const ps = g ? getPlayer(g, p.color) : undefined;
             return {
@@ -111,7 +134,7 @@ export function toRoomDto(room: LiveRoom) {
                 tokenPositions: ps?.tokens ?? [0, 0, 0, 0],
                 joinedAt: p.joinedAt,
                 leftAt: null,
-                user: { username: p.username, avatarUrl: p.avatarUrl },
+                user: { username: p.username, avatarUrl: p.avatarUrl, pawnSkin: p.pawnSkin ?? null, diceSkin: p.diceSkin ?? null },
             };
         }),
     };
@@ -126,7 +149,9 @@ export type RoomEvent =
     | { type: 'COLORS_CHANGED'; byUserId: string; changes: { userId: string; from: Color; to: Color }[] }
     | { type: 'PLAYER_LEFT'; userId: string }
     | { type: 'STARTED' }
-    | { type: 'CANCELLED'; reason: string };
+    | { type: 'CANCELLED'; reason: string }
+    /** A finished game's player opened a rematch room (`room.rematch` has it). */
+    | { type: 'REMATCH'; byUserId: string };
 
 export type SyncEvent = GameEvent | RoomEvent;
 

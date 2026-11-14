@@ -1,7 +1,6 @@
 import { Tabs } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import { BottomNavigation } from 'react-native-paper';
-import { CommonActions } from '@react-navigation/native';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
@@ -10,6 +9,7 @@ import { useSocial } from '@/components/SocialProvider';
 /** Active tab colours, bright enough to read on the dark glass bar. */
 const TAB_COLORS: Record<string, string> = {
   index: '#FF5A6A',
+  shop: '#C98BFF',
   history: '#FFB020',
   notifications: '#34D27B',
   profile: '#5AA2FF',
@@ -25,8 +25,11 @@ export default function TabLayout() {
       screenOptions={{
         sceneStyle: { backgroundColor: 'transparent' },
         headerShown: false,
+        // Tabs mount on first visit and then stay (each screen below sets activityEnabled:
+        // a hidden tab pauses, and coins, progress and social updates reach it when shown again).
+        lazy: true,
       }}
-      tabBar={({ navigation, state, descriptors, insets }) => (
+      tabBar={({ state, descriptors, insets, emitter, navigateToTab }) => (
         // Glass like the app's panels: the indigo tint, no live blur (cheaper on basic phones).
         <View style={styles.glass}>
           <BottomNavigation.Bar
@@ -38,16 +41,14 @@ export default function TabLayout() {
             activeIndicatorStyle={{ backgroundColor: (TAB_COLORS[state.routes[state.index].name] ?? '#5AA2FF') + '2E' }}
             theme={{ colors: { onSurface: '#FFFFFF', onSurfaceVariant: INACTIVE, onSecondaryContainer: '#FFFFFF' } }}
             onTabPress={({ route, preventDefault }) => {
-              const event = navigation.emit({
+              // As Expo Router's own tab bar does: let listeners cancel the press, else switch tabs.
+              const event = emitter.emit({
                 type: 'tabPress',
                 target: route.key,
                 canPreventDefault: true,
               });
               if (event.defaultPrevented) preventDefault();
-              else navigation.dispatch({
-                ...CommonActions.navigate(route.name, route.params),
-                target: state.key,
-              });
+              else navigateToTab(route.key);
             }}
             renderIcon={({ route, focused, color }) => {
               const activeColor = focused ? TAB_COLORS[route.name] ?? color : color;
@@ -70,38 +71,52 @@ export default function TabLayout() {
       )}
     >
       <Tabs.Screen
+        activityEnabled
         name="index"
         options={{
           title: 'Home',
           tabBarIcon: ({ color, size }) => (
-            <FontAwesome name="home" size={size} color={color} />
+            <FontAwesome name="home" size={size} color={color as string} />
           ),
         }}
       />
       <Tabs.Screen
+        activityEnabled
+        name="shop"
+        options={{
+          title: 'Shop',
+          tabBarIcon: ({ color, size }) => (
+            <FontAwesome name="shopping-bag" size={size - 3} color={color as string} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        activityEnabled
         name="history"
         options={{
           title: 'History',
           tabBarIcon: ({ color, size }) => (
-            <FontAwesome name="history" size={size} color={color} />
+            <FontAwesome name="history" size={size} color={color as string} />
           ),
         }}
       />
       <Tabs.Screen
+        activityEnabled
         name="notifications"
         options={{
           title: 'Alerts',
           tabBarIcon: ({ color, size }) => (
-            <FontAwesome name="bell" size={size - 2} color={color} />
+            <FontAwesome name="bell" size={size - 2} color={color as string} />
           ),
         }}
       />
       <Tabs.Screen
+        activityEnabled
         name="profile"
         options={{
           title: 'Profile',
           tabBarIcon: ({ color, size }) => (
-            <FontAwesome name="user" size={size} color={color} />
+            <FontAwesome name="user" size={size} color={color as string} />
           ),
         }}
       />

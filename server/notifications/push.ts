@@ -18,16 +18,22 @@ const RECEIPT_DELAY_MS = 15 * 60_000;
 /**
  * What a push is about. Each has its own Android channel (app/util/push.ts creates
  * them, all set to pop up with sound), so people can turn reminders off and keep invites.
- * An app too old to have a channel shows the push on its fallback channel, which also pops up.
+ * An app too old to have a channel shows the push on its fallback channel, which also pops up
+ * (with the system sound).
  */
 export type PushKind = 'invite' | 'friend' | 'online' | 'reminder' | 'announcement';
 const CHANNEL: Record<PushKind, string> = {
-    invite: 'invites',
-    friend: 'friend-alerts',
-    online: 'friend-alerts',
-    reminder: 'game-reminders',
-    announcement: 'announcements',
+    invite: 'invites-v2',
+    friend: 'friend-alerts-v2',
+    online: 'friend-alerts-v2',
+    reminder: 'game-reminders-v2',
+    announcement: 'announcements-v2',
 };
+/**
+ * The game's own sound, bundled in the app. On Android 8+ the channel's sound
+ * plays (the app sets it); this is for iOS and older Android.
+ */
+const SOUND = 'custom_notification.wav';
 
 export interface PushMessage {
     title: string;
@@ -69,7 +75,7 @@ type ExpoMessage = {
     body: string;
     data: { url: string; kind: PushKind };
     channelId: string;
-    sound: 'default';
+    sound: string;
     priority: 'high';
 };
 type Ticket = { status: 'ok'; id: string } | { status: 'error'; message?: string; details?: { error?: string } };
@@ -139,7 +145,7 @@ export async function sendPushes(items: { userId: string; tokens: string[]; mess
             body: message.body,
             data: { url: message.url, kind },
             channelId: CHANNEL[kind],
-            sound: 'default' as const,
+            sound: SOUND,
             // Every push is shown to the person, so high priority is what FCM expects: it is
             // delivered right away, even to a phone in Doze, instead of when it next wakes.
             priority: 'high' as const,

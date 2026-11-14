@@ -95,5 +95,15 @@ export function useGameActions(gameCode: string | undefined) {
         return emitWithAck(socket, 'room:countdown-cancel', { gameCode: code });
     }, [socket, isRealtimeReady]);
 
-    return { rollDice, moveToken, skipTurn, startGame, chooseColor, cancelCountdown, isRealtimeReady };
+    /** After a finished game: opens the rematch room, or joins the one another player opened. */
+    const requestRematch = useCallback(async (): Promise<GameActionResult<{ roomId: string; gameCode: string; maxPlayers: number }>> => {
+        const code = gameCodeRef.current?.trim();
+        if (!code) return { ok: false, error: 'No game code.' };
+        if (!isRealtimeReady || !socket?.connected) {
+            return { ok: false, error: 'Waiting for connection…' };
+        }
+        return emitWithAck(socket, 'room:rematch', { gameCode: code });
+    }, [socket, isRealtimeReady]);
+
+    return { rollDice, moveToken, skipTurn, startGame, chooseColor, cancelCountdown, requestRematch, isRealtimeReady };
 }

@@ -1,6 +1,6 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Clipboard from 'expo-clipboard';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect } from 'expo-router';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -12,6 +12,7 @@ import {
     TextInput,
     TouchableOpacity,
     View as RNView,
+    type TextInputInstance,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -67,7 +68,7 @@ function CodeSlot({ char, active }: { char: string; active: boolean }) {
 export default function JoinRoomScreen() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
-    const codeInputRef = useRef<TextInput>(null);
+    const codeInputRef = useRef<TextInputInstance>(null);
 
     const [code, setCode] = useState('');
     const [inputFocused, setInputFocused] = useState(false);
@@ -391,7 +392,7 @@ const styles = StyleSheet.create({
         gap: 12,
     },
     hiddenCodeInput: {
-        ...StyleSheet.absoluteFillObject,
+        ...StyleSheet.absoluteFill,
         opacity: 0.02,
         color: 'transparent',
         fontSize: 18,

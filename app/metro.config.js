@@ -1,8 +1,9 @@
 // Learn more https://docs.expo.dev/guides/customizing-metro
 const path = require('path');
-const { getDefaultConfig } = require('expo/metro-config');
+// Expo's default config, plus the debug IDs that match crash reports to source maps.
+const { getSentryExpoConfig } = require('@sentry/react-native/metro');
 
-const config = getDefaultConfig(__dirname);
+const config = getSentryExpoConfig(__dirname);
 
 // The shared rules engine lives outside the app folder (../packages/ludo-engine).
 // Metro only bundles files it watches; `@ludo/engine` itself is mapped by tsconfig `paths`.

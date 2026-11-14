@@ -1,7 +1,7 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import type { Color } from '@ludo/engine';
 import * as Clipboard from 'expo-clipboard';
-import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useLocalSearchParams, usePreventRemove, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Pressable,
@@ -43,7 +43,10 @@ import { useRoomChat, type Bubble } from '@/hooks/useRoomChat';
 import { useSocket } from '@/components/SocketProvider';
 import { supabase } from '@/util/supabase-client';
 import { setActiveRoom } from '@/util/active-room';
+import { track } from '@/util/analytics';
 import { roomInviteUrl } from '@/util/links';
+import { inviteCoins } from '@/util/remote-config';
+import { Coin } from '@/components/progress/Coin';
 
 const GRID_GAP = 12;
 const SEAT_HEIGHT = 150;
@@ -168,7 +171,6 @@ function connectionLabel(phase: string): string {
 export default function LobbyScreen() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
-    const navigation = useNavigation();
     const { connectionPhase, isRealtimeReady } = useSocket();
 
     const { gameCode: rawGameCode, maxPlayers_: maxPlayersParam, roomId: rawRoomId } =
@@ -201,6 +203,9 @@ export default function LobbyScreen() {
         roomId,
         gameCode: roomCode,
         onEvent: (e) => {
+            if (e.type === 'started' && room) {
+                track('game_start', { mode: room.isPrivate ? 'online_private' : 'online_public', players: room.players.length });
+            }
             // In 2-player rooms the opponent's pick moves you to the opposite corner — say so.
             if (e.type !== 'colors' || e.byUserId === currentUserId) return;
             const mine = e.changes.find(c => c.userId === currentUserId);
@@ -269,7 +274,7 @@ export default function LobbyScreen() {
     useEffect(() => {
         if (room?.status === 'PLAYING') {
             void setActiveRoom({ roomId, gameCode: roomCode, maxPlayers, screen: 'board' });
-            serverLeaveDoneRef.current = true;
+            allowLeaveRef.current();
             router.replace({ pathname: '/(game)/board', params: { gameCode: roomCode, roomId } });
         }
         // A room that's over can't be reopened (e.g. resumed from a stale active room).
@@ -280,7 +285,7 @@ export default function LobbyScreen() {
             );
             setTimeout(() => {
                 void setActiveRoom(null);
-                serverLeaveDoneRef.current = true;
+                allowLeaveRef.current();
                 router.replace('/(tabs)');
             }, 1800);
         }
@@ -329,7 +334,7 @@ export default function LobbyScreen() {
                                 return;
                             }
                             await setActiveRoom(null);
-                            serverLeaveDoneRef.current = true;
+                            allowLeaveRef.current();
                             hideDialog();
                             if (then) then();
                             else router.back();
@@ -343,15 +348,19 @@ export default function LobbyScreen() {
     // System back / swipe: ask first — for the host, leaving cancels the room for everyone.
     const openLeaveRef = useRef(openLeaveDialog);
     openLeaveRef.current = openLeaveDialog;
-    useEffect(() => {
-        const unsub = navigation.addListener('beforeRemove', (e) => {
-            if (serverLeaveDoneRef.current) { serverLeaveDoneRef.current = false; return; }
-            if (!roomCode) return;
-            e.preventDefault();
-            openLeaveRef.current(() => navigation.dispatch(e.data.action));
+    const [guardLeave, setGuardLeave] = useState(true);
+    const disablePrevention = usePreventRemove(guardLeave && !!roomCode, ({ repeat }) => {
+        openLeaveRef.current(() => {
+            allowLeaveRef.current();
+            repeat();
         });
-        return unsub;
-    }, [navigation, roomCode]);
+    });
+    const allowLeaveRef = useRef(() => {});
+    allowLeaveRef.current = () => {
+        serverLeaveDoneRef.current = true;
+        setGuardLeave(false);
+        disablePrevention();
+    };
 
     const handleStart = async () => {
         if (!canStart) { showError('Not enough players', 'Need at least 2 players to start.'); return; }
@@ -384,6 +393,7 @@ export default function LobbyScreen() {
         const url = roomInviteUrl(roomCode);
         try {
             await Share.share({ message: `Join my Ludo game! Tap to join: ${url}\nor enter room code ${roomCode} in Simple Ludo.` });
+            track('invite_share', { source: 'lobby' });
         } catch {
             await Clipboard.setStringAsync(url);
             setDialog({ visible: true, title: 'Link copied', message: url, actions: undefined });
@@ -491,6 +501,7 @@ export default function LobbyScreen() {
                                 </RNView>
                             </RNView>
                         </GameTile>
+                        <Text weight="medium" style={styles.publicNote}>Computer players join when few people are online.</Text>
                     </Animated.View>
                 ) : (
                     <Animated.View entering={FadeInDown.duration(380)}>
@@ -522,6 +533,15 @@ export default function LobbyScreen() {
                                 </GameTile>
                             </RNView>
                         </GameTile>
+                        {/* The invite bonus goes to hosts with a saved account (see the server's PROGRESS.invite). */}
+                        {isHost && !guest && room?.status === 'WAITING' && (
+                            <RNView style={styles.inviteHint}>
+                                <Coin size={14} />
+                                <Text weight="medium" style={styles.inviteHintText}>
+                                    Bring someone new: after their first game here, you both get {inviteCoins()} coins.
+                                </Text>
+                            </RNView>
+                        )}
                     </Animated.View>
                 )}
 
@@ -742,6 +762,9 @@ const styles = StyleSheet.create({
     publicCard: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, paddingLeft: 2, paddingRight: 16 },
     publicInfo: { flex: 1, gap: 6 },
     publicTitle: { fontSize: 17, lineHeight: 22, color: '#FFFFFF' },
+    publicNote: { fontSize: 12, color: 'rgba(255,255,255,0.7)', textAlign: 'center', marginTop: 8 },
+    inviteHint: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 8, paddingHorizontal: 8 },
+    inviteHintText: { flexShrink: 1, fontSize: 12, color: 'rgba(255,255,255,0.8)', textAlign: 'center' },
     publicActions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
     publicCode: {
         flexShrink: 1,

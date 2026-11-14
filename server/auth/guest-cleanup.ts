@@ -1,7 +1,7 @@
-import { canDeleteAuthUsers, deleteAuthUser, GUEST_PROVIDER } from '../lib/auth';
+import { canDeleteAuthUsers, GUEST_PROVIDER } from '../lib/auth';
 import { log } from '../lib/logger';
 import { prisma } from '../lib/prisma';
-import { invalidateUsers } from '../game/user-cache';
+import { removeUser } from './remove-user';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Guests nobody has used for this long are deleted, with their stats and games. */
@@ -12,7 +12,8 @@ const MAX_PER_RUN = 1_000;
 
 /**
  * Guests with no activity since `cutoff`: their row wasn't touched (sign-ins
- * touch it daily, see ensureUser) and they joined no game since.
+ * touch it daily, see ensureUser) and they joined no game since. Guests who
+ * bought something are kept: a purchase is never deleted out from under them.
  */
 export async function findInactiveGuests(cutoff: Date, limit = BATCH): Promise<string[]> {
     const rows = await prisma.user.findMany({
@@ -20,41 +21,13 @@ export async function findInactiveGuests(cutoff: Date, limit = BATCH): Promise<s
             provider: GUEST_PROVIDER,
             updatedAt: { lt: cutoff },
             gamePlayers: { none: { joinedAt: { gte: cutoff } } },
+            purchases: { none: {} },
         },
         select: { id: true },
         orderBy: { updatedAt: 'asc' },
         take: limit,
     });
     return rows.map(r => r.id);
-}
-
-/**
- * Deletes one guest: the Supabase account first (so the app can't sign back
- * into a row that's gone), then the row. Their seats, friendships and
- * notifications cascade. Rooms they created go with them when nobody else
- * played there; otherwise another player becomes the creator, so the others'
- * history keeps the game.
- */
-export async function removeGuest(id: string, removeAuth: (id: string) => Promise<boolean> = deleteAuthUser): Promise<boolean> {
-    if (!(await removeAuth(id))) return false;
-    await prisma.$transaction(async tx => {
-        const rooms = await tx.gameRoom.findMany({
-            where: { createdById: id },
-            select: {
-                id: true,
-                players: { where: { userId: { not: id } }, select: { userId: true }, orderBy: { joinedAt: 'asc' }, take: 1 },
-            },
-        });
-        const alone = rooms.filter(r => r.players.length === 0).map(r => r.id);
-        if (alone.length) await tx.gameRoom.deleteMany({ where: { id: { in: alone } } });
-        for (const r of rooms) {
-            const heir = r.players[0];
-            if (heir) await tx.gameRoom.update({ where: { id: r.id }, data: { createdById: heir.userId } });
-        }
-        await tx.user.delete({ where: { id } });
-    });
-    invalidateUsers([id]);
-    return true;
 }
 
 export async function pruneGuests(now = Date.now()): Promise<number> {
@@ -68,7 +41,7 @@ export async function pruneGuests(now = Date.now()): Promise<number> {
         const todo = ids.slice(skip);
         for (const id of todo) {
             try {
-                if (await removeGuest(id)) removed++;
+                if (await removeUser(id)) removed++;
                 else failed++;
             } catch (e) {
                 failed++;

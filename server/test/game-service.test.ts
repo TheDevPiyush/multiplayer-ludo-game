@@ -526,3 +526,124 @@ describe('lobby colors', () => {
         await t.games.stop();
     });
 });
+
+describe('rematch', () => {
+    const colorOf = (room: LiveRoom, user: string) => room.players.find(p => p.userId === user)?.color;
+
+    /** A finished game between `users`, in a room of `maxPlayers` (b leaves, a wins). */
+    async function finished(t: ReturnType<typeof setup>, maxPlayers = 2, isPrivate = true) {
+        const room = await t.games.createRoom('a', { maxPlayers, isPrivate });
+        await t.games.joinRoom('b', room.gameCode);
+        await t.games.chooseColor('b', room.gameCode, maxPlayers === 2 ? 'GREEN' : 'YELLOW');
+        await t.games.startGame('a', room.gameCode);
+        await t.games.leaveRoom('b', room.gameCode);
+        expect(room.status).toBe('FINISHED');
+        return room;
+    }
+
+    test('the first to ask opens a room like the last one; the others join it with their colors', async () => {
+        const t = setup({ ...fast, turnMs: 60_000 });
+        const old = await finished(t, 3);
+
+        const first = await t.games.rematch('b', old.gameCode);
+        const next = first.room;
+        expect(next.id).not.toBe(old.id);
+        expect(next.status).toBe('WAITING');
+        expect([next.maxPlayers, next.isPrivate, next.createdById]).toEqual([3, true, 'b']);
+        expect(colorOf(next, 'b')).toBe('YELLOW');
+        expect(old.rematch).toEqual({ roomId: next.id, gameCode: next.gameCode, byUserId: 'b' });
+        const told = t.syncs.at(-1)!;
+        expect(told.room.id).toBe(old.id);
+        expect(told.room.rematch?.gameCode).toBe(next.gameCode);
+        expect(told.events).toEqual([{ type: 'REMATCH', byUserId: 'b' }]);
+
+        const second = await t.games.rematch('a', old.gameCode);
+        expect(second.room).toBe(next);
+        expect(colorOf(next, 'a')).toBe('RED');
+        // Asking again keeps the seat.
+        expect((await t.games.rematch('a', old.gameCode)).player).toBe(second.player);
+        expect(next.players).toHaveLength(2);
+        await t.games.stop();
+    });
+
+    test('players asking at the same moment land in one room', async () => {
+        const t = setup({ ...fast, turnMs: 60_000 });
+        const old = await finished(t);
+        const [x, y] = await Promise.all([t.games.rematch('a', old.gameCode), t.games.rematch('b', old.gameCode)]);
+        expect(x.room).toBe(y.room);
+        expect(x.room.players.map(p => p.color).sort()).toEqual(['GREEN', 'RED']);
+        expect(t.writes.filter(w => w === 'createRoom')).toHaveLength(2);
+        await t.games.stop();
+    });
+
+    test('only players of a finished game can ask', async () => {
+        const t = setup({ ...fast, turnMs: 60_000 });
+        const live = await t.games.createRoom('a', { maxPlayers: 2 });
+        await t.games.joinRoom('b', live.gameCode);
+        await expect(t.games.rematch('a', live.gameCode)).rejects.toMatchObject({ status: 400 });
+        await t.games.startGame('a', live.gameCode);
+        await expect(t.games.rematch('a', live.gameCode)).rejects.toMatchObject({ status: 400 });
+
+        const old = await finished(t);
+        await expect(t.games.rematch('stranger', old.gameCode)).rejects.toMatchObject({ status: 403 });
+        await t.games.stop();
+    });
+
+    test('a rematch that started is closed to late askers; one whose host left is opened again', async () => {
+        const t = setup({ ...fast, turnMs: 60_000 });
+        const old = await finished(t, 3);
+        const { room: first } = await t.games.rematch('a', old.gameCode);
+        await t.games.leaveRoom('a', first.gameCode);
+        expect(first.status).toBe('CANCELLED');
+
+        const { room: second } = await t.games.rematch('b', old.gameCode);
+        expect(second.id).not.toBe(first.id);
+        expect(second.createdById).toBe('b');
+        await t.games.rematch('a', old.gameCode);
+        await t.games.startGame('b', second.gameCode);
+        await expect(t.games.rematch('a', old.gameCode)).resolves.toMatchObject({ room: second });
+        await t.games.stop();
+    });
+
+    test('a started rematch turns away a player who is not in it', async () => {
+        const t = setup({ ...fast, turnMs: 60_000 });
+        const old = await finished(t, 3);
+        const { room } = await t.games.rematch('a', old.gameCode);
+        // Someone else from outside, so the room can start without b.
+        await t.games.joinRoom('c', room.gameCode);
+        await t.games.startGame('a', room.gameCode);
+        await expect(t.games.rematch('b', old.gameCode)).rejects.toThrow('The rematch has already started.');
+        await t.games.stop();
+    });
+
+    test("a public game's bots come back with their colors, after a pause", async () => {
+        const bots: BotProfile[] = Array.from({ length: 6 }, (_, i) => ({ userId: `bot${i}`, username: `bot_${i}`, avatarUrl: null }));
+        const t = setup({
+            ...fast, turnMs: 60_000, botFillMs: [60_000, 60_000], botGapMs: [5, 5], autoStartGraceMs: 60_000,
+            rematchBotMs: [20, 20], rng: () => 0,
+        });
+        t.games.setBots(bots);
+        const old = await t.games.createRoom('a', { maxPlayers: 4 });
+        t.games.setPresence(old, 'a', 'CONNECTED');
+        await t.games.joinRoom('b', old.gameCode);
+        // Seat two bots by hand, as the lobby would.
+        for (const bot of bots.slice(0, 2)) {
+            old.players.push({
+                id: bot.userId, userId: bot.userId, seatNumber: old.players.length, color: (['GREEN', 'YELLOW'] as const)[old.players.length - 2]!,
+                status: 'CONNECTED', isReady: true, joinedAt: new Date().toISOString(), username: bot.username, avatarUrl: null, isBot: true,
+            });
+        }
+        await t.games.startGame('a', old.gameCode);
+        await t.games.leaveRoom('b', old.gameCode);
+        await t.games.leaveRoom('a', old.gameCode);
+        // Leaving everyone but bots abandons it, so finish it directly.
+        old.status = 'FINISHED';
+
+        const { room } = await t.games.rematch('a', old.gameCode);
+        expect(room.isPrivate).toBe(false);
+        expect(room.players).toHaveLength(1);
+        await Bun.sleep(60);
+        expect(room.players.filter(p => p.isBot).map(p => [p.userId, p.color])).toEqual([['bot0', 'GREEN'], ['bot1', 'YELLOW']]);
+        await t.games.stop();
+    });
+});

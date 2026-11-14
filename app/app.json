@@ -10,12 +10,6 @@
     "icon": "./assets/images/icon.png",
     "scheme": "simpleludo",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/images/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#2A1560"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.thedevpiyush.simpleludo",
@@ -28,10 +22,11 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.thedevpiyush.simpleludo",
-      "blockedPermissions": ["android.permission.RECORD_AUDIO"]
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -42,11 +37,20 @@
       "expo-router",
       "expo-secure-store",
       [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#2A1560"
+        }
+      ],
+      [
         "expo-notifications",
         {
           "icon": "./assets/images/notification-icon.png",
           "color": "#4B3BF2",
-          "defaultChannel": "invites"
+          "defaultChannel": "invites-v2",
+          "sounds": ["./assets/sounds/custom_notification.wav"]
         }
       ],
       [

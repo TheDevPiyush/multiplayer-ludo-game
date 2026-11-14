@@ -14,6 +14,7 @@ import {
 } from '@ludo/engine';
 
 import { TtlCache } from '../lib/ttl-cache';
+import { DICE } from '../progress/config';
 import {
     toRoomDto,
     userIdOf,
@@ -26,6 +27,7 @@ import {
     type SyncEvent,
 } from './live-room';
 import type { Persistence, Profile, SnapshotStore } from './persistence';
+import type { RewardSummary } from '../progress/progress';
 import { log } from '../lib/logger';
 
 export class ServiceError extends Error {
@@ -89,6 +91,8 @@ export interface GameServiceOptions {
     countdownMs: number;
     /** After the host stops a countdown, the next one starts this much later. */
     countdownPauseMs: number;
+    /** Public rematches: when each of the last game's bots may sit down again. */
+    rematchBotMs: [number, number];
     rng: Rng;
 }
 
@@ -120,13 +124,14 @@ export const DEFAULT_OPTIONS: GameServiceOptions = {
     idleEvictMs: Number(process.env.IDLE_EVICT_MS ?? 30 * 60_000),
     unwatchedPauseMs: Number(process.env.UNWATCHED_PAUSE_MS ?? 60_000),
     abandonMs: Number(process.env.ABANDON_MS ?? 10 * 60_000),
-    balanceStrength: Number(process.env.DICE_BALANCE_STRENGTH ?? 0.6),
+    balanceStrength: DICE.strength,
     botFillMs: [15_000, 20_000],
     botGapMs: [1_500, 3_500],
     botThinkMs: [700, 1_700],
     autoStartGraceMs: 5_000,
     countdownMs: 3_000,
     countdownPauseMs: 10_000,
+    rematchBotMs: [2_500, 8_000],
     rng: cryptoRng,
 };
 
@@ -134,6 +139,9 @@ export const DEFAULT_OPTIONS: GameServiceOptions = {
 export const QUICK_MATCH_SEATS = 4;
 /** A new room's host may not have connected yet; it can still be matched into meanwhile. */
 const NEW_ROOM_GRACE_MS = 15_000;
+
+/** Chance each bot from a public game comes back for the rematch, like a person might. */
+const REMATCH_BOT_ODDS = 0.7;
 
 const AFK_AFTER_TIMEOUTS = 3;
 const SNAPSHOT_DEBOUNCE_MS = 1_000;
@@ -155,6 +163,10 @@ export class GameService {
     /** Public lobbies: the next bot joining, countdown starting, or game starting. */
     private lobbyTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private bots: BotProfile[] = [];
+    /** Finished rooms whose rematch room is being opened, so players asking at once all land in one room. */
+    private rematching = new Map<string, Promise<LiveRoom>>();
+    /** Bots due back in a public rematch. */
+    private rematchTimers = new Set<ReturnType<typeof setTimeout>>();
     private snapshotTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private dirty = new Set<string>();
     /** Finished rooms whose final write is in flight. */
@@ -176,6 +188,8 @@ export class GameService {
     onUsersChanged: (userIds: string[]) => void = () => {};
     /** Called once when a room finishes or is cancelled (closes its voice channel). */
     onRoomClosed: (room: LiveRoom) => void = () => {};
+    /** Called once a finished game's rewards are saved, with each player's. */
+    onGameRewards: (room: LiveRoom, rewards: Map<string, RewardSummary>) => void = () => {};
 
     constructor(
         private db: Persistence,
@@ -197,6 +211,8 @@ export class GameService {
         this.timers.clear();
         for (const t of this.lobbyTimers.values()) clearTimeout(t);
         this.lobbyTimers.clear();
+        for (const t of this.rematchTimers) clearTimeout(t);
+        this.rematchTimers.clear();
         await this.flush(true);
     }
 
@@ -267,15 +283,13 @@ export class GameService {
         return profile;
     }
 
-    invalidateProfile(userId: string, next?: Profile) {
+    /** Forgets a cached profile; `changed` fields are also updated in the rooms the user is in. */
+    invalidateProfile(userId: string, changed?: Partial<Profile>) {
         this.profiles.delete(userId);
-        if (!next) return;
+        if (!changed) return;
         for (const room of this.rooms.values()) {
             const p = room.players.find(x => x.userId === userId);
-            if (p) {
-                p.username = next.username;
-                p.avatarUrl = next.avatarUrl;
-            }
+            if (p) Object.assign(p, changed);
         }
     }
 
@@ -301,7 +315,7 @@ export class GameService {
 
     async createRoom(
         userId: string,
-        input: { maxPlayers: number; isPrivate?: boolean; voiceEnabled?: boolean },
+        input: { maxPlayers: number; isPrivate?: boolean; voiceEnabled?: boolean; color?: unknown },
     ): Promise<LiveRoom> {
         const maxPlayers = Number(input.maxPlayers);
         if (!Number.isInteger(maxPlayers) || maxPlayers < 2 || maxPlayers > 4) {
@@ -325,7 +339,7 @@ export class GameService {
                 id: randomUUID(),
                 userId,
                 seatNumber: 0,
-                color: nextColor(maxPlayers, [])!,
+                color: nextColor(maxPlayers, [], isColor(input.color) ? input.color : undefined)!,
                 status: 'DISCONNECTED',
                 isReady: true,
                 joinedAt: now,
@@ -343,7 +357,8 @@ export class GameService {
         return room;
     }
 
-    async joinRoom(userId: string, gameCode: string): Promise<{ room: LiveRoom; player: LivePlayer }> {
+    /** `color`: the color to take if it's free (a rematch keeps everyone's). */
+    async joinRoom(userId: string, gameCode: string, color?: Color): Promise<{ room: LiveRoom; player: LivePlayer }> {
         const room = await this.requireRoom({ gameCode: normalizeCode(gameCode) });
         // Over for everyone — members included (a finished room can't be reopened).
         if (room.status === 'FINISHED' || room.status === 'CANCELLED') throw new ServiceError(410, closedMessage(room.status));
@@ -372,13 +387,13 @@ export class GameService {
 
         const takenSeats = new Set(room.players.map(p => p.seatNumber));
         const seatNumber = replaced?.seatNumber ?? [0, 1, 2, 3].find(s => !takenSeats.has(s))!;
-        const color = replaced?.color ?? nextColor(room.maxPlayers, room.players);
-        if (!color) throw new ServiceError(400, 'Room is full.');
+        const seatColor = replaced?.color ?? nextColor(room.maxPlayers, room.players, color);
+        if (!seatColor) throw new ServiceError(400, 'Room is full.');
         const player: LivePlayer = {
             id: randomUUID(),
             userId,
             seatNumber,
-            color,
+            color: seatColor,
             status: 'DISCONNECTED',
             isReady: false,
             joinedAt: new Date().toISOString(),
@@ -579,7 +594,12 @@ export class GameService {
 
         room.game = createGame({
             colors: room.players.map(p => p.color),
-            balance: { enabled: this.opts.balanceStrength > 0, strength: this.opts.balanceStrength },
+            balance: {
+                enabled: this.opts.balanceStrength > 0,
+                strength: this.opts.balanceStrength,
+                momentum: DICE.momentum,
+                luckFade: DICE.luckFade,
+            },
         });
         this.clearLobbyTimer(room.id);
         room.lobby = undefined;
@@ -668,21 +688,29 @@ export class GameService {
         });
     }
 
-    /** A random bot not already playing (when the pool runs short, one that isn't in this room). */
-    private pickBot(room: LiveRoom): BotProfile | null {
+    /** Bots seated in a lobby or a game right now. */
+    private busyBots(): Set<string> {
         const busy = new Set<string>();
         for (const r of this.rooms.values()) {
             if (r.status === 'WAITING' || r.status === 'PLAYING') for (const p of r.players) if (p.isBot) busy.add(p.userId);
         }
+        return busy;
+    }
+
+    /** A random bot not already playing (when the pool runs short, one that isn't in this room). */
+    private pickBot(room: LiveRoom): BotProfile | null {
+        const busy = this.busyBots();
         let pool = this.bots.filter(b => !busy.has(b.userId));
         if (pool.length === 0) pool = this.bots.filter(b => !room.players.some(p => p.userId === b.userId));
         return pool.length ? pool[Math.floor(this.opts.rng() * pool.length)]! : null;
     }
 
-    private async addBot(room: LiveRoom) {
+    /** Seats a bot: `wanted` (a rematch brings the same one back) if it's free, else a random one. */
+    private async addBot(room: LiveRoom, wanted?: { bot: BotProfile; color: Color }) {
         if (!room.lobby || room.players.length >= room.maxPlayers) return;
-        const bot = this.pickBot(room);
-        const color = nextColor(room.maxPlayers, room.players);
+        if (wanted && this.busyBots().has(wanted.bot.userId)) return;
+        const bot = wanted?.bot ?? this.pickBot(room);
+        const color = nextColor(room.maxPlayers, room.players, wanted?.color);
         if (!bot || !color) return;
         const takenSeats = new Set(room.players.map(p => p.seatNumber));
         const player: LivePlayer = {
@@ -740,6 +768,67 @@ export class GameService {
     /** Bot user ids in the room, for presence lists (bots have no sockets). */
     botIds(room: LiveRoom): string[] {
         return room.players.filter(p => p.isBot).map(p => p.userId);
+    }
+
+    // ─── Rematch ─────────────────────────────────────────────────────────────
+
+    /**
+     * Rematch after a finished game. The first player to ask opens a room like the last one (same
+     * size, public or private) and hosts it; everyone after joins that room. Players keep their
+     * colors when they can. The other players see it on their result screen (`room.rematch`).
+     */
+    async rematch(userId: string, gameCode: string): Promise<{ room: LiveRoom; player: LivePlayer }> {
+        const old = await this.requireRoom({ gameCode: normalizeCode(gameCode) });
+        if (old.status !== 'FINISHED') throw new ServiceError(400, "This game hasn't finished.");
+        const me = old.players.find(p => p.userId === userId && !p.isBot);
+        if (!me) throw new ServiceError(403, "You didn't play in this game.");
+
+        const next = await this.openRematch(old, userId, me.color);
+        if (next.status === 'PLAYING' && !this.isMember(next, userId)) throw new ServiceError(410, 'The rematch has already started.');
+        try {
+            return await this.joinRoom(userId, next.gameCode, me.color);
+        } catch (e) {
+            // Filled up by the time this player asked: say so in rematch words.
+            if (e instanceof ServiceError && e.status < 500) throw new ServiceError(e.status, `Couldn't join the rematch. ${e.message}`);
+            throw e;
+        }
+    }
+
+    private async openRematch(old: LiveRoom, userId: string, color: Color): Promise<LiveRoom> {
+        const pending = this.rematching.get(old.id);
+        if (pending) return pending;
+        if (old.rematch) {
+            const existing = await this.getRoom({ id: old.rematch.roomId });
+            // A started one is still where its players belong.
+            if (existing?.status === 'WAITING' || existing?.status === 'PLAYING') return existing;
+            // Its host left (cancelled), it's over, or it's gone: open a fresh one.
+        }
+        const opening = (async () => {
+            const room = await this.createRoom(userId, { maxPlayers: old.maxPlayers, isPrivate: old.isPrivate, color });
+            old.rematch = { roomId: room.id, gameCode: room.gameCode, byUserId: userId };
+            this.commit(old, [{ type: 'REMATCH', byUserId: userId }], { persist: false });
+            if (room.lobby) this.bringBotsBack(old, room);
+            log.info('rematch opened', { from: old.gameCode, room: room.gameCode, by: userId });
+            return room;
+        })().finally(() => this.rematching.delete(old.id));
+        this.rematching.set(old.id, opening);
+        return opening;
+    }
+
+    /**
+     * Public rematches: each of the last game's bots may sit down again, after a pause, as a person
+     * might. Seats left over fill as in any public lobby.
+     */
+    private bringBotsBack(old: LiveRoom, room: LiveRoom) {
+        for (const p of old.players) {
+            if (!p.isBot || this.opts.rng() >= REMATCH_BOT_ODDS) continue;
+            const bot = { userId: p.userId, username: p.username, avatarUrl: p.avatarUrl };
+            const t = setTimeout(() => {
+                this.rematchTimers.delete(t);
+                if (this.rooms.get(room.id) === room && room.status === 'WAITING') void this.addBot(room, { bot, color: p.color });
+            }, this.between(this.opts.rematchBotMs));
+            this.rematchTimers.add(t);
+        }
     }
 
     // ─── Gameplay ────────────────────────────────────────────────────────────
@@ -809,7 +898,13 @@ export class GameService {
 
     private recordMoves(room: LiveRoom, dice: number | null, events: GameEvent[]) {
         const startedAt = room.startedAt ? Date.parse(room.startedAt) : Date.now();
+        room.stats ??= {};
+        const stats = (color: Color) => (room.stats![color] ??= { captures: 0, home: 0, sixes: 0 });
         for (const e of events) {
+            if (e.type === 'ROLLED' && e.value === 6) stats(e.color).sixes++;
+            else if (e.type === 'CAPTURED') stats(e.by).captures++;
+            else if (e.type === 'HOME') stats(e.color).home++;
+            else if (e.type === 'FINISHED') stats(e.color).finished = true;
             if (e.type !== 'MOVED') continue;
             const entry: MoveEntry = [e.color, e.token, dice ?? 0, e.from, e.to, Math.round((Date.now() - startedAt) / 100)];
             room.moveLog.push(entry);
@@ -868,9 +963,10 @@ export class GameService {
         if (this.finishing.has(room.id)) return;
         this.finishing.add(room.id);
         try {
-            await this.db.finishGame(room);
+            const rewards = await this.db.finishGame(room);
             log.info('game finished', { room: room.gameCode, winner: room.winnerId });
             this.onUsersChanged(room.players.map(p => p.userId));
+            if (rewards && rewards.size > 0) this.onGameRewards(room, rewards);
             await this.snapshots?.delete(room).catch(() => {});
         } catch (e) {
             log.error('finishGame failed, will retry on flush', { room: room.gameCode, error: (e as Error)?.message });

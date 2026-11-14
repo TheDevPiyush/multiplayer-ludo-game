@@ -37,6 +37,12 @@ export default function Contact() {
             <p>This opens your email app with the message filled in.</p>
             <ContactForm email={SITE.contactEmail} />
 
+            <h2>Complaints</h2>
+            <p>
+                To raise a complaint about the game or another player, write to our grievance officer, {SITE.grievanceOfficer},
+                at <a href={`mailto:${SITE.contactEmail}`}>{SITE.contactEmail}</a>.
+            </p>
+
             <h2>Reporting a player</h2>
             <p>
                 The quickest way is in the game: tap the player’s seat or name, then <strong>Report</strong>. That sends

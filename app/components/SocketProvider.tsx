@@ -212,7 +212,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     // Background / foreground: pause token refresh while hidden (per supabase-js
     // React Native docs) and make sure the socket really comes back on resume.
     useEffect(() => {
-        let prev: AppStateStatus = AppState.currentState;
+        let prev = (AppState.currentState ?? 'active') as AppStateStatus;
         let watchdog: ReturnType<typeof setTimeout> | null = null;
 
         const sub = AppState.addEventListener('change', (next) => {

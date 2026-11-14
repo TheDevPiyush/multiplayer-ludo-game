@@ -14,6 +14,7 @@ import {
 
 import { DICE_ROLL_MS } from '@/components/ludo/Dice';
 import { CAPTURE_RETURN_DELAY_MS, CAPTURE_RETURN_MS, HOP_MS } from '@/components/ludo/geometry';
+import { diceBalance } from '@/util/remote-config';
 
 export type SeatKind = 'human' | 'bot';
 
@@ -26,8 +27,6 @@ export type LocalSeat = {
 
 export type LocalGameConfig = {
     seats: LocalSeat[];
-    /** Engagement dice (rubber-banding) on/off. */
-    dynamicDice: boolean;
 };
 
 /** The roll is applied when the die reports it has come to rest, or after this long at the latest. */
@@ -48,7 +47,8 @@ const between = ([min, max]: [number, number]) => min + Math.random() * (max - m
 function newGame(config: LocalGameConfig): GameState {
     return createGame({
         colors: config.seats.map(s => s.color),
-        balance: { enabled: config.dynamicDice },
+        // The server's tuning when it has been loaded, else the engine's defaults.
+        balance: diceBalance(),
     });
 }
 

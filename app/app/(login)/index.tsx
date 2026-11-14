@@ -26,6 +26,7 @@ import { FloatingDiceArt } from '@/components/ludo/FloatingDiceArt';
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
 import { useAuth } from '@/hooks/useAuth';
+import { useAuthPhase } from '@/util/auth-phase';
 
 const { width: W, height: H } = Dimensions.get('window');
 
@@ -78,7 +79,7 @@ function GridBackground({ opacity }: { opacity: Animated.Value }) {
     const rows = Math.ceil(H / CELL) + 1;
 
     return (
-        <Animated.View style={[StyleSheet.absoluteFillObject, { opacity }]} pointerEvents="none">
+        <Animated.View style={[StyleSheet.absoluteFill, { opacity }]} pointerEvents="none">
             {Array.from({ length: cols }).map((_, c) => (
                 <View
                     key={`col-${c}`}
@@ -118,6 +119,9 @@ export default function AuthIndex() {
 
     const { signInWithGoogle, playAsGuest, loading, dialog, hideDialog } = useAuth();
     const busy = loading.googleLoading || loading.guestLoading;
+    // Signed in already (or not known yet): the app is about to move on, so no sign-in buttons.
+    const { phase } = useAuthPhase();
+    const checking = phase !== 'signedOut';
 
 
     // Staggered fade/slide for UI sections
@@ -218,6 +222,13 @@ export default function AuthIndex() {
                     {/* Card handle */}
                     <View style={styles.cardHandle} />
 
+                    {checking ? (
+                        <View style={styles.checking}>
+                            <ActivityIndicator color="#FFFFFF" size="large" />
+                            <Text weight="semiBold" style={styles.subtitle}>Getting your game ready…</Text>
+                        </View>
+                    ) : (
+                    <>
                     <Text weight="bold" style={styles.welcome}>Ready to play?</Text>
                     <Text weight="medium" style={styles.subtitle}>Sign in to keep your stats and play with friends</Text>
 
@@ -281,6 +292,8 @@ export default function AuthIndex() {
                         {' '}&{' '}
                         <Text weight="semiBold" style={styles.termsLink}>Privacy Policy</Text>
                     </Text>
+                    </>
+                    )}
                 </Animated.View>
 
                 <AppDialog
@@ -296,6 +309,7 @@ export default function AuthIndex() {
 }
 
 const styles = StyleSheet.create({
+    checking: { alignItems: 'center', justifyContent: 'center', gap: 14, minHeight: 180 },
     screen: {
         flex: 1,
         backgroundColor: 'transparent',

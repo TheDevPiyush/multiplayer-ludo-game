@@ -32,11 +32,22 @@ function write(level: Level, msg: string, fields?: Record<string, unknown>) {
     (level === 'error' ? console.error : level === 'warn' ? console.warn : console.log)(line);
 }
 
+type ErrorSink = (message: string, fields?: Record<string, unknown>) => void;
+let errorSink: ErrorSink | null = null;
+
+/** Also sends every `log.error` elsewhere (lib/sentry.ts). */
+export function setErrorSink(sink: ErrorSink) {
+    errorSink = sink;
+}
+
 export const log = {
     debug: (msg: string, fields?: Record<string, unknown>) => write('debug', msg, fields),
     info: (msg: string, fields?: Record<string, unknown>) => write('info', msg, fields),
     warn: (msg: string, fields?: Record<string, unknown>) => write('warn', msg, fields),
-    error: (msg: string, fields?: Record<string, unknown>) => write('error', msg, fields),
+    error: (msg: string, fields?: Record<string, unknown>) => {
+        write('error', msg, fields);
+        errorSink?.(msg, fields);
+    },
 };
 
 function statusColor(status: number): string {

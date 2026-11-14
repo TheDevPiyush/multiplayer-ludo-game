@@ -30,7 +30,8 @@ export default function Terms() {
                 <li>
                     You can play as a guest or sign in with Google or email. A guest account is tied to your device: if
                     you sign out, uninstall the app or don’t open it for 30 days, it may be lost for good. Save your
-                    progress from your profile to keep it.
+                    progress from your profile to keep it. Guest accounts that have bought something are not deleted
+                    for being unused.
                 </li>
                 <li>Keep your sign-in secure. You are responsible for what happens on your account.</li>
                 <li>
@@ -42,8 +43,19 @@ export default function Terms() {
             <h2>3. A game of skill and chance, for fun</h2>
             <p>
                 {SITE.name} is a free game for entertainment. There is no betting, real-money play or prize of any
-                kind. To keep games close and fun, casual games may use “dynamic dice”, which gently adjust the odds
-                of each roll. Every number can always come up.
+                kind. To keep games close and fun, every game uses “dynamic dice”, which adjust the odds of each roll
+                based on how the game is going. Every number can always come up, and what you spend never affects the
+                dice. In public rooms, computer players join when few people are online.
+            </p>
+            <p>
+                Coins are earned by playing (games, daily rewards, missions, invites and optional rewarded ads) and can
+                only be spent on cosmetic items in the in-app shop. Coins have no money value: they cannot be bought,
+                sold, traded, transferred to another player or exchanged for money or anything else. Shop items,
+                whether earned with coins or bought (section 7), are yours to use in the game; they cannot be sold,
+                traded, transferred to another player or exchanged for money. Cosmetic items never affect the dice or
+                how a game is played. We may change how many coins things pay
+                or cost, and we may remove coins or items gained by cheating, such as by playing against your own extra
+                accounts.
             </p>
 
             <h2>4. Play fair and be kind</h2>
@@ -76,9 +88,25 @@ export default function Terms() {
 
             <h2>7. Paid features</h2>
             <p>
-                The Service is free today. If we add optional paid features later, their price and terms will be shown
-                before you buy, and purchases will also be subject to the app store’s terms.
+                The Service is free and shows ads (see our Privacy Policy). Rewarded ads are always your choice. You
+                can also buy optional items with real money through Google Play: sets of cosmetic items, and Remove
+                Ads, which stops the full-screen ads shown after games (rewarded ads stay, for when you want coins).
             </p>
+            <ul>
+                <li>The price is shown before you buy. Each purchase is a one-time payment, not a subscription.</li>
+                <li>
+                    Payments, and refunds, are handled by the app store under its own terms and refund policy. If a
+                    purchase is refunded, what it gave is removed.
+                </li>
+                <li>
+                    A purchase belongs to the account you were signed in with. To move it to another account, sign in
+                    there and use Restore purchases in the shop, with the same Google account.
+                </li>
+                <li>
+                    Paid items never include coins and never affect the dice or how a game is played. Everything in a
+                    set can also be earned with coins.
+                </li>
+            </ul>
 
             <h2>8. Changes and availability</h2>
             <p>
@@ -90,7 +118,8 @@ export default function Terms() {
             <h2>9. Ending your use</h2>
             <p>
                 You can stop using the Service and{' '}
-                <Link href="/delete-account">delete your account</Link> at any time. We may suspend or end your access
+                <Link href="/delete-account">delete your account</Link> at any time, from Profile → Delete account in
+                the app. We may suspend or end your access
                 if you break these terms or if we have to stop offering the Service.
             </p>
 

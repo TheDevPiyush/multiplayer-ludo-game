@@ -11,6 +11,7 @@ import { afterCursor, pageParams, toPage } from '../lib/paging';
 import { pushTo } from '../notifications/push';
 import { getIO, isUserOnline, roomChatHistory } from '../socket/socket-server';
 import { blockedEither, blocksChanged, isBlockedEither } from './blocks';
+import { friendsLeaderboard } from './leaderboard';
 
 export type Relation = 'none' | 'friends' | 'outgoing' | 'incoming';
 
@@ -46,7 +47,7 @@ type Summary = { unreadNotifications: number; incomingRequests: number; outgoing
  */
 const summaries = new TtlCache<string, Summary>(20_000, 10 * 60_000);
 
-function summaryChanged(...userIds: string[]) {
+export function summaryChanged(...userIds: string[]) {
     for (const id of userIds) summaries.delete(id);
 }
 
@@ -254,6 +255,11 @@ export const removeFriend = handle('removeFriend', async (req, res) => {
         notify(otherId, 'removed', me);
     }
     res.status(200).json({ relation: 'none' satisfies Relation });
+});
+
+/** You and your friends by wins this week. */
+export const getLeaderboard = handle('getLeaderboard', async (req, res) => {
+    res.status(200).json(await friendsLeaderboard(req.user!.id));
 });
 
 // ─── Room invites ────────────────────────────────────────────────────────────

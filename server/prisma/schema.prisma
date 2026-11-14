@@ -49,6 +49,15 @@ enum ReportReason {
   OTHER
 }
 
+/// How an item was got. Store purchases (later) carry the store's id in `externalId`.
+enum EntitlementSource {
+  COINS
+  PLAY
+  APPSTORE
+  REWARD
+  ADMIN
+}
+
 enum NotificationType {
   FRIEND_REQUEST
   FRIEND_ACCEPTED
@@ -74,6 +83,18 @@ model User {
   lastSeenAt        DateTime?
   /// Last "come and play" reminder, so a restart near a send time doesn't send it twice.
   lastReminderAt    DateTime?
+  /// Earned by playing, never bought; spent on cosmetics. `CoinLedger` has every change.
+  coins             Int       @default(0)
+  xp                Int       @default(0)
+  /// Daily rewards claimed on consecutive days (India time).
+  dailyStreak       Int       @default(0)
+  /// India date of the last daily reward, "2026-11-10".
+  dailyClaimDay     String?
+  /// Equipped cosmetics (shop item ids, e.g. "pawn.crown"); null is the free default.
+  /// Others see the pawn and dice in games; the board is only ever the player's own view.
+  pawnSkin          String?
+  diceSkin          String?
+  boardTheme        String?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
@@ -90,6 +111,11 @@ model User {
   blockedBy    Block[]  @relation("Blocked")
   reportsMade  Report[] @relation("Reporter")
   reportsAbout Report[] @relation("Reported")
+
+  coinLedger      CoinLedger[]
+  missionProgress MissionProgress[]
+  entitlements    Entitlement[]
+  purchases       Purchase[]
 
   @@index([providerId])
   @@index([lastSeenAt])
@@ -295,4 +321,86 @@ model Announcement {
   updatedAt   DateTime @updatedAt
 
   @@index([active, startsAt, endsAt])
+}
+
+/// Every change to a user's coins, append-only. `key` is unique, so each grant happens once
+/// (a retried game finish, a double-tapped claim).
+model CoinLedger {
+  id        String   @id @default(uuid())
+  userId    String
+  /// Positive when earned, negative when spent.
+  amount    Int
+  /// GAME, OFFLINE_GAME, DAILY, MISSION, LEVEL_UP, INVITE, INVITE_HOST or SHOP (later also AD).
+  reason    String
+  /// e.g. "game:<roomId>:<userId>", "daily:<userId>:<day>".
+  key       String   @unique
+  /// India date it counts toward, for daily caps.
+  day       String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, reason, day])
+  @@index([userId, createdAt])
+}
+
+/// Progress on one of a user's daily missions. Which missions a user gets on a day is worked
+/// out from their id and the day (progress/rules.ts), so only progress is stored.
+model MissionProgress {
+  userId    String
+  /// India date, "2026-11-10".
+  day       String
+  missionId String
+  progress  Int       @default(0)
+  claimedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, day, missionId])
+}
+
+/// A cosmetic a user owns (shop item ids live in code: shop/catalog.ts). One row per user and item.
+model Entitlement {
+  id         String            @id @default(uuid())
+  userId     String
+  itemId     String
+  source     EntitlementSource
+  /// A store's purchase id, so one purchase grants once.
+  externalId String?           @unique
+  /// Null: owned for good. Otherwise a trial that ends then.
+  expiresAt  DateTime?
+  createdAt  DateTime          @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, itemId])
+}
+
+/// A paid purchase, as RevenueCat reports it (server/purchases). Its items are `Entitlement`
+/// rows with source PLAY or APPSTORE, worked out again on every sync.
+model Purchase {
+  id                 String    @id @default(uuid())
+  /// The account holding it. Null once that account is deleted (the record stays, without
+  /// personal details, for refunds and tax), or while a restore has moved it to an account
+  /// that hasn't synced yet.
+  userId             String?
+  /// Store product id (server/shop/products.ts).
+  productId          String
+  /// RevenueCat's id for this purchase.
+  rcId               String    @unique
+  /// The store's order id (Play: "GPA.…"). Refund events name it.
+  storeTransactionId String?   @unique
+  /// RevenueCat's store name: play_store, app_store.
+  store              String
+  /// A licence tester's or TestFlight purchase: nothing was charged.
+  sandbox            Boolean   @default(false)
+  purchasedAt        DateTime
+  /// Refunded or revoked: it grants nothing, even if RevenueCat lists it again.
+  revokedAt          DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
 }

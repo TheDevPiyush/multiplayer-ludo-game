@@ -19,7 +19,8 @@ export type RoomPlayer = {
     isReady: boolean;
     rank: number | null;
     tokenPositions: number[];
-    user: { username: string; avatarUrl: string | null };
+    /** `pawnSkin` and `diceSkin`: equipped shop items (null or missing: the default; older servers send neither). */
+    user: { username: string; avatarUrl: string | null; pawnSkin?: string | null; diceSkin?: string | null };
 };
 
 export type GameRoom = {
@@ -33,6 +34,8 @@ export type GameRoom = {
     currentDice: number | null;
     winnerId: string | null;
     createdById: string;
+    startedAt: string | null;
+    endedAt?: string | null;
     players: RoomPlayer[];
     /** Server state version — updates older than the current one are dropped. */
     version: number;
@@ -55,6 +58,8 @@ export type GameRoom = {
     localTurnEndsAt?: number | null;
     /** Set on arrival: `turnStartsAt` in this device's clock. */
     localTurnStartsAt?: number;
+    /** A finished game: the rematch room a player opened, for the others to join. */
+    rematch?: { roomId: string; gameCode: string; byUserId: string } | null;
 };
 
 type Color = RoomPlayer['color'];
@@ -73,7 +78,8 @@ export type SyncEvent =
     | { type: 'COLORS_CHANGED'; byUserId: string; changes: ColorChange[] }
     | { type: 'PLAYER_LEFT'; userId: string }
     | { type: 'STARTED' }
-    | { type: 'CANCELLED'; reason: string };
+    | { type: 'CANCELLED'; reason: string }
+    | { type: 'REMATCH'; byUserId: string };
 
 type RoomSync = { version: number; room: GameRoom; events: SyncEvent[] };
 

@@ -27,6 +27,11 @@ export async function fetchMe(accessToken: string): Promise<Result<{ user: Backe
     return apiFetch(accessToken, '/auth/me');
 }
 
+/** Deletes the account and everything about it, at once (server: auth.controller deleteAccount). */
+export async function deleteAccount(accessToken: string): Promise<Result<{ deleted: true }>> {
+    return apiFetch(accessToken, '/auth/me', { method: 'DELETE' });
+}
+
 export async function updateUsername(
     accessToken: string,
     username: string,

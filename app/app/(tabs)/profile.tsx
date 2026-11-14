@@ -24,8 +24,10 @@ import { LUDO } from '@/constants/LudoColors';
 import { useAuth } from '@/hooks/useAuth';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useIsGuest } from '@/hooks/useIsGuest';
-import { leaveGuest, LEAVE_GUEST_DIALOG, takenDialog } from '@/util/guest';
+import { deleteAccount } from '@/apis/user-api';
+import { afterAccountDeleted, leaveGuest, LEAVE_GUEST_DIALOG, takenDialog } from '@/util/guest';
 import { VolumeSlider } from '@/components/VolumeSlider';
+import { track } from '@/util/analytics';
 import { playEffect, setAudioSettings, useAudioSettings } from '@/util/audio';
 import { forgetPushToken } from '@/util/push';
 import { supabase } from '@/util/supabase-client';
@@ -208,6 +210,7 @@ export default function ProfileTabScreen() {
   const shareProfile = async () => {
     if (!user?.username) return;
     await Share.share({ message: `Challenge me on Simple Ludo! My username: @${user.username}` });
+    track('invite_share', { source: 'profile' });
   };
 
   const editUsername = () => {
@@ -249,6 +252,33 @@ export default function ProfileTabScreen() {
       });
     }
   };
+
+  /** Google Play requires deleting an account from inside the app. It happens at once, for good. */
+  const confirmDelete = () =>
+    setDialog({
+      visible: true,
+      title: 'Delete your account?',
+      message:
+        'This deletes your account for good: your username, coins, items, stats, history and friends. It can\'t be undone.\n\n' +
+        'Anything you bought with money stays with your Google account. Restore it on a new account from Shop → Sets → Restore purchases.',
+      dismissable: true,
+      actions: [
+        { label: 'Cancel', onPress: hideDialog },
+        {
+          label: 'Delete',
+          onPress: async () => {
+            hideDialog();
+            const { data } = await supabase.auth.getSession();
+            const token = data.session?.access_token;
+            if (!token) return;
+            const r = await deleteAccount(token);
+            if (!r.ok) return showInfoDialog("Couldn't delete your account", r.error);
+            await afterAccountDeleted();
+            router.replace('/(login)');
+          },
+        },
+      ],
+    });
 
   const handleSignOut = () => {
     if (guest) return confirmLeaveGuest();
@@ -396,6 +426,8 @@ export default function ProfileTabScreen() {
       <Animated.View style={[styles.section, { opacity: fadeCard, transform: [{ translateY: slideCard }] }]}>
         <RNView style={styles.sectionCard}>
           <ActionRow icon="sign-out" label={guest ? 'Leave guest account' : 'Sign Out'} onPress={handleSignOut} danger />
+          <RNView style={styles.separator} />
+          <ActionRow icon="trash" label="Delete account" onPress={confirmDelete} danger />
         </RNView>
       </Animated.View>
 

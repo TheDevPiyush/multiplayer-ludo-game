@@ -209,7 +209,7 @@ function NotificationsList() {
                 refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#FFFFFF" />}
                 onEndReached={() => void loadMore()}
                 onEndReachedThreshold={0.5}
-                ListFooterComponent={loadingMore ? <ActivityIndicator color="#FFFFFF" style={{ marginVertical: 16 }} /> : null}
+                ListFooterComponent={loadingMore ? <ActivityIndicator color="#FFFFFF" style={{ marginVertical: 16 }} /> : undefined}
                 ListEmptyComponent={
                     items === null && !error ? (
                         <ActivityIndicator color="#FFFFFF" style={{ marginTop: 48 }} />

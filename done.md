@@ -2,7 +2,7 @@
 
 ## New features
 - **Invite links**: share `/join/<code>`; the app opens and joins automatically (Android App Links, iOS Universal Links, with a browser landing page as fallback). The link domain is set by `EXPO_PUBLIC_LINK_URL`.
-- **Friends**: search users, send, accept and remove requests, and see who's online. The modal is URL-driven (`/friends?tab=friends|requests`), so any screen can open it.
+- **Friends**: search users, send, accept and remove requests, and see who's online. The modal is URL-driven (`/friends?tab=friends|requests|week`), so any screen can open it.
 - **Alerts tab**: friend requests and room invites with an unread badge. Tapping a request opens the friends modal; an invite has a Join button while the room is still open.
 - **Room invites**: the host taps an empty seat to invite friends. The friend gets a live banner in the app and a notification in Alerts.
 - **Quick Match (Join Public)**:
@@ -77,6 +77,90 @@
   - "Come and play" reminders at 13:00 and 19:30 IST (`REMINDER_TIMES`). They go to people who opened the app in the last 30 days but not in the last 3 hours, and aren't online.
   - Each Home visit syncs the device's token. The server keeps each user's 3 newest devices. A device that signs into another account moves to it, signing out removes it, and tokens Expo reports as dead are dropped.
   - Android channels: Game invites, Friends and Game reminders, each of which people can turn off separately. Tapping a notification opens the invite's room or the friends screen.
+  - Notifications play the game's own sound (`assets/sounds/custom_notification.wav`). Android can't change a channel's sound after it exists, so the channels moved to new ids (`invites-v2` and so on) and the old ones are deleted. The app's `CHANNELS` and the server's `CHANNEL` must use the same ids. Older app builds fall back to their old `invites` channel with the system sound.
+
+- **Analytics and crash reports**:
+  - Firebase Analytics on Android (`util/analytics.ts`): `game_start`, `game_finish`, `rematch`, `invite_share`, `invite_join`. Development builds only log them to the console. iOS is left out until it has a Firebase config (`expo.autolinking.ios.exclude` in `app/package.json`).
+  - `@react-native-firebase` stays on 23.8.8: 27.x doesn't compile against React Native 0.81.
+  - The advertising ID and ad-service permissions are blocked until ads ship (`blockedPermissions` in `app.json`).
+  - Per-game bot counts aren't in analytics, because the client doesn't know which seats are bots. They come from the database (`User.provider = 'bot'`).
+  - Sentry on the app (`util/monitoring.ts`, sessions give the crash-free rate) and the server (`lib/sentry.ts`, every `log.error`). Both stay off without a DSN. Tracing and replay stay off.
+  - Readable app stack traces need `SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and `SENTRY_PROJECT` on EAS. After `eas update`, upload maps with `npx sentry-expo-upload-sourcemaps dist`.
+
+- **Adaptive dice v2** (`packages/ludo-engine/src/dice.ts`):
+  - One dice for everyone, online and offline. The Easy/Hard picker is gone; the local setup screen says "Dice adapt during the game to keep it close."
+  - Each player has a fading `luck` score: good rolls raise it, wasted rolls and lost pawns lower it. A hot player is eased off for a few turns, a cold one helped, and it fades by itself (`momentum` 1.5, `luckFade` 0.8).
+  - Strength grows as the race nears its end (0.8× to 1.2× of `strength`). Every face stays within 8–36% exactly.
+  - Saved games without `luck` keep working (treated as 0).
+  - Tune with `bun scripts/dice-report.ts` in `packages/ludo-engine` (`--engine=` compares another copy, `--fair=1` turns adapting off). Against the old dice over 2,000 games: sixes unchanged (about 17%), lead changes up 20–27%, the roll after three hot rolls averages 3.35 and after three cold 3.64, and the better bot wins more (73% vs 69%).
+
+- **Online rematch**:
+  - The online result screen has **Rematch** next to Home. The first player to tap it opens a room like the last one (same size, public or private) and hosts it; everyone else's result screen then says "<name> wants a rematch" with a **Join rematch** button. Players tapping at the same moment land in the same room.
+  - Everyone keeps their colour when it's free (2-player games keep opposite corners).
+  - Public rematches: each bot from the last game comes back with a 70% chance, 2.5–8 s later, with its colour. Free seats then fill as in any public lobby, and Join Public can seat strangers there too.
+  - If the rematch's host leaves its lobby, the next player to tap opens a fresh one. Once it has started, only its own players can get back in.
+  - Socket action `room:rematch` (`GameService.rematch`). The link from the old room lives in memory only, so after a server restart a tap opens a new room.
+
+- **Daily loop: coins, levels, daily reward, missions** (`server/progress/`; guests too):
+  - Coins are only earned and will only buy cosmetics: they're never sold, traded or cashed out. Every change is a row in `CoinLedger`, with a unique key, so nothing pays twice.
+  - **Online games** pay 15 coins and 20 XP for finishing, or 40 coins and 50 XP for a win, up to 300 coins a day from games. They're paid in the same transaction that saves the result, and a retried save pays nothing more. Bots, players who left before getting home, games under 2 minutes and players with fewer than 5 moves get nothing. A game that short says so on the result screen. Each player's result screen shows what they got (`progress:reward` socket event).
+  - **Vs Computer** games are reported by the app (`POST /progress/offline-game`): 5 coins / 10 XP, or 10 / 20 for a win, for at most 10 games a day. Impossible reports are refused. Pass & Play and watching bots pay nothing.
+  - **Levels** need 100 XP, then 50 more each level. Every level up pays 50 coins.
+  - **Daily reward**: by day of the week, Monday 20, 30, 40, 50, 60, 80, Sunday 150. Missing a day only loses that day's coins; the streak (days in a row) is for show. Days and weeks follow India time (midnight IST). The card is always on Home, under the missions: this week with a tick on collected days, a mark on missed ones (not on days before the player joined), and Collect on today.
+  - **Missions**: 3 a day per player from a pool of 8 (`progress/rules.ts`), worked out from the player and the day, so only progress is stored. They're collected by tapping, on the same day.
+  - **Home**: level and XP bar under the name, a coin count, the daily reward card while it's waiting, and the missions panel with the streak.
+  - **`GET /config`**: the dice settings and reward values. The app loads it on start and saved, and offline games use its dice (`DICE_MOMENTUM` and `DICE_LUCK_FADE` join `DICE_BALANCE_STRENGTH`). `game_finish` now records the dice settings; `daily_claim` and `mission_claim` are new events.
+  - Values live in `server/progress/config.ts`.
+- **Shared profile on every screen** (`useCurrentUser`): one copy for the whole app, so a username change on Profile, or a profile that loads late on a slow network, shows on Home at once. Home also retries on focus.
+- **No login flash on start**: the splash screen stays up until the app knows whether someone is signed in and has routed them. If the login screen does show while signed in, it shows a loader instead of its buttons (`util/auth-phase.ts`).
+- **Friends leaderboard**: a "This week" tab in the Friends sheet (`/friends?tab=week`, `GET /social/leaderboard`). It ranks you and your friends by online wins since Monday (India time), then by games played, with ties sharing a place. Games under 2 minutes don't count. Only you and your friends appear, so bots never rank. Saved accounts only, like the rest of Friends.
+- **Invite bonus** (`PROGRESS.invite`): when a player in their first 7 days finishes a private game hosted by someone with a saved account who joined before them, both get 100 coins.
+  - Once per new player. A host gets it at most 5 times a week; after that the new player still gets theirs.
+  - Paid in the same transaction as the game's other rewards (ledger reasons `INVITE` and `INVITE_HOST`) and shown on both result screens.
+  - The private lobby tells its host about it.
+- **Cosmetics shop** (`server/shop/`, Shop tab; guests too):
+  - Items for coins only, all drawn in code (`app/components/cosmetics/`) and all original:
+    - **19 pawn styles** (250 to 2,500): Marble, Ducky, Cupcake, Mushroom, Kitty, Ghost, Star Cap, Penguin, Robo, Pumpkin, Alien, Diya, Crown, Rocket, Ninja, Knight, Planet, Gemstone and Champion. Each is its own shape, in the player's colour.
+    - **4 dice** (250 to 1,500): Midnight, Candy, Teak and Gold.
+    - **18 boards** (600 to 2,500): Night Sky, Woodcraft, Sand Dunes, Chalkboard, Candyland, Garden, Coral Reef, Snowfall, Sakura, Haunted Night, 8-Bit, Cricket Ground, Festival of Lights, Holi Colours, Mech Lab, Deep Space, Neon Arcade and Royal.
+    - Plus the free Classic of each.
+  - Board themes are data (`items.ts`) for a small engine in `LudoBoard.tsx`. A theme sets the frame (with sparkles or festive lights), tile shape and gaps, lane and home fills, patterns over the homes (cobwebs, circuits, waves, dunes, chalk hatching, and so on), the panel and slot style, the safe-square symbol and the centre emblem (`motifs.tsx`). The four homes stay in the players' colours. Symbols are drawn upright for each player's turn of the board.
+  - Pawn styles keep the player's colour, so whose pawn it is still reads at a glance. Pass & Play keeps the defaults; against the computer your pawns and dice are yours.
+  - Everyone in a game sees each player's pawns, and the roller's dice. The board is only ever the viewer's own.
+  - Buying takes the coins and equips the item in one transaction: coins never go below zero, and the ledger's unique key (`shop:<user>:<item>`) stops a double tap paying twice. Spends are `SHOP` ledger rows with a negative amount.
+  - `Entitlement` rows record what each player owns, with a source (`COINS` now; `PLAY`, `APPSTORE`, `REWARD`, `ADMIN` later), an optional store id (unique, so a store purchase grants once) and an optional end time for trials. Equipped items are `User.pawnSkin`, `diceSkin` and `boardTheme`; an ended trial or a removed item shows as the default.
+  - **Shop speed:** the cards show pre-drawn WebP images (`app/assets/shop/`, 44 images, about 820 KB), not live SVG. Run `npm run shop-previews` in `app/` after changing any item's art: it draws every item with the real components and rewrites `components/cosmetics/previews.ts`. The list only draws the cards on screen, and each card re-renders only when its own state changes. The dice's drawing lives in `DiceArt.tsx`, apart from its animation, so the script can draw it.
+  - **Tabs:** hidden tabs are frozen (`freezeOnBlur`), so coin and social updates don't re-render screens you can't see. Home's floating dice stops animating while Home isn't showing. The game board and the floating pawns are cached as GPU textures, since they never change while they move.
+  - The catalogue lives in `server/shop/catalog.ts`. The app lists only items it can draw, so a new item waits for an app update.
+  - `GET /shop`, `POST /shop/items/:id/buy`, `POST /shop/items/:id/equip`. Equipping updates the player in any room they're in; others see it from the room's next update.
+  - The app remembers the equipped items, so offline games show them without the server. Tapping the coin count on Home opens the shop. New events `shop_view`, `purchase` and `shop_equip`.
+- **Ads** (Google AdMob, `app/util/ads.ts`, `server/ads/`):
+  - **Rewarded ads, always the player's choice**, with the reward shown on the button first:
+    - "Double it" on both result screens: the game's own coins again, up to 5 games a day.
+    - On the daily reward card: "Double today" (today's coins again, once a day) and "Get <day> back" (one missed day of this week, once a week).
+  - **Paid only through Google's server-side verification:** AdMob calls `GET /ads/ssv`, signed with Google's published keys; the server checks the signature, then pays (`ads/rewards.ts`). Each placement has its own ledger key (`AD_DOUBLE`, `DAILY_AD`, `DAILY_BONUS`), so a repeated call or a second ad for the same thing pays nothing. The app hears `ads:reward` on its socket and updates the coins.
+  - Google's test ads never call `/ssv`, so development servers set `ADS_TRUST_CLIENT=true` and the app claims test rewards through `POST /ads/claim`. Ignored when `NODE_ENV=production`.
+  - **Full-screen ads, rarely:** only when leaving a finished game's result screen with Home (never Rematch, never in a game or lobby). At most one per 3 finished games, 10 minutes apart, 3 a day, none in a player's first 3 games or first 24 hours, and none within 3 minutes of a rewarded ad. The caps come from `/config` (`ADS` in `server/progress/config.ts`); the app loads the ad in advance and never waits for one.
+  - **Consent and age:** Home starts the SDK after Google's consent form (shown where the law requires it). Before the first rewarded ad the app asks once whether the player is 18 or older; under 18s, and anyone who hasn't answered, get only non-personalised ads. Content rating T.
+  - **Library:** `react-native-google-mobile-ads` 17.4 (it needs React Native 0.86+, which came with the SDK 58 upgrade below).
+  - **Config:** AdMob app IDs are build-time (`ADMOB_ANDROID_APP_ID`, `ADMOB_IOS_APP_ID` on EAS; without them, Google's sample IDs). Unit IDs are `EXPO_PUBLIC_ADMOB_*`; without them, development builds show test ads and release builds show none. The advertising ID permission is no longer blocked.
+  - **Website:** the privacy policy describes the ads, consent and the under-18 rule; the Terms say coins have no money value and can't be bought, traded or cashed out. `/app-ads.txt` is served once `ADMOB_PUBLISHER_ID` is set.
+  - New events: `ad_offered`, `ad_watched`, `interstitial_shown`. Results also carry `gameCoins`, the game's own coins that a rewarded ad can double.
+- **Expo SDK 58** (from 54): React Native 0.88, React 19.3, Expo Router 58, Reanimated 4.7, worklets 0.13, Sentry 8, Firebase 27, WebView 14. `expo-doctor` passes all checks.
+  - Expo Router 58 ships its own navigation core: React Navigation imports now come from `expo-router` (`ThemeProvider`, `DarkTheme`, `useIsFocused`, `useFocusEffect`). The "leave the game?" guards on the board, lobby and offline board use `usePreventRemove` instead of the removed `beforeRemove` listener. The custom tab bar uses the new `emitter` and `navigateToTab`. Hidden tabs pause with React Activity (`activityEnabled`), which replaces `freezeOnBlur`. `initialRouteName` became `unstable_settings.anchor`.
+  - React Native's strict TypeScript API: `TextInputInstance` refs, `StyleSheet.absoluteFill` (`absoluteFillObject` is gone), `AppState.currentState` may be null, list footers take `undefined` rather than `null`.
+  - `app.json`: the splash screen moved into the `expo-splash-screen` plugin; `newArchEnabled` and `edgeToEdgeEnabled` are gone (both are always on). `expo-asset` is now installed for `expo-audio`.
+  - Release builds now shrink code with R8 by default.
+- **Purchases** (RevenueCat, `server/purchases/`, `app/util/purchases.ts`; guests too):
+  - Products (`server/shop/products.ts`, store ids): Starter Pack (`starter_pack`, ₹19, offered once), four sets at ₹79 (`set_festival`, `set_space`, `set_royal`, `set_spooky`, each an existing pawn, dice and board) and Remove Ads (`remove_ads`, ₹149, no full-screen ads; rewarded ads stay). Prices live in Play Console. Nothing sells coins, and everything in a set can still be earned with coins.
+  - The shop has a **Sets** tab with the store's local prices, "You already have 1 of 3", and Restore purchases. It's hidden without a RevenueCat key or a store. A bought set is equipped at once. Guests who buy are asked to save their progress.
+  - **The server never trusts the app or the webhook body.** After a purchase or restore the app calls `POST /purchases/sync`; RevenueCat's webhook (`POST /purchases/webhook`, checked against `REVENUECAT_WEBHOOK_AUTH`) does the same for every account it names. Both fetch the customer from RevenueCat's API (`REVENUECAT_SECRET_KEY`) and make the account's `Entitlement` rows match its active purchases. Coin-bought items are never touched.
+  - `Purchase` table: one row per store purchase. A refund (`CANCELLATION`) sets `revokedAt` for good. A restore on another account moves the purchase there and takes its items from the old one. Items covered by two purchases (Gold dice) stay until both are gone.
+  - Pending payments (UPI) say so and arrive by webhook once they clear. "Already owned" on Play restores instead.
+  - Guest clean-up never deletes a buyer. Remove Ads is remembered on the device, so a cold start never shows a full-screen ad to a buyer.
+  - New events: `iap_purchase`, `iap_restore`.
+  - `react-native-purchases` is on 10.16 (11.x tells Expo apps to wait). Products must be **non-consumable** in RevenueCat, or Play consumes them and Restore can't find them.
+- **Delete account** (Profile, Google Play requires it): deletes the Supabase user and everything about the player at once (`DELETE /auth/me`), not while they're in a room. Purchase records stay without an owner, for refunds and tax; Restore purchases on a new account brings them back. The deleted account's still-valid tokens are refused for 2 hours, and its sockets are closed. The website's delete-account page, privacy policy and terms describe in-app deletion and purchases.
 
 ## Supabase settings for guests
 - Authentication → Sign In / Providers: turn on **Allow anonymous sign-ins** and **Allow manual linking**.

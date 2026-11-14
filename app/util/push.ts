@@ -1,7 +1,9 @@
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
-import type { Router } from 'expo-router';
+import type { useRouter } from 'expo-router';
 import { AppState, Platform } from 'react-native';
+
+type Router = ReturnType<typeof useRouter>;
 
 import { removePushToken, savePushToken } from '@/apis/user-api';
 import { friendsHref, friendsTabFromPath, isInitialRouteDone, joinCodeFromUrl, setPendingLink, type PendingLink } from '@/util/links';
@@ -12,17 +14,27 @@ import { supabase } from '@/util/supabase-client';
  * switch each one off in Android settings. All of them pop up on screen, play
  * a sound and show on the lock screen: that takes HIGH importance.
  *
- * Android never lets an app raise a channel's importance once it exists, so a
- * channel that needs stronger settings gets a new id and the old one is deleted.
+ * Android never lets an app change a channel's importance or sound once it
+ * exists, so a channel that needs new settings gets a new id and the old one is
+ * deleted. Keep the ids in step with CHANNEL in server/notifications/push.ts.
  */
 const CHANNELS: { id: string; name: string; description: string }[] = [
-    { id: 'invites', name: 'Game invites', description: 'When a friend invites you to their table' },
-    { id: 'friend-alerts', name: 'Friends', description: 'Friend requests, and friends coming online' },
-    { id: 'game-reminders', name: 'Game reminders', description: 'A nudge to come and play' },
-    { id: 'announcements', name: 'News & updates', description: 'Announcements from Simple Ludo' },
+    { id: 'invites-v2', name: 'Game invites', description: 'When a friend invites you to their table' },
+    { id: 'friend-alerts-v2', name: 'Friends', description: 'Friend requests, and friends coming online' },
+    { id: 'game-reminders-v2', name: 'Game reminders', description: 'A nudge to come and play' },
+    { id: 'announcements-v2', name: 'News & updates', description: 'Announcements from Simple Ludo' },
 ];
-/** Created at DEFAULT importance by older versions (no pop-up). */
-const RETIRED_CHANNELS = ['friends', 'reminders'];
+/**
+ * `friends`, `reminders`: DEFAULT importance (no pop-up).
+ * The unsuffixed ids: the system sound, before the game's own.
+ */
+const RETIRED_CHANNELS = ['friends', 'reminders', 'invites', 'friend-alerts', 'game-reminders', 'announcements'];
+
+/**
+ * Bundled by the expo-notifications plugin (`sounds` in app.json) into Android's
+ * res/raw and the iOS bundle. Android finds it by name without the extension.
+ */
+const NOTIFICATION_SOUND = 'custom_notification.wav';
 
 // While the app is open, show pushes too (banner + sound), as Android does when it isn't.
 Notifications.setNotificationHandler({
@@ -51,7 +63,7 @@ async function ensureChannels() {
                 name: c.name,
                 description: c.description,
                 importance: Notifications.AndroidImportance.HIGH,
-                sound: 'default',
+                sound: NOTIFICATION_SOUND,
                 enableVibrate: true,
                 vibrationPattern: [0, 250, 200, 250],
                 lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
@@ -133,7 +145,7 @@ export function startPushTokenSync(): () => void {
         if (session && (event === 'INITIAL_SESSION' || event === 'SIGNED_IN')) sync();
     });
 
-    let state = AppState.currentState;
+    let state: string = AppState.currentState ?? 'active';
     const appState = AppState.addEventListener('change', next => {
         if (state.match(/inactive|background/) && next === 'active') sync();
         state = next;
